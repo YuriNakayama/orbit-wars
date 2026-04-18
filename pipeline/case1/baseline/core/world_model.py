@@ -9,7 +9,7 @@ import math
 from collections import defaultdict
 from typing import Any
 
-from pipeline.case1.baseline.core.config import (
+from .config import (
     CRASH_EXPLOIT_ENABLED,
     CRASH_EXPLOIT_ETA_WINDOW,
     CRASH_EXPLOIT_MIN_TOTAL_SHIPS,
@@ -33,15 +33,15 @@ from pipeline.case1.baseline.core.config import (
     TOTAL_STEPS,
     VERY_LATE_REMAINING_TURNS,
 )
-from pipeline.case1.baseline.core.geometry import dist
-from pipeline.case1.baseline.core.physics import (
+from .geometry import dist
+from .physics import (
     aim_with_prediction,
     comet_remaining_life,
     fleet_speed,
     is_static_planet,
     travel_time,
 )
-from pipeline.case1.baseline.core.types import Fleet, Planet
+from .types import Fleet, Planet
 
 
 def fleet_target_planet(

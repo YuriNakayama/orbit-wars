@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from pipeline.case1.baseline.core.config import (
+from .core.config import (
     AHEAD_ATTACK_MARGIN_BONUS,
     AHEAD_DOMINATION,
     BEHIND_ATTACK_MARGIN_PENALTY,
@@ -67,8 +67,8 @@ from pipeline.case1.baseline.core.config import (
     SWARM_VALUE_MULT,
     WEAK_ENEMY_THRESHOLD,
 )
-from pipeline.case1.baseline.core.types import Planet
-from pipeline.case1.baseline.core.world_model import WorldModel
+from .core.types import Planet
+from .core.world_model import WorldModel
 
 
 def planet_distance(first: Planet, second: Planet) -> float:

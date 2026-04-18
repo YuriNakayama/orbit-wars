@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import math
 
-from pipeline.case1.baseline.core.config import (
+from .config import (
     CENTER_X,
     CENTER_Y,
     LAUNCH_CLEARANCE,
     SUN_R,
     SUN_SAFETY,
 )
-from pipeline.case1.baseline.core.types import Planet
+from .types import Planet
 
 
 def dist(ax: float, ay: float, bx: float, by: float) -> float:

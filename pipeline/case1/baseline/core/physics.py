@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from pipeline.case1.baseline.core.config import (
+from .config import (
     CENTER_X,
     CENTER_Y,
     HORIZON,
@@ -16,8 +16,8 @@ from pipeline.case1.baseline.core.config import (
     MAX_SPEED,
     ROTATION_LIMIT,
 )
-from pipeline.case1.baseline.core.geometry import dist, safe_angle_and_distance
-from pipeline.case1.baseline.core.types import Planet
+from .geometry import dist, safe_angle_and_distance
+from .types import Planet
 
 
 def fleet_speed(ships: int) -> float:

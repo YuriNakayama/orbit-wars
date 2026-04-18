@@ -8,14 +8,14 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from pipeline.case1.baseline.core.config import (
+from ..core.config import (
     COMET_MAX_CHASE_TURNS,
     PARTIAL_SOURCE_MIN_SHIPS,
     SNIPE_COST_TURN_WEIGHT,
 )
-from pipeline.case1.baseline.core.types import Mission, Planet, ShotOption
-from pipeline.case1.baseline.core.world_model import WorldModel
-from pipeline.case1.baseline.strategy_helpers import (
+from ..core.types import Mission, Planet, ShotOption
+from ..core.world_model import WorldModel
+from ..strategy_helpers import (
     apply_score_modifiers,
     target_value,
 )
