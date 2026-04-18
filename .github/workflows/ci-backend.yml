@@ -28,7 +28,7 @@ jobs:
             .mypy_cache
             .pytest_cache
             .ruff_cache
-          key: ${{ runner.os }}-tools-${{ hashFiles('backend/uv.lock', 'backend/pyproject.toml') }}
+          key: ${{ runner.os }}-tools-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-tools-
 
@@ -38,21 +38,16 @@ jobs:
           enable-cache: true
 
       - name: Install the project
-        working-directory: backend
         run: uv sync --locked --all-extras --dev
 
       - name: Run Ruff (format check)
-        working-directory: backend
         run: uv run ruff format --check .
 
       - name: Run Ruff (lint)
-        working-directory: backend
         run: uv run ruff check --output-format=github .
 
-    #   - name: Run MyPy (type check)
-    #     working-directory: backend
-    #     run: uv run mypy --config-file pyproject.toml .
+      - name: Run MyPy (type check)
+        run: uv run mypy --config-file pyproject.toml .
 
-    #   - name: Run tests
-    #     working-directory: backend
-    #     run: uv run pytest tests
+      - name: Run tests
+        run: uv run pytest tests -m "not slow"
