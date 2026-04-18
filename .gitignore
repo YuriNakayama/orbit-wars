@@ -85,3 +85,6 @@ artifacts/
 # data
 data/
 !data/**/*.md
+
+# claude code scheduled tasks (local runtime state)
+.claude/scheduled_tasks.lock
