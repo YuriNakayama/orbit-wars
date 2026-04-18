@@ -57,9 +57,7 @@ def build_snipe_mission(
             if sync_turn >= life or sync_turn > COMET_MAX_CHASE_TURNS:
                 continue
 
-        need = world.ships_needed_to_capture(
-            target.id, sync_turn, planned_commitments
-        )
+        need = world.ships_needed_to_capture(target.id, sync_turn, planned_commitments)
         if need <= 0 or need > src_available:
             continue
 
@@ -72,9 +70,7 @@ def build_snipe_mission(
             continue
 
         sync_turn = max(turns, enemy_eta)
-        need = world.ships_needed_to_capture(
-            target.id, sync_turn, planned_commitments
-        )
+        need = world.ships_needed_to_capture(target.id, sync_turn, planned_commitments)
         if need <= 0 or need > src_available:
             continue
 

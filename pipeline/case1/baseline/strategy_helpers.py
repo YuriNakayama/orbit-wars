@@ -180,9 +180,7 @@ def target_value(
             return -1.0
 
     value: float = float(target.production * turns_profit)
-    value += (
-        world.indirect_wealth_map[target.id] * turns_profit * INDIRECT_VALUE_SCALE
-    )
+    value += world.indirect_wealth_map[target.id] * turns_profit * INDIRECT_VALUE_SCALE
 
     if world.is_static(target.id):
         value *= (
@@ -229,11 +227,7 @@ def target_value(
 
     if modes["is_finishing"] and target.owner not in (-1, world.player):
         value *= FINISHING_HOSTILE_VALUE_MULT
-    if (
-        modes["is_behind"]
-        and target.owner == -1
-        and not world.is_static(target.id)
-    ):
+    if modes["is_behind"] and target.owner == -1 and not world.is_static(target.id):
         value *= BEHIND_ROTATING_NEUTRAL_VALUE_MULT
     if modes["is_behind"] and target.owner == -1 and is_safe_neutral(target, world):
         value *= 1.08
@@ -255,9 +249,7 @@ def preferred_send(
     world: WorldModel,
     modes: dict[str, Any],
 ) -> int:
-    send = max(
-        base_needed, int(math.ceil(base_needed * modes["attack_margin_mult"]))
-    )
+    send = max(base_needed, int(math.ceil(base_needed * modes["attack_margin_mult"])))
     margin = 0
     if target.owner == -1:
         margin += min(
@@ -294,11 +286,7 @@ def apply_score_modifiers(
         score *= STATIC_TARGET_SCORE_MULT
     if world.is_early and target.owner == -1 and world.is_static(target.id):
         score *= EARLY_STATIC_NEUTRAL_SCORE_MULT
-    if (
-        world.is_four_player
-        and target.owner == -1
-        and not world.is_static(target.id)
-    ):
+    if world.is_four_player and target.owner == -1 and not world.is_static(target.id):
         score *= FOUR_PLAYER_ROTATING_NEUTRAL_SCORE_MULT
     if (
         len(world.static_neutral_planets) >= DENSE_STATIC_NEUTRAL_COUNT

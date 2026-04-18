@@ -74,9 +74,7 @@ def submit(file_path: Path, message: str) -> str:
     upload_done = "100%" in proc.stderr or "Successfully submitted" in proc.stdout
     if proc.returncode == 0 or upload_done:
         return combined
-    raise KaggleCLIError(
-        f"提出失敗 (rc={proc.returncode}):\n{proc.stderr.strip()}"
-    )
+    raise KaggleCLIError(f"提出失敗 (rc={proc.returncode}):\n{proc.stderr.strip()}")
 
 
 def confirm_submission(

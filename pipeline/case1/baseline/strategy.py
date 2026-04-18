@@ -117,9 +117,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
             )
             if rough_needed <= 0:
                 continue
-            if opening_filter(
-                target, rough_turns, rough_needed, src_available, world
-            ):
+            if opening_filter(target, rough_turns, rough_needed, src_available, world):
                 continue
 
             send_guess = preferred_send(
@@ -150,9 +148,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
 
             send_cap = min(
                 src_available,
-                preferred_send(
-                    target, needed, turns, src_available, world, modes
-                ),
+                preferred_send(target, needed, turns, src_available, world, modes),
             )
             if send_cap < 1:
                 continue
@@ -167,9 +163,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                 needed,
                 min(
                     send_cap,
-                    preferred_send(
-                        target, needed, turns, send_cap, world, modes
-                    ),
+                    preferred_send(target, needed, turns, send_cap, world, modes),
                 ),
             )
             score = apply_score_modifiers(
@@ -213,9 +207,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
             continue
 
         target = world.planet_by_id[target_id]
-        top_options = sorted(options, key=lambda item: -item.score)[
-            :MULTI_SOURCE_TOP_K
-        ]
+        top_options = sorted(options, key=lambda item: -item.score)[:MULTI_SOURCE_TOP_K]
 
         hostile_target = target.owner not in (-1, world.player)
         eta_tolerance_2 = (
@@ -302,14 +294,11 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                         ):
                             continue
 
-                        value = target_value(
-                            target, joint_turn, "swarm", world, modes
-                        )
+                        value = target_value(target, joint_turn, "swarm", world, modes)
                         if value <= 0:
                             continue
                         trio_score = apply_score_modifiers(
-                            value
-                            / (need + joint_turn * ATTACK_COST_TURN_WEIGHT + 1.0),
+                            value / (need + joint_turn * ATTACK_COST_TURN_WEIGHT + 1.0),
                             target,
                             "swarm",
                             world,
@@ -325,9 +314,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                             )
                         )
 
-    crash_missions = build_crash_exploit_missions(
-        world, planned_commitments, modes
-    )
+    crash_missions = build_crash_exploit_missions(world, planned_commitments, modes)
     missions.extend(crash_missions)
 
     missions.sort(key=lambda item: -item.score)
@@ -414,9 +401,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
         remaining = missing
         sends: dict[int, int] = {}
         for idx, (option, limit) in enumerate(ordered):
-            remaining_other = sum(
-                other_limit for _, other_limit in ordered[idx + 1 :]
-            )
+            remaining_other = sum(other_limit for _, other_limit in ordered[idx + 1 :])
             send = min(limit, max(0, remaining - remaining_other))
             sends[option.src_id] = send
             remaining -= send
@@ -475,9 +460,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                 )
                 if rough_needed <= 0:
                     continue
-                if opening_filter(
-                    target, est_turns, rough_needed, src_left, world
-                ):
+                if opening_filter(target, est_turns, rough_needed, src_left, world):
                     continue
 
                 send = preferred_send(
@@ -519,9 +502,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                 src_left,
                 max(
                     missing,
-                    preferred_send(
-                        target, missing, turns, src_left, world, modes
-                    ),
+                    preferred_send(target, missing, turns, src_left, world, modes),
                 ),
             )
             if send < missing:
@@ -530,9 +511,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
             actual = append_move(src.id, angle, send)
             if actual < missing:
                 continue
-            planned_commitments[target.id].append(
-                (turns, world.player, int(actual))
-            )
+            planned_commitments[target.id].append((turns, world.player, int(actual)))
 
     if world.doomed_candidates:
         frontier_targets = (
@@ -542,15 +521,11 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
         )
         if frontier_targets:
             frontier_distance = {
-                planet.id: nearest_distance_to_set(
-                    planet.x, planet.y, frontier_targets
-                )
+                planet.id: nearest_distance_to_set(planet.x, planet.y, frontier_targets)
                 for planet in world.my_planets
             }
         else:
-            frontier_distance = {
-                planet.id: 10**9 for planet in world.my_planets
-            }
+            frontier_distance = {planet.id: 10**9 for planet in world.my_planets}
 
         for planet in world.my_planets:
             if planet.id not in world.doomed_candidates:
@@ -588,9 +563,9 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                 if final_aim is None:
                     continue
                 angle, turns, _, _ = final_aim
-                score = target_value(
-                    target, turns, "capture", world, modes
-                ) / (need + turns + 1.0)
+                score = target_value(target, turns, "capture", world, modes) / (
+                    need + turns + 1.0
+                )
                 if target.owner not in (-1, world.player):
                     score *= 1.05
                 if best_capture is None or score > best_capture[0]:
@@ -620,9 +595,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                     planet_distance(planet, ally),
                 ),
             )
-            aim = world.plan_shot(
-                planet.id, retreat_target.id, available_now
-            )
+            aim = world.plan_shot(planet.id, retreat_target.id, available_now)
             if aim is None:
                 continue
             angle, _, _, _ = aim
@@ -639,9 +612,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
             else (world.static_neutral_planets or world.neutral_planets)
         )
         frontier_distance = {
-            planet.id: nearest_distance_to_set(
-                planet.x, planet.y, frontier_targets
-            )
+            planet.id: nearest_distance_to_set(planet.x, planet.y, frontier_targets)
             for planet in world.my_planets
         }
         safe_fronts = [
@@ -665,10 +636,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                 world.my_planets,
                 key=lambda planet: -frontier_distance[planet.id],
             ):
-                if (
-                    rear.id == front_anchor.id
-                    or rear.id in world.doomed_candidates
-                ):
+                if rear.id == front_anchor.id or rear.id in world.doomed_candidates:
                     continue
                 if source_attack_left(rear.id) < REAR_SOURCE_MIN_SHIPS:
                     continue
@@ -696,9 +664,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
                         key=lambda target: planet_distance(rear, target),
                     )
                     remaining_fronts = [
-                        planet
-                        for planet in safe_fronts
-                        if planet.id != rear.id
+                        planet for planet in safe_fronts if planet.id != rear.id
                     ]
                     if not remaining_fronts:
                         continue

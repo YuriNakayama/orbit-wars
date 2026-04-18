@@ -48,9 +48,7 @@ def segment_hits_sun(
     )
 
 
-def launch_point(
-    sx: float, sy: float, sr: float, angle: float
-) -> tuple[float, float]:
+def launch_point(sx: float, sy: float, sr: float, angle: float) -> tuple[float, float]:
     clearance = sr + LAUNCH_CLEARANCE
     return sx + math.cos(angle) * clearance, sy + math.sin(angle) * clearance
 

@@ -49,9 +49,7 @@ def _is_included(relative: Path, include_patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(relative.name, pat) for pat in include_patterns)
 
 
-def _iter_case_files(
-    case_dir: Path, include_patterns: tuple[str, ...]
-) -> list[Path]:
+def _iter_case_files(case_dir: Path, include_patterns: tuple[str, ...]) -> list[Path]:
     files: list[Path] = []
     for entry in sorted(case_dir.rglob("*")):
         if entry.is_dir():

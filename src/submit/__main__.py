@@ -165,8 +165,7 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
     confirmed = confirm_submission(message)
     if confirmed is None:
         console.print(
-            "[yellow]履歴に提出行が見つかりません。"
-            "Kaggle UI を確認してください。[/]"
+            "[yellow]履歴に提出行が見つかりません。Kaggle UI を確認してください。[/]"
         )
         result["confirmed"] = False
     else:
