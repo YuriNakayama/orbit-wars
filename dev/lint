@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT_DIR="$(pwd)"
+
+EXIT_CODE=0
+
+# Backend
+if [ -d "backend" ]; then
+  echo "== backend: lint =="
+  cd backend
+  uv run ruff check . --fix || EXIT_CODE=1
+  uv run mypy . || EXIT_CODE=1
+  cd "$ROOT_DIR"
+fi
+
+# Frontend
+if [ -d "frontend" ]; then
+  echo "== frontend: lint =="
+  cd frontend
+  npm run lint || EXIT_CODE=1
+  cd "$ROOT_DIR"
+fi
+
+exit $EXIT_CODE

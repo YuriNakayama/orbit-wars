@@ -1,0 +1,55 @@
+{
+  "expectations": [
+    {
+      "text": "出力にCluster 1（計画・推論）のリソースファイルが含まれる",
+      "passed": true,
+      "evidence": "cluster-1-planning-reasoning.md が存在し、8本の学術論文と6件の特許を含む完全なリソースファイル"
+    },
+    {
+      "text": "出力にCluster 2（ツール使用・API連携）のリソースファイルが含まれる",
+      "passed": true,
+      "evidence": "cluster-2-tool-use-api.md が存在し、9本の学術論文と6件の特許を含む完全なリソースファイル"
+    },
+    {
+      "text": "出力にCluster 3（マルチエージェント協調）のリソースファイルが含まれる",
+      "passed": true,
+      "evidence": "cluster-3-multi-agent.md が存在し、9本の学術論文と6件の特許を含む完全なリソースファイル"
+    },
+    {
+      "text": "各クラスタに学術論文セクションが含まれる",
+      "passed": true,
+      "evidence": "全3ファイルに「## 学術論文」セクションが存在。Cluster1: 8本、Cluster2: 9本、Cluster3: 9本"
+    },
+    {
+      "text": "各クラスタに特許セクションが含まれる",
+      "passed": true,
+      "evidence": "全3ファイルに「## 特許」セクションが存在。Cluster1: 6件、Cluster2: 6件、Cluster3: 6件"
+    },
+    {
+      "text": "論文にarXivリンクが含まれる",
+      "passed": true,
+      "evidence": "全論文にhttps://arxiv.org/abs/形式のURLが含まれる（例: https://arxiv.org/abs/2505.09970, https://arxiv.org/abs/2508.02979, https://arxiv.org/abs/2501.06322）"
+    },
+    {
+      "text": "index.mdまたは統合ファイルに収集サマリテーブルが含まれる",
+      "passed": true,
+      "evidence": "index.md に「クラスタ別収集結果」テーブルが存在。クラスタ名、論文数、特許数、ファイルリンクを含むMarkdownテーブル形式。合計: 論文26本、特許18件"
+    },
+    {
+      "text": "出力が日本語で記述されている",
+      "passed": true,
+      "evidence": "全4ファイルが日本語で記述されている。見出し、概要、まとめ全てが日本語（例: 「計画・推論クラスタでは…」「ツール使用・API連携クラスタでは…」）"
+    }
+  ],
+  "summary": {
+    "passed": 8,
+    "failed": 0,
+    "total": 8,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 36888,
+    "duration_ms": 203805,
+    "total_duration_seconds": 203.8
+  }
+}

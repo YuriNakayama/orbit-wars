@@ -1,0 +1,79 @@
+{
+  "skill_name": "research-retrieval",
+  "iteration": 4,
+  "generated_at": "2026-03-29T19:30:00+09:00",
+  "configurations": [
+    {
+      "name": "with_skill",
+      "label": "With Skill (iteration-4)",
+      "evals": [
+        {
+          "eval_id": 0,
+          "eval_name": "dpo-paper-with-html-figures",
+          "pass_rate": 0.875,
+          "passed": 7,
+          "total": 8,
+          "tokens": 67276,
+          "duration_seconds": 485.8,
+          "assertions": [
+            {"text": "WebFetchを使用してarXivページからコンテンツを取得している", "passed": true},
+            {"text": "arXiv HTML版から図表画像のダウンロードを試みている（Method 2）", "passed": false},
+            {"text": "レポートに専用の「## Figures & Tables」セクションが存在する", "passed": true},
+            {"text": "Figures & Tablesセクションに最低4つの視覚要素が含まれている", "passed": true},
+            {"text": "DPOの損失関数の数式が含まれている", "passed": true},
+            {"text": "実験結果に具体的な数値（勝率、精度等）が含まれている", "passed": true},
+            {"text": "レポート全体が日本語で記述されている", "passed": true},
+            {"text": "スキルテンプレートに沿った構造を持つ", "passed": true}
+          ]
+        }
+      ],
+      "aggregate": {
+        "mean_pass_rate": 0.875,
+        "mean_tokens": 67276,
+        "mean_duration_seconds": 485.8
+      }
+    },
+    {
+      "name": "without_skill",
+      "label": "Baseline (no skill)",
+      "evals": [
+        {
+          "eval_id": 0,
+          "eval_name": "dpo-paper-with-html-figures",
+          "pass_rate": 0.5,
+          "passed": 4,
+          "total": 8,
+          "tokens": 26516,
+          "duration_seconds": 190.4,
+          "assertions": [
+            {"text": "WebFetchを使用してarXivページからコンテンツを取得している", "passed": true},
+            {"text": "arXiv HTML版から図表画像のダウンロードを試みている（Method 2）", "passed": false},
+            {"text": "レポートに専用の「## Figures & Tables」セクションが存在する", "passed": false},
+            {"text": "Figures & Tablesセクションに最低4つの視覚要素が含まれている", "passed": false},
+            {"text": "DPOの損失関数の数式が含まれている", "passed": true},
+            {"text": "実験結果に具体的な数値（勝率、精度等）が含まれている", "passed": true},
+            {"text": "レポート全体が日本語で記述されている", "passed": true},
+            {"text": "スキルテンプレートに沿った構造を持つ", "passed": false}
+          ]
+        }
+      ],
+      "aggregate": {
+        "mean_pass_rate": 0.5,
+        "mean_tokens": 26516,
+        "mean_duration_seconds": 190.4
+      }
+    }
+  ],
+  "delta": {
+    "pass_rate": "+37.5pp (0.875 vs 0.500)",
+    "tokens": "+153% (67276 vs 26516)",
+    "duration": "+155% (485.8s vs 190.4s)"
+  },
+  "analyst_observations": [
+    "スキル版はベースラインより75%高い合格率（87.5% vs 50%）。構造面（Figures & Tables専用セクション、テンプレート準拠）が主な差別化要因。",
+    "HTML画像ダウンロード（Method 2）は両方で失敗 — スキル版はBash権限不足が原因。サブエージェントにBash(curl:*)権限を明示する必要がある。",
+    "スキル版は画像URLをMarkdown参照として含めることでワークアラウンドを実現。実用的にはダウンロードと同等の効果。",
+    "コスト面：スキル版はトークン2.5倍、時間2.5倍だが、レポート品質（22KB vs 16KB）と構造化で対価を提供。",
+    "WebFetch使用、数式記載、具体的数値、日本語記述は両方で合格 — これらは非弁別的アサーション。"
+  ]
+}

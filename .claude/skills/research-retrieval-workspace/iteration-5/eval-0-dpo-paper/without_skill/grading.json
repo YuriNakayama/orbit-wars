@@ -1,0 +1,49 @@
+{
+  "eval_id": 0,
+  "eval_name": "dpo-paper-with-html-figures",
+  "variant": "without_skill",
+  "expectations": [
+    {
+      "text": "WebFetchを使用してarXivページからコンテンツを取得している",
+      "passed": true,
+      "evidence": "arXivのabstract/HTML版をWebFetchで取得。具体的な数値やメタデータが含まれている。"
+    },
+    {
+      "text": "arXiv HTML版から図表画像のダウンロードを試みている（Method 2）",
+      "passed": false,
+      "evidence": "画像のダウンロードやHTML画像参照は一切なし。テキストベースの説明のみ。"
+    },
+    {
+      "text": "レポートに専用の「## Figures & Tables」セクションが存在する",
+      "passed": false,
+      "evidence": "専用のFigures & Tablesセクションなし。テーブルやASCIIアートは本文中に分散配置。"
+    },
+    {
+      "text": "Figures & Tablesセクションに最低4つの視覚要素が含まれている",
+      "passed": false,
+      "evidence": "専用セクションが存在しないため不合格。ただし本文中にはテーブル8個、ASCIIアート6個が分散。"
+    },
+    {
+      "text": "DPOの損失関数の数式が含まれている",
+      "passed": true,
+      "evidence": "100-105行目にDPO損失関数がコードブロック形式で記載。LaTeX形式ではないがコードブロックで正確に表現。"
+    },
+    {
+      "text": "実験結果に具体的な数値（勝率、精度等）が含まれている",
+      "passed": true,
+      "evidence": "DPO勝率61%、PPO 57%等の数値を記載。人間評価の一致率70-79%等も含む。"
+    },
+    {
+      "text": "レポート全体が日本語で記述されている",
+      "passed": true,
+      "evidence": "全体が日本語で記述されている。"
+    },
+    {
+      "text": "スキルテンプレートに沿った構造を持つ",
+      "passed": false,
+      "evidence": "独自の番号付きセクション構造（1.概要, 2.背景, 3.提案手法...12.結論）。スキルテンプレートとは異なるが、内容は網羅的。"
+    }
+  ],
+  "pass_rate": 0.5,
+  "summary": "8アサーション中4合格。WebFetchを使用し数値は正確だが、専用Figures & Tablesセクション、HTML画像取得、テンプレート構造が欠如。レポート自体の品質は高いが構造面でスキル版に劣る。"
+}

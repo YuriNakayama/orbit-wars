@@ -1,0 +1,196 @@
+[project]
+name = "ai-reception"
+version = "0.1.0"
+description = "AI Reception backend service running on AWS Fargate"
+readme = "README.md"
+authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "pandas>=2.3.3",
+    "openai>=2.28.0",
+    "pyyaml>=6.0.2",
+    "datasets>=3.3.2",
+    "duckdb>=1.5.0",
+    "huggingface-hub>=0.29.3",
+    "numpy>=2.2.6",
+    "openpyxl>=3.1.5",
+    "polars>=1.39.0",
+    "pyarrow>=23.0.1",
+    "pydantic>=2.10.6",
+    "rich>=13.9.4",
+    "typer>=0.15.2",
+]
+
+[project.scripts]
+dabench = "data_agent_baseline.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/benchmark",
+    "src/config",
+    "src/llm",
+    "src/run",
+    "src/runtime",
+    "src/tools",
+    "pipeline/case0/src/data_agent_baseline",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    { include-group = "lint" },
+    { include-group = "env" },
+    "aiosqlite>=0.22.1",
+]
+lint = [
+    "mypy>=1.15.0",
+    "pylint>=3.3.2",
+    "pytest-coverage>=0.0",
+    "pytest>=8.3.4",
+    "ruff>=0.8.4",
+    "pandas-stubs>=2.3.2.250926",
+    "types-pyyaml>=6.0.12.20250915",
+]
+env = []
+
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "site-packages",
+    "venv",
+]
+line-length = 88
+indent-width = 4
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.mccabe]
+max-complexity = 5
+
+[tool.ruff.lint.per-file-ignores]
+
+[tool.ruff.lint.isort]
+case-sensitive = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.mypy]
+exclude = [".venv", ".github", "poetry.lock", "__pycache__"]
+python_version = "3.13"
+strict = true
+disallow_any_decorated = false
+disallow_any_unimported = false
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+strict_optional = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+addopts = [
+    '--rootdir=tests',
+    '--strict-config',
+    '--cov=src',
+    '--log-cli-level=INFO',
+    '-p no:cacheprovider',
+    '-ra',
+]
+testpaths = ['tests']
+cache_dir = "tests/.pytest_cache"
+filterwarnings = ["ignore::pydantic.PydanticDeprecatedSince20"]
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (require real AWS credentials)"
+]
+
+[tool.coverage.run]
+branch = true
+omit = ["**/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING",
+    "if __name__ == .__main__.",
+]
+
+[tool.coverage.xml]
+output = "tests/coverage/coverage.xml"
+
+[tool.coverage.html]
+directory = "tests/coverage/report"
+
+[tool.pyright]
+typeCheckingMode = "basic"
+include = ["src", "tests"]
+exclude = [
+    ".venv",
+    "**/traces",
+    "**/traces_ts",
+    "**/example_files**",
+    "**/.pkl",
+    "**/bazel-bin",
+    "**/bazel",
+    "**/resources/**",
+    "**/tests/**",
+    "**/node_modules",
+    "**/.next",
+    "**/__pycache__",
+    "**/.coverage/**",
+    "**/.git",
+    "**/dist/**",
+    "**/build/**",
+    "**/.husky",
+    "**/migrations",
+]
+ignore = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "**/dist",
+    "**/.vscode",
+    "**/*.pyi",
+    "**/__init__.py",
+]
+venvPath = "."
+venv = ".venv"
+
+[tool.pylint]
+ignore-paths = [".venv", ".github"]
+max-line-length = 88

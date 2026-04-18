@@ -1,0 +1,65 @@
+#!/bin/bash
+# GitHub Actions の CD ワークフローを実行する
+#
+# Usage:
+#   dev/deploy backend dev        # バックエンドを dev にデプロイ
+#   dev/deploy frontend stg       # フロントエンドを stg にデプロイ
+#   dev/deploy both dev           # 両方を dev にデプロイ
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "Usage: dev/deploy <target> <environment>"
+  echo ""
+  echo "  target:      backend | frontend | both"
+  echo "  environment: dev | stg | prod"
+  echo ""
+  echo "Examples:"
+  echo "  dev/deploy backend dev"
+  echo "  dev/deploy frontend stg"
+  echo "  dev/deploy both dev"
+  exit 1
+fi
+
+TARGET="$1"
+ENV="$2"
+BRANCH="$(git branch --show-current)"
+
+# 環境のバリデーション
+case "$ENV" in
+  dev|stg|prod) ;;
+  *) echo "Error: environment は dev, stg, prod のいずれかを指定してください"; exit 1 ;;
+esac
+
+# prod デプロイの確認
+if [ "$ENV" = "prod" ]; then
+  echo "!! 本番環境へのデプロイです !!"
+  read -r -p "続行しますか？ (yes/no): " confirm
+  if [ "$confirm" != "yes" ]; then
+    echo "キャンセルしました"
+    exit 0
+  fi
+fi
+
+deploy_backend() {
+  echo "== backend デプロイ (env: $ENV, branch: $BRANCH) =="
+  gh workflow run cd-backend.yml --ref "$BRANCH" -f environment="$ENV"
+  echo "[backend] ワークフローをトリガーしました"
+}
+
+deploy_frontend() {
+  echo "== frontend デプロイ (env: $ENV, branch: $BRANCH) =="
+  gh workflow run cd-frontend.yml --ref "$BRANCH" -f environment="$ENV"
+  echo "[frontend] ワークフローをトリガーしました"
+}
+
+case "$TARGET" in
+  backend)  deploy_backend ;;
+  frontend) deploy_frontend ;;
+  both)     deploy_backend; deploy_frontend ;;
+  *) echo "Error: target は backend, frontend, both のいずれかを指定してください"; exit 1 ;;
+esac
+
+echo ""
+echo "デプロイ状況の確認:"
+echo "  gh run list --workflow=cd-backend.yml --limit=1"
+echo "  gh run list --workflow=cd-frontend.yml --limit=1"

@@ -1,0 +1,47 @@
+{
+  "eval_id": 0,
+  "eval_name": "dpo-paper-with-html-figures",
+  "prompt": "この論文の詳細レポートを作成してください: https://arxiv.org/abs/2305.18290",
+  "assertions": [
+    {
+      "id": "webfetch_used",
+      "text": "WebFetchを使用してarXivページからコンテンツを取得している",
+      "type": "process"
+    },
+    {
+      "id": "html_figures_referenced",
+      "text": "arXiv HTML版の図をURL参照形式（![...](https://arxiv.org/html/...)）でレポートに含めている",
+      "type": "output"
+    },
+    {
+      "id": "figures_section_exists",
+      "text": "レポートに専用の「## Figures & Tables」セクションが存在する",
+      "type": "output"
+    },
+    {
+      "id": "min_4_visuals",
+      "text": "Figures & Tablesセクションに最低4つの視覚要素が含まれている",
+      "type": "output"
+    },
+    {
+      "id": "dpo_formula",
+      "text": "DPOの損失関数の数式が含まれている",
+      "type": "output"
+    },
+    {
+      "id": "specific_numbers",
+      "text": "実験結果に具体的な数値（勝率、精度等）が含まれている",
+      "type": "output"
+    },
+    {
+      "id": "japanese_output",
+      "text": "レポート全体が日本語で記述されている",
+      "type": "output"
+    },
+    {
+      "id": "report_structure",
+      "text": "スキルテンプレートに沿った構造を持つ",
+      "type": "output"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "eval_id": 0,
+  "eval_name": "dpo-paper-with-html-figures",
+  "variant": "with_skill",
+  "expectations": [
+    {
+      "text": "WebFetchを使用してarXivページからコンテンツを取得している",
+      "passed": true,
+      "evidence": "レポートにarXiv abstract, HTML版, Semantic Scholar等からの詳細情報が含まれている。具体的な数値（勝率61%等）やNeurIPS 2023等のメタデータが正確に記載。"
+    },
+    {
+      "text": "arXiv HTML版から図表画像のダウンロードを試みている（Method 2）",
+      "passed": false,
+      "evidence": "arXiv HTMLのimg URLを参照する形式（![Figure 1](https://arxiv.org/html/2305.18290v3/...)）で5枚の図を記載。ただしcurl -Lによる実際のダウンロードは未実行（Bash権限不足）。figures/README.mdにダウンロードコマンドを記載するにとどまった。"
+    },
+    {
+      "text": "レポートに専用の「## Figures & Tables」セクションが存在する",
+      "passed": true,
+      "evidence": "166行目に '## Figures & Tables' セクションが存在し、Figure 1-5の画像参照と表1-5のMarkdownテーブルを含む。"
+    },
+    {
+      "text": "Figures & Tablesセクションに最低4つの視覚要素が含まれている",
+      "passed": true,
+      "evidence": "5つの図（HTML画像リンク）+ 5つの表（Markdownテーブル）= 10個の視覚要素。最低4要素の要件を大幅に超過。"
+    },
+    {
+      "text": "DPOの損失関数の数式が含まれている",
+      "passed": true,
+      "evidence": "77行目にDPO損失関数の完全な数式が$$LaTeX形式で記載: L_DPO(π_θ; π_ref) = -E[log σ(β log π_θ(y_w|x)/π_ref(y_w|x) - β log π_θ(y_l|x)/π_ref(y_l|x))]"
+    },
+    {
+      "text": "実験結果に具体的な数値（勝率、精度等）が含まれている",
+      "passed": true,
+      "evidence": "TL;DR勝率61%、PPO 57%、CNN/DailyMail汎化36% vs 26%、人間評価58% vs 43%等、具体的な数値を豊富に記載。"
+    },
+    {
+      "text": "レポート全体が日本語で記述されている",
+      "passed": true,
+      "evidence": "Abstract（英語原文）を除き、全セクションが日本語で記述。英語Abstractには日本語訳も付記。"
+    },
+    {
+      "text": "スキルテンプレートに沿った構造を持つ",
+      "passed": true,
+      "evidence": "Abstract, Abstract(日本語訳), 概要, 問題設定, 提案手法, アルゴリズム, アーキテクチャ, Figures & Tables, 実験と評価, 備考 — テンプレート構造に準拠。"
+    }
+  ],
+  "pass_rate": 0.875,
+  "summary": "8アサーション中7合格。HTML図表画像のcurlダウンロードが権限不足で未実行だったが、URL参照形式で5枚の図を含めた。レポート品質は高く、具体的な数値・数式・構造化されたテーブルが充実。"
+}

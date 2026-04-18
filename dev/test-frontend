@@ -1,0 +1,46 @@
+#!/bin/bash
+# フロントエンドテスト（ci-frontend.yml 相当）
+# type check → format check → lint → Mockoon + Playwright
+set -euo pipefail
+
+cd "$(dirname "$0")/../frontend"
+
+echo "== frontend: type check =="
+pnpm type-check
+
+echo "== frontend: format check =="
+pnpm format:check
+
+echo "== frontend: lint =="
+pnpm lint
+
+echo "== frontend: install playwright browsers =="
+pnpm exec playwright install --with-deps chromium firefox webkit
+
+echo "== frontend: start mockoon =="
+if ! command -v mockoon-cli &>/dev/null; then
+  echo "mockoon-cli が見つかりません。インストールします..."
+  npm install -g @mockoon/cli
+fi
+
+mockoon-cli start --data ./mock/mockoon/ai-reception.json --port 8000 &
+MOCKOON_PID=$!
+
+cleanup() {
+  if kill -0 "$MOCKOON_PID" 2>/dev/null; then
+    kill "$MOCKOON_PID"
+  fi
+}
+trap cleanup EXIT
+
+# Mockoon の起動を待機
+echo "Mockoon の起動を待機中..."
+for i in $(seq 1 30); do
+  if curl -s http://localhost:8000 >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+echo "== frontend: playwright test =="
+pnpm exec playwright test "$@"

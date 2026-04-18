@@ -1,0 +1,75 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "Usage: dev/create-worktree <branch-name>"
+  echo "Example: dev/create-worktree feature/add-login"
+  echo ""
+  echo "ブランチ名のスラッシュをハイフンに変換して"
+  echo "../<repo-name>.worktrees/<dir-name> にワークツリーを作成します。"
+  exit 1
+fi
+
+BRANCH_NAME="$1"
+DIR_NAME=$(echo "$BRANCH_NAME" | tr '/' '-')
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_NAME="$(basename "$REPO_ROOT")"
+WORKTREE_BASE="$(dirname "$REPO_ROOT")/${REPO_NAME}.worktrees"
+WORKTREE_PATH="${WORKTREE_BASE}/${DIR_NAME}"
+
+if [ -d "$WORKTREE_PATH" ]; then
+  echo "Error: ワークツリーが既に存在します: $WORKTREE_PATH"
+  exit 1
+fi
+
+# ブランチがローカルに存在するかチェック
+if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
+  echo "既存のローカルブランチを使用: ${BRANCH_NAME}"
+  git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+# リモートに存在するかチェック
+elif git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+  echo "リモートブランチから作成: origin/${BRANCH_NAME}"
+  git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "origin/${BRANCH_NAME}"
+else
+  echo "新規ブランチを作成: ${BRANCH_NAME}"
+  git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH"
+fi
+
+# data ディレクトリのコピー
+# TODO: データが大きい場合はシンボリックリンク (ln -s) への切り替えを検討する
+DATA_DIR="${REPO_ROOT}/data"
+if [ -d "$DATA_DIR" ]; then
+  cp -R "$DATA_DIR" "${WORKTREE_PATH}/data"
+  echo "  data/ ディレクトリをコピーしました"
+fi
+
+# .env ファイルのコピー
+ENV_DIRS=("frontend" "backend" "infra")
+COPIED=()
+
+for dir in "${ENV_DIRS[@]}"; do
+  src_dir="${REPO_ROOT}/${dir}"
+  dst_dir="${WORKTREE_PATH}/${dir}"
+  [ -d "$dst_dir" ] || continue
+
+  for env_file in "${src_dir}"/.env "${src_dir}"/.env.*; do
+    [ -f "$env_file" ] || continue
+    filename="$(basename "$env_file")"
+    # .env.example はスキップ（gitで管理されるため）
+    [ "$filename" = ".env.example" ] && continue
+    cp "$env_file" "${dst_dir}/${filename}"
+    COPIED+=("${dir}/${filename}")
+  done
+done
+
+echo ""
+echo "ワークツリーを作成しました:"
+echo "  パス:     $WORKTREE_PATH"
+echo "  ブランチ: $BRANCH_NAME"
+
+if [ ${#COPIED[@]} -gt 0 ]; then
+  echo "  コピーした .env:"
+  for f in "${COPIED[@]}"; do
+    echo "    - $f"
+  done
+fi

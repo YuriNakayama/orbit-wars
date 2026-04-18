@@ -1,0 +1,12 @@
+#!/bin/bash
+# E2E テスト（e2e.yml 相当）
+# Playwright ブラウザインストール → E2E テスト実行
+set -euo pipefail
+
+cd "$(dirname "$0")/../frontend"
+
+echo "== e2e: install playwright browsers =="
+pnpm exec playwright install --with-deps chromium webkit
+
+echo "== e2e: playwright test =="
+pnpm exec playwright test "$@"

@@ -1,0 +1,44 @@
+#!/bin/bash
+# Usage: dev/start-frontend [web-port] [mockoon-port]
+# Default: web=3000, mockoon=8000
+#
+# Examples:
+#   dev/start-frontend              # web :3000, mockoon :8000
+#   dev/start-frontend 3001         # web :3001, mockoon :8000
+#   dev/start-frontend 3001 8001    # web :3001, mockoon :8001
+set -euo pipefail
+
+cd "$(dirname "$0")/../frontend"
+
+WEB_PORT="${1:-3000}"
+MOCKOON_PORT="${2:-8000}"
+
+# Mockoon 起動
+if ! command -v mockoon-cli &>/dev/null; then
+  echo "mockoon-cli が見つかりません。インストールします..."
+  npm install -g @mockoon/cli
+fi
+
+echo "== Mockoon 起動 (port ${MOCKOON_PORT}) =="
+mockoon-cli start --data ./mock/mockoon/ai-reception.json --port "$MOCKOON_PORT" &
+MOCKOON_PID=$!
+
+cleanup() {
+  if kill -0 "$MOCKOON_PID" 2>/dev/null; then
+    kill "$MOCKOON_PID"
+  fi
+}
+trap cleanup EXIT
+
+echo "Mockoon の起動を待機中..."
+for i in $(seq 1 30); do
+  if curl -s "http://localhost:${MOCKOON_PORT}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# Next.js 起動
+echo "== Next.js 起動 (port ${WEB_PORT}) → backend :${MOCKOON_PORT} =="
+export NEXT_PUBLIC_BACKEND_URL="http://localhost:${MOCKOON_PORT}"
+exec npx next dev --turbopack --port "$WEB_PORT"

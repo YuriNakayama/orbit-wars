@@ -1,0 +1,6 @@
+{
+  "eval_id": 0,
+  "eval_name": "arxiv-paper-single-url",
+  "prompt": "この論文の詳細レポートを作成してください: https://arxiv.org/abs/2305.18290",
+  "assertions": []
+}

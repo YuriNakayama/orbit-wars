@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT_DIR="$(pwd)"
+
+echo "== セットアップ開始 =="
+
+# Frontend
+if [ -d "frontend" ]; then
+  echo "[frontend] 依存関係をインストール中..."
+  cd frontend && pnpm install --frozen-lockfile --silent && cd "$ROOT_DIR"
+  echo "[frontend] 完了"
+fi
+
+# Backend
+if [ -d "backend" ]; then
+  echo "[backend] 依存関係をインストール中..."
+  cd backend && uv sync --quiet && cd "$ROOT_DIR"
+  echo "[backend] 完了"
+fi
+
+echo "== セットアップ完了 =="

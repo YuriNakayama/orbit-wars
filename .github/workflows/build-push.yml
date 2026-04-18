@@ -1,0 +1,137 @@
+name: Build, Push, and Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/build-push.yml"
+  workflow_dispatch:
+    inputs:
+      run_task:
+        description: "Run ECS task after push"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: auto_research-dev-task
+  ECS_CLUSTER: auto_research_dev
+  ECS_TASK_DEFINITION: auto_research_dev_task
+  SUBNET: subnet-07a68ebb262fde424
+  SECURITY_GROUP: sg-09a81f534b200cbf1
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build
+        working-directory: backend
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  run-task:
+    needs: build-and-push
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_task }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get latest task definition revision
+        id: task-def
+        run: |
+          REVISION=$(aws ecs describe-task-definition \
+            --task-definition $ECS_TASK_DEFINITION \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+          echo "Task definition: $REVISION"
+
+      - name: Run ECS Fargate task
+        id: run-task
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          echo "Deploying branch: $BRANCH"
+          OVERRIDES='{"containerOverrides":[{"name":"claude-task","environment":[{"name":"GIT_BRANCH","value":"'"$BRANCH"'"}]}]}'
+          TASK_ARN=$(aws ecs run-task \
+            --cluster $ECS_CLUSTER \
+            --task-definition ${{ steps.task-def.outputs.revision }} \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNET],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}" \
+            --overrides "$OVERRIDES" \
+            --query 'tasks[0].taskArn' \
+            --output text)
+          echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
+          TASK_ID=$(echo $TASK_ARN | rev | cut -d'/' -f1 | rev)
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "Started ECS task: $TASK_ARN"
+
+      - name: Wait for task to complete
+        run: |
+          echo "Waiting for task to complete..."
+          aws ecs wait tasks-stopped \
+            --cluster $ECS_CLUSTER \
+            --tasks ${{ steps.run-task.outputs.task_arn }}
+          echo "Task completed."
+
+      - name: Check task result
+        run: |
+          RESULT=$(aws ecs describe-tasks \
+            --cluster $ECS_CLUSTER \
+            --tasks ${{ steps.run-task.outputs.task_arn }} \
+            --query 'tasks[0].{status:lastStatus,exitCode:containers[0].exitCode,reason:stoppedReason}' \
+            --output json)
+          echo "$RESULT"
+          EXIT_CODE=$(echo "$RESULT" | jq -r '.exitCode // 1')
+          echo "Exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::ECS task failed with exit code $EXIT_CODE"
+          fi
+
+      - name: Fetch CloudWatch logs
+        if: always()
+        run: |
+          TASK_ID="${{ steps.run-task.outputs.task_id }}"
+          LOG_STREAM="task/claude-task/$TASK_ID"
+          echo "Log stream: $LOG_STREAM"
+          echo "---"
+          aws logs get-log-events \
+            --log-group-name /ecs/auto_research_dev \
+            --log-stream-name "$LOG_STREAM" \
+            --query 'events[*].message' \
+            --output text 2>&1 || echo "No logs found"

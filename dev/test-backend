@@ -1,0 +1,25 @@
+#!/bin/bash
+# バックエンドテスト（ci-backend.yml 相当）
+# format check → lint → type check → pytest
+set -euo pipefail
+
+cd "$(dirname "$0")/../backend"
+
+# CI 環境では GitHub 形式で出力
+if [ "${CI:-}" = "true" ]; then
+  RUFF_FORMAT="--output-format=github"
+else
+  RUFF_FORMAT=""
+fi
+
+echo "== backend: format check =="
+uv run ruff format --check .
+
+echo "== backend: lint =="
+uv run ruff check $RUFF_FORMAT .
+
+echo "== backend: type check =="
+uv run mypy --config-file pyproject.toml .
+
+echo "== backend: test =="
+uv run pytest tests "$@"
