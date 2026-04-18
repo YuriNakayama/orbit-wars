@@ -89,3 +89,6 @@ data/
 # kaggle credentials
 .kaggle/
 kaggle.json
+
+# claude code scheduled tasks (local runtime state)
+.claude/scheduled_tasks.lock

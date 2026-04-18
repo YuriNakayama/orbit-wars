@@ -18,7 +18,7 @@ kaggle_environments   env.step()
 
 ## Technology Stack
 
-- **Language**: Python 3.14
+- **Language**: Python 3.13
 - **Simulator**: `kaggle-environments` (Orbit Wars env)
 - **Numerics**: NumPy, Pandas, Polars
 - **AI / RL** (optional): PyTorch, Stable-Baselines3 などを必要に応じて追加
@@ -55,6 +55,10 @@ dev/lint             # Static analysis (ruff + mypy)
 dev/test-backend     # CI (format check → lint → type check → pytest)
 dev/create-worktree  # Create git worktree with .env copy
 ```
+
+## Kaggle Submission Policy
+
+Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kaggle competitions submit`, the `cd-kaggle-submit.yml` workflow_dispatch) is irreversible and consumes the daily 5-submission quota — always obtain explicit user approval immediately before executing, showing the case / message / mode to be submitted. Dry-run, archive build, and read-only history checks do NOT require approval. Prior approval covers only that single submission and does not extend to later submissions or auto-mode / autonomous loops.
 
 ## Glossary
 

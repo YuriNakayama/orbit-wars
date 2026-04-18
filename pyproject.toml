@@ -4,9 +4,10 @@ version = "0.1.0"
 description = "Kaggle Orbit Wars competition agents"
 readme = "README.md"
 authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "python-dotenv>=1.0.0",
+    "kaggle>=1.6.17",
     "kaggle-environments>=1.17.0",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
@@ -19,7 +20,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src", "pipeline"]
+packages = ["src/submit", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -73,7 +74,7 @@ exclude = [
 ]
 line-length = 88
 indent-width = 4
-target-version = "py314"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
@@ -88,6 +89,7 @@ max-complexity = 5
 "pipeline/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/case1/evaluation/**/*.py" = ["B008"]
 "tests/pipeline/case1/snapshots/**" = ["ALL"]
+"src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 
 [tool.ruff.lint.isort]
 case-sensitive = true
@@ -106,7 +108,7 @@ exclude = [
     "pipeline/case1/notebook",
     "tests/pipeline/case1/snapshots",
 ]
-python_version = "3.14"
+python_version = "3.13"
 strict = true
 disallow_any_decorated = false
 disallow_any_unimported = false
