@@ -70,6 +70,7 @@ exclude = [
     "dist",
     "site-packages",
     "venv",
+    "pipeline/case1/notebook",
 ]
 line-length = 88
 indent-width = 4
@@ -85,6 +86,9 @@ unfixable = []
 max-complexity = 5
 
 [tool.ruff.lint.per-file-ignores]
+"pipeline/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/case1/evaluation/**/*.py" = ["B008"]
+"tests/pipeline/case1/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 
 [tool.ruff.lint.isort]
@@ -96,7 +100,14 @@ indent-style = "space"
 line-ending = "auto"
 
 [tool.mypy]
-exclude = [".venv", ".github", "poetry.lock", "__pycache__"]
+exclude = [
+    ".venv",
+    ".github",
+    "poetry.lock",
+    "__pycache__",
+    "pipeline/case1/notebook",
+    "tests/pipeline/case1/snapshots",
+]
 python_version = "3.13"
 strict = true
 disallow_any_decorated = false
