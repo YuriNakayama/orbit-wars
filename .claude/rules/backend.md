@@ -43,7 +43,7 @@ src/
 
 ## Type Hints & Naming
 
-- Use Python 3.14 standard types (`list[str]`, `str | None` instead of `List`, `Optional`)
+- Use Python 3.13 standard types (`list[str]`, `str | None` instead of `List`, `Optional`)
 - Avoid `Any` type, `cast`, and `type: ignore` comments
 - Type hints for all function arguments and return values
 - `snake_case` (functions/variables), `PascalCase` (classes), `UPPER_SNAKE_CASE` (constants)

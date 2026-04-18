@@ -18,7 +18,7 @@ kaggle_environments   env.step()
 
 ## Technology Stack
 
-- **Language**: Python 3.14
+- **Language**: Python 3.13
 - **Simulator**: `kaggle-environments` (Orbit Wars env)
 - **Numerics**: NumPy, Pandas, Polars
 - **AI / RL** (optional): PyTorch, Stable-Baselines3 などを必要に応じて追加
