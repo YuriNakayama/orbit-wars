@@ -344,9 +344,7 @@ class WorldModel:
         self.comets = comets
         self.comet_ids: set[int] = set(comet_ids)
 
-        self.planet_by_id: dict[int, Planet] = {
-            planet.id: planet for planet in planets
-        }
+        self.planet_by_id: dict[int, Planet] = {planet.id: planet for planet in planets}
         self.my_planets: list[Planet] = [
             planet for planet in planets if planet.owner == player
         ]
@@ -484,12 +482,8 @@ class WorldModel:
 
             proactive_keep = self._multi_enemy_proactive_keep(planet)
 
-            reserve[planet.id] = min(
-                int(planet.ships), max(exact_keep, proactive_keep)
-            )
-            available[planet.id] = max(
-                0, int(planet.ships) - reserve[planet.id]
-            )
+            reserve[planet.id] = min(int(planet.ships), max(exact_keep, proactive_keep))
+            available[planet.id] = max(0, int(planet.ships) - reserve[planet.id])
 
             if not timeline["holds_full"] and timeline["fall_turn"] is not None:
                 fall_turn = timeline["fall_turn"]
@@ -527,16 +521,10 @@ class WorldModel:
     def comet_life(self, planet_id: int) -> int:
         return comet_remaining_life(planet_id, self.comets)
 
-    def source_inventory_left(
-        self, source_id: int, spent_total: dict[int, int]
-    ) -> int:
-        return max(
-            0, int(self.planet_by_id[source_id].ships) - spent_total[source_id]
-        )
+    def source_inventory_left(self, source_id: int, spent_total: dict[int, int]) -> int:
+        return max(0, int(self.planet_by_id[source_id].ships) - spent_total[source_id])
 
-    def source_attack_left(
-        self, source_id: int, spent_total: dict[int, int]
-    ) -> int:
+    def source_attack_left(self, source_id: int, spent_total: dict[int, int]) -> int:
         return max(0, self.available.get(source_id, 0) - spent_total[source_id])
 
     def plan_shot(
@@ -612,9 +600,7 @@ class WorldModel:
             if item[0] <= cutoff
         ]
         arrivals.extend(
-            item
-            for item in planned_commitments.get(target_id, [])
-            if item[0] <= cutoff
+            item for item in planned_commitments.get(target_id, []) if item[0] <= cutoff
         )
         arrivals.extend(item for item in extra_arrivals if item[0] <= cutoff)
 
@@ -670,9 +656,7 @@ class WorldModel:
         for item in planned_commitments.get(planet_id, []):
             arrivals.append(item)
 
-        horizon = max(
-            arrival_turn_i + 5, self.base_timeline[planet_id]["horizon"]
-        )
+        horizon = max(arrival_turn_i + 5, self.base_timeline[planet_id]["horizon"])
         timeline = simulate_planet_timeline(planet, arrivals, self.player, horizon)
 
         lookahead_end = min(horizon, arrival_turn_i + 20)

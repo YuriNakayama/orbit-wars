@@ -16,11 +16,13 @@ Key concepts demonstrated:
 """
 
 import math
+from typing import Any
+
 from kaggle_environments.envs.orbit_wars.orbit_wars import Planet
 
 
-def agent(obs):
-    moves = []
+def agent(obs: Any) -> list[list[Any]]:
+    moves: list[list[Any]] = []
     player = obs.get("player", 0) if isinstance(obs, dict) else obs.player
     raw_planets = obs.get("planets", []) if isinstance(obs, dict) else obs.planets
 

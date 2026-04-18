@@ -234,9 +234,7 @@ def aim_with_prediction(
         tx, ty = ntx, nty
         est = next_est
 
-    final_est = estimate_arrival(
-        src.x, src.y, src.radius, tx, ty, target.radius, ships
-    )
+    final_est = estimate_arrival(src.x, src.y, src.radius, tx, ty, target.radius, ships)
     if final_est is None:
         return search_safe_intercept(
             src, target, ships, initial_by_id, ang_vel, comets, comet_ids

@@ -18,9 +18,7 @@ SNAPSHOT_ACTION = SNAPSHOT_DIR / "action_seed0_turn10.json"
 
 @pytest.mark.integration
 def test_agent_runs_1v1_to_done() -> None:
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": 0}
-    )
+    env = kaggle_environments.make("orbit_wars", configuration={"agents": 2, "seed": 0})
     env.run([agent, agent])
     assert len(env.steps) > 0
     final = env.steps[-1]

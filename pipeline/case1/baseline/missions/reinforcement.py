@@ -42,9 +42,7 @@ def build_reinforcement_missions(
             budget = source_budget_fn(src.id)
             if budget <= 0:
                 continue
-            source_cap = min(
-                budget, int(src.ships * REINFORCE_MAX_SOURCE_FRACTION)
-            )
+            source_cap = min(budget, int(src.ships * REINFORCE_MAX_SOURCE_FRACTION))
             if source_cap <= 0:
                 continue
 
@@ -65,9 +63,7 @@ def build_reinforcement_missions(
             if turns > fall_turn:
                 continue
 
-            need = world.reinforcement_needed_for(
-                target_id, turns, planned_commitments
-            )
+            need = world.reinforcement_needed_for(target_id, turns, planned_commitments)
             if need <= 0:
                 continue
             send = min(source_cap, need + REINFORCE_SAFETY_MARGIN)

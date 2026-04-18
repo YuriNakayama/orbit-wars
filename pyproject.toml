@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/submit", "pipeline"]
+packages = ["src/submit", "src/env", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -71,6 +71,7 @@ exclude = [
     "site-packages",
     "venv",
     "pipeline/case1/notebook",
+    ".claude",
 ]
 line-length = 88
 indent-width = 4
@@ -90,6 +91,8 @@ max-complexity = 5
 "pipeline/case1/evaluation/**/*.py" = ["B008"]
 "tests/pipeline/case1/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
+"src/env/cli.py" = ["B008"]  # typer の慣習
+"pipeline/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]
 case-sensitive = true
@@ -103,6 +106,7 @@ line-ending = "auto"
 exclude = [
     ".venv",
     ".github",
+    ".claude",
     "poetry.lock",
     "__pycache__",
     "pipeline/case1/notebook",
