@@ -85,3 +85,7 @@ artifacts/
 # data
 data/
 !data/**/*.md
+
+# kaggle credentials
+.kaggle/
+kaggle.json
