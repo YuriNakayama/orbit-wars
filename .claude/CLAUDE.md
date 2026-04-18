@@ -58,7 +58,7 @@ dev/create-worktree  # Create git worktree with .env copy
 
 ## Kaggle Submission Policy
 
-Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kaggle competitions submit`, the `cd-kaggle-submit.yml` workflow_dispatch) is irreversible and consumes the daily 5-submission quota — always obtain explicit user approval immediately before executing, showing the case / message / mode to be submitted. Dry-run, archive build, and read-only history checks do NOT require approval. Prior approval covers only that single submission and does not extend to later submissions or auto-mode / autonomous loops.
+Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kaggle competitions submit`, the `cd-kaggle-submit.yml` workflow_dispatch) is irreversible and consumes the daily 5-submission quota (ただし `SubmissionStatus.ERROR` はクォータに含まれない — validation 失敗分は即時再挑戦可能) — always obtain explicit user approval immediately before executing, showing the case / message / mode to be submitted. Dry-run, archive build, and read-only history checks do NOT require approval. Prior approval covers only that single submission and does not extend to later submissions or auto-mode / autonomous loops.
 
 ## Glossary
 
@@ -77,7 +77,7 @@ Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kag
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
 | `.claude/rules/backend.md` | `src/**`, `tests/**` | Python実装、pytest、ruff/mypy設定 |
-| `.claude/rules/pipeline.md` | `pipeline/**` | 自己対戦・学習・評価パイプライン |
+| `.claude/rules/pipeline.md` | `pipeline/**` | case ディレクトリの submit 構造 (main.py + 相対import + sys.path) |
 | `.claude/rules/infra.md` | `infra/**` | Terraform / クラウド学習基盤（使用時のみ） |
 | `.claude/rules/security.md` | Always loaded | コミット、シークレット、CI/CD |
 
