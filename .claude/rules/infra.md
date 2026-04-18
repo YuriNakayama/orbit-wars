@@ -13,9 +13,13 @@ paths:
 - Separate configurations by environment
 - Increase reusability through modularization
 
+## Scope
+
+Orbit Wars 本体の提出物は Kaggle 側で実行されるため、`infra/` は **学習基盤（GPU / 大規模自己対戦クラスタ等）を必要とする場合にのみ** 利用する。現時点では未使用でも、将来のクラウド学習環境を想定した共通ルールをここに残す。
+
 ## Module Structure
 
-This project uses a layered module structure:
+レイヤ化したモジュール構成を推奨:
 
 ```
 infra/
@@ -28,19 +32,9 @@ infra/
     staging/
     prod/
   modules/
-    foundation/          Core AWS infrastructure
-      networking/        VPC, subnets
-      dns/               Route53
-      security/          Security groups, IAM
-    platform/            Platform services
-      cognito/           AWS Cognito
-      container/         ECS Fargate
-      database/          DynamoDB
-      monitoring/        CloudWatch
-      waf/               Web Application Firewall
-    applications/        Application deployments
-      backend/           FastAPI on ECS
-      frontend_web/      Next.js on Amplify
+    foundation/          Core infrastructure (networking, IAM)
+    platform/            Platform services (compute, storage, monitoring)
+    applications/        Application-specific stacks (training jobs, replay store)
 ```
 
 ### Module Design Principles
@@ -118,7 +112,7 @@ provider "aws" {
   default_tags {
     tags = {
       Environment = var.environment
-      Project     = "AIReception"
+      Project     = "OrbitWars"
       ManagedBy   = "Terraform"
     }
   }
@@ -163,7 +157,7 @@ output "db_connection_string" {
 terraform {
   backend "s3" {
     bucket         = "my-terraform-state"
-    key            = "ai-reception/terraform.tfstate"
+    key            = "orbit-wars/terraform.tfstate"
     region         = "ap-northeast-1"
     encrypt        = true
     dynamodb_table = "terraform-lock"

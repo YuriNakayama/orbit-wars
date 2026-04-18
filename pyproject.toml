@@ -1,40 +1,25 @@
 [project]
-name = "ai-reception"
+name = "orbit-wars"
 version = "0.1.0"
-description = "AI Reception backend service running on AWS Fargate"
+description = "Kaggle Orbit Wars competition agents"
 readme = "README.md"
 authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "python-dotenv>=1.0.0",
-    "pandas>=2.3.3",
-    "openai>=2.28.0",
-    "pyyaml>=6.0.2",
-    "datasets>=3.3.2",
-    "duckdb>=1.5.0",
-    "huggingface-hub>=0.29.3",
+    "kaggle-environments>=1.17.0",
     "numpy>=2.2.6",
-    "openpyxl>=3.1.5",
+    "pandas>=2.3.3",
     "polars>=1.39.0",
     "pyarrow>=23.0.1",
     "pydantic>=2.10.6",
+    "pyyaml>=6.0.2",
     "rich>=13.9.4",
     "typer>=0.15.2",
 ]
 
-[project.scripts]
-dabench = "data_agent_baseline.cli:main"
-
 [tool.hatch.build.targets.wheel]
-packages = [
-    "src/benchmark",
-    "src/config",
-    "src/llm",
-    "src/run",
-    "src/runtime",
-    "src/tools",
-    "pipeline/case0/src/data_agent_baseline",
-]
+packages = ["src", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -44,7 +29,6 @@ build-backend = "hatchling.build"
 dev = [
     { include-group = "lint" },
     { include-group = "env" },
-    "aiosqlite>=0.22.1",
 ]
 lint = [
     "mypy>=1.15.0",
@@ -88,7 +72,7 @@ exclude = [
 ]
 line-length = 88
 indent-width = 4
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
@@ -111,7 +95,7 @@ line-ending = "auto"
 
 [tool.mypy]
 exclude = [".venv", ".github", "poetry.lock", "__pycache__"]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 disallow_any_decorated = false
 disallow_any_unimported = false
@@ -136,7 +120,8 @@ cache_dir = "tests/.pytest_cache"
 filterwarnings = ["ignore::pydantic.PydanticDeprecatedSince20"]
 asyncio_mode = "auto"
 markers = [
-    "integration: marks tests as integration tests (require real AWS credentials)"
+    "integration: marks tests as integration tests",
+    "slow: marks tests as slow (self-play episodes, training runs)",
 ]
 
 [tool.coverage.run]

@@ -1,88 +1,92 @@
-# KDD Cup 2026: Data Agents for Complex Data Analysis
+# Orbit Wars: Kaggle Bot Competition
 
-KDD Cup 2026 参戦リポジトリ。複雑なデータ分析に対して自律的に推論・回答する **データエージェント** を開発します。
+Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポジトリ。1v1 / 4人FFA のリアルタイム戦略シミュレーション上で対戦する **AIエージェント** を開発します。
 
 ## 大会概要
 
-- **主催**: 清華大学・HKUST（広州）
-- **目的**: 分析質問を分解し、複数データソースにおける多段階推論を実行して正確な回答を導出する自律AIエージェントの構築
-- **ベンチマーク**: DataAgent-Bench（構造化DB、PDF、JSON、PNG画像、DOCX等の異種データパッケージ + 自然言語質問）
+- **主催**: Kaggle (Bovard Doerschuk-Tiberi, Walter Reade, Addison Howard)
+- **種別**: Featured Simulation Competition
+- **賞金総額**: $50,000（1〜10位にそれぞれ $5,000）
+- **目的**: 2010年の Planet Wars を現代化した対戦ゲームで、他参加者のボットと対戦し勝率を最大化する
 
-### エージェントに求められる4つの能力
+### エージェントに求められる能力
 
 | 能力 | 説明 |
 |------|------|
-| **分解・計画** | 高度な分析質問を多段階実行計画へ自動分解 |
-| **ツール選択** | Python, SQL, API呼び出し等から適切なツールを選択・実行 |
-| **異種データ推論** | テーブル、文書、チャート、マルチモーダルデータに対応 |
-| **結果統合** | 複数ステップの中間結果を総合して最終回答を合成 |
+| **盤面認識** | 惑星・フリート・コメット・軌道運動を解釈 |
+| **行動選択** | 1ターン1秒以内に `[from_planet_id, angle, num_ships]` のリストを返す |
+| **軌道予測** | 軌道惑星（公転）とコメット（直線移動）の将来位置を予測 |
+| **戦闘判定** | グループ化された戦闘ルールを踏まえて勝敗と占領を推定 |
 
-### 推論トポロジー
+## ゲームルール概要
 
-- **逐次チェーン**: ステップ間の依存関係が線形
-- **分岐・統合**: 複数データソースの並列サブクエリ後に結果を統合
-- **反復ループ**: 中間結果の反復的改善
+- **ボード**: 100×100 の連続2D空間、中心 (50,50) に半径10の太陽（通過したフリートは消滅）
+- **惑星**: 20〜40基。4折対称配置で、軌道惑星は 0.025〜0.05 rad/turn で公転
+- **コメット**: ターン 50/150/250/350/450 に4つ1組で出現、速度 4.0
+- **勝利条件**: 500ターン終了時、または相手全滅時に `自軍惑星の艦数 + 飛行中フリートの艦数` が最大のプレイヤーが勝利
+- **戦闘**: 攻撃者をowner別にグループ化し、最大勢力vs第2勢力の差分が駐留艦と対戦
 
-### 難易度レベル
-
-| レベル | データ構成 | 特徴 |
-|--------|-----------|------|
-| Easy | 構造化ファイル + 知識文書 | データ分析ワークフロー生成 |
-| Medium | JSON/CSV + DB + 知識文書 | Text-to-SQL処理 |
-| Hard | 非構造化文書を含む複合推論 | 10K-128Kトークン |
-| Extreme | 超長文書入力 | 128K+トークン |
+詳細は [`docs/competition/abstract.md`](docs/competition/abstract.md) を参照。
 
 ## 大会スケジュール
 
-| フェーズ | 期間 | 内容 |
-|---------|------|------|
-| Phase 1 | 2026/4/24 〜 5/23 | 公開リーダーボードで自動評価 |
-| Phase 2 | 2026/5/28 〜 6/30 | Leaderboard トラック or Creative トラック |
+| 日程 (UTC 23:59) | イベント |
+|------------------|---------|
+| 2026-04-16 | 開始 |
+| 2026-06-16 | エントリー / チームマージ締切 |
+| 2026-06-23 | 最終提出締切 |
+| 2026-06-24 〜 07-08 頃 | 追加対戦期間（収束まで継続） |
 
-### 評価基準
+### 評価方式
 
-**列マッチング正確性**: 予測が全ての正答列を完全かつ正確に網羅した場合のみスコア1、それ以外は0。列名は比較対象外、余分な列は許容。
+各提出は **ガウス分布 N(μ, σ²)** のスキルレーティングを持ち、対戦結果で更新される。
+
+- 初期値 μ₀ = 600、対戦を重ねると σ が縮小
+- 更新は勝敗のみを参照（スコア差は無関係）
+- 1日最大5提出、最新2件が最終提出候補
 
 ## Technology Stack
 
-- **Language**: Python 3.12+
-- **AI**: Claude API / Claude CLI
-- **Data Processing**: Pandas, DuckDB/SQLite, Pillow
-- **Document Processing**: PyPDF2, python-docx, PyYAML
+- **Language**: Python 3.14
+- **Simulator**: `kaggle-environments` (Orbit Wars env)
+- **Numerics**: NumPy, Pandas, Polars
+- **AI / RL**: PyTorch / Stable-Baselines3 など（必要に応じて導入）
 - **Testing**: Pytest + pytest-cov, Ruff, Mypy
 - **Package Management**: UV
 
 ## Folder Structure
 
 ```
+src/
+  agents/               提出用エージェント（main.py がエントリポイント）
+  env/                  kaggle-environments ラッパー・自己対戦ユーティリティ
+  features/             観測→特徴量変換、軌道予測
+  policies/             ルールベース / 学習済みポリシー
+  utils/                共通ユーティリティ
 pipeline/
-  case1/                     分析ケース1
-    eda/                     探索的データ分析
-  case2/                     分析ケース2（以降同様）
-backend/
-  pyproject.toml             Python dependencies (UV managed)
-  uv.lock                    Lock file
-  src/                       共通ライブラリ・ユーティリティ
-  tests/                     Pytest unit tests
-infra/                       Terraform infrastructure (将来のデプロイ用)
-dev/                         Development scripts
-  setup                      Install dependencies (uv sync)
-  format                     Code formatting (ruff)
-  lint                       Static analysis (ruff + mypy)
-  test-backend               Backend CI (format check -> lint -> type check -> pytest)
-  create-worktree            Create git worktree with .env copy
+  case1/                戦略別の学習・評価パイプライン
+    eda/                観測データの探索的分析
+tests/                  Pytest unit tests
+data/                   リプレイ・学習ログ（大きいものは gitignore）
+dev/                    Development scripts
+  setup                 Install dependencies (uv sync)
+  format                Code formatting (ruff)
+  lint                  Static analysis (ruff + mypy)
+  test-backend          Backend CI (format check -> lint -> type check -> pytest)
+  create-worktree       Create git worktree with .env copy
 docs/
-  plans/                     Feature plans
-  research/                  Research prompts and outputs
+  competition/          コンペ仕様まとめ（abstract.md 等）
+  plans/                Feature plans
+  research/             Research prompts and outputs
 ```
 
 ## Commands
 
 ```bash
-dev/setup            # Install dependencies (uv sync in backend/)
-dev/format           # Code formatting (backend: ruff)
-dev/lint             # Static analysis (backend: ruff + mypy)
-dev/test-backend     # Backend CI (format check -> lint -> type check -> pytest)
+dev/setup            # Install dependencies (uv sync)
+dev/format           # Code formatting (ruff)
+dev/lint             # Static analysis (ruff + mypy)
+dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
 ```
 
@@ -90,12 +94,14 @@ dev/create-worktree  # Create git worktree with .env copy
 
 | Term | Description |
 |------|-------------|
-| DataAgent-Bench | KDD Cup 2026の公式ベンチマーク。異種データパッケージ + 自然言語質問で構成 |
-| Data Package | CSV, JSON, SQLite, PDF, PNG, DOCX等を含むデータセット |
-| Reasoning Topology | 推論の構造パターン（逐次チェーン、分岐・統合、反復ループ） |
-| Column Matching | 評価方式。正答列の完全一致で判定 |
+| Orbit Wars | Kaggle主催のシミュレーション対戦コンペ（Planet Wars の現代版） |
+| Planet | 盤面上の惑星。軌道惑星（公転）と静止惑星がある。生産量 1〜5 |
+| Fleet | `[id, owner, x, y, angle, from_planet_id, ships]` 形式の飛行中艦隊 |
+| Comet | ターン 50/150/.../450 に出現する移動惑星。占領・生産可能 |
+| Home Planet | 各プレイヤーの初期所有惑星（初期艦数10） |
+| Skill Rating | 提出ごとのガウス分布 N(μ, σ²) によるレーティング |
 
 ## Links
 
-- [KDD Cup 2026 公式サイト](https://dataagent.top/)
-- [Discord: KDD Cup 2026 | DataAgents](https://discord.gg/kdd-cup-2026)
+- [Kaggle: Orbit Wars](https://www.kaggle.com/competitions/orbit-wars)
+- [コンペ概要まとめ](docs/competition/abstract.md)

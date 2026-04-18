@@ -7,69 +7,52 @@ paths:
 
 ## Directory Structure
 
-各分析ケースは `pipeline/caseN/` 配下に独立したディレクトリとして管理する:
+戦略別の学習・評価パイプラインは `pipeline/caseN/` 配下に独立したディレクトリとして管理する:
 
 ```
 pipeline/
   case1/
-    eda/              探索的データ分析（データ概要、統計、可視化）
-    data/             入力データパッケージ（gitignored if large）
-    output/           分析結果・最終回答
-    README.md         ケースの概要・質問・アプローチ
+    eda/              観測ログ・リプレイの探索的分析
+    training/         学習スクリプト（RL / 模倣学習 / 進化戦略）
+    evaluation/       自己対戦・ベンチマーク評価
+    configs/          ハイパーパラメータ・対戦相手セット
+    output/           学習済みモデル・評価結果（大きいものは gitignore）
+    README.md         ケースの戦略・結果・考察
   case2/
     ...
 ```
 
-## Analysis Workflow
+## Workflow
 
 各ケースは以下の流れで進める:
 
-1. **EDA（探索的データ分析）**: データパッケージの構造・内容を把握
-2. **計画**: 質問を分解し、推論トポロジー（逐次/分岐・統合/反復）を決定
-3. **実行**: ツール（Python, SQL, パーサー）で各ステップを処理
-4. **統合**: 中間結果を合成して最終回答を生成
-5. **検証**: 列マッチング基準で回答の正確性を確認
+1. **EDA**: 既存リプレイ・公開ボットの挙動を分析し、改善ポイントを洗い出す
+2. **設計**: ポリシー構造（ルール / 学習 / ハイブリッド）と入力特徴量を決定
+3. **実装**: `src/policies/` にポリシーを追加、パイプラインから呼び出す
+4. **自己対戦**: `kaggle_environments` で多数エピソードを実行し、勝率・レーティングを計測
+5. **評価・提出**: 対戦相手プール（旧提出・公開ボット）で評価し、有望なら Kaggle に提出
 
-## Supported Data Formats
+## Simulation Conventions
 
-| Format | Extension | Handling |
-|--------|-----------|----------|
-| CSV | `.csv` | Pandas / DuckDB |
-| JSON | `.json` | `json` module / Pandas |
-| SQLite | `.sqlite`, `.db` | DuckDB / sqlite3 |
-| PDF | `.pdf` | PyPDF2 / pdfplumber |
-| Image | `.png`, `.jpg` | Pillow / Claude Vision API |
-| Word | `.docx` | python-docx |
-| Excel | `.xlsx` | openpyxl / Pandas |
-
-## Reasoning Topology Patterns
-
-### 逐次チェーン (Sequential Chain)
-ステップ間の依存関係が線形。前のステップの出力が次の入力になる。
-
-### 分岐・統合 (Fork-Join)
-複数データソースへの並列サブクエリ後に結果を統合。`asyncio.gather` での並列実行を推奨。
-
-### 反復ループ (Iterative Loop)
-中間結果を評価し、精度が基準に達するまで改善を繰り返す。無限ループ防止のため最大反復回数を設定すること。
+- 乱数シードは config に明記し、再現可能にする
+- 長時間の自己対戦は `multiprocessing` で並列化、CPU バウンドを前提に設計
+- 1エピソード＝500ターン上限。タイムアウト（`actTimeout=1s`）違反を計測しログ化
+- リプレイは JSON で保存し、`data/replays/{case}/{timestamp}.json` に格納
+- 中間結果（特徴量バッチ、勝率行列）はファイルキャッシュに保存して再利用
 
 ## Evaluation Criteria
 
-**列マッチング正確性 (Column Matching Accuracy)**:
-- 予測が全ての正答列を完全かつ正確に網羅 → スコア1
-- それ以外 → スコア0
-- 列名は比較対象外
-- 余分な列は許容される
+Kaggleのスキルレーティングは **勝敗のみ** で更新されるため、指標は以下を優先する:
 
-回答生成時は以下を意識:
-- 必要な列を漏れなく含める
-- 列の値は正確に一致させる
-- 不確実な場合は余分な列を含めてもペナルティなし
+- **勝率 (Win Rate)**: 対戦相手プールに対する勝率
+- **平均最終スコア**: `自軍惑星艦数 + 飛行中艦数`（収束の参考値）
+- **レーティング更新予測**: 期待勝率との乖離から μ 更新量を推定
+- **タイムアウト率**: 1ターン 1秒を超過したエピソード割合（低いほど良い）
 
 ## Coding Conventions
 
-- 分析スクリプトは再現可能に書く（ランダムシードの固定、パス指定の明確化）
-- 中間結果はファイルに保存し、後続ステップで再利用可能にする
-- 大規模データはチャンク処理でメモリ効率を確保
-- SQL クエリは必ずパラメータ化する
-- マジックナンバーを避け、定数として定義する
+- 自己対戦スクリプトは CLI 化（`typer`）してハイパーパラメータを引数化
+- 中間結果を壊さないよう、出力先ディレクトリを実行ごとに分ける（タイムスタンプ付与）
+- 大規模観測データはチャンク処理（polars の lazy frame など）でメモリ効率を確保
+- マジックナンバー（`boardSize=100.0`, `sunRadius=10.0`, `shipSpeed=6.0` 等）を定数化
+- 探索コードでも `print` は避け、`rich` / `logging` を使う

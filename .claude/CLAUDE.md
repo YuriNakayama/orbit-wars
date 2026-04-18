@@ -1,69 +1,58 @@
-# KDD Cup 2026: Data Agent
+# Kaggle Orbit Wars: Bot Agents
 
-KDD Cup 2026 参戦プロジェクト。DataAgent-Bench に対して自律的に多段階推論を実行し、正確な回答を導出するデータエージェントを開発する。
+Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦プロジェクト。`kaggle-environments` の Orbit Wars 環境上で、1v1 / 4人FFA に対応するAIエージェントを開発する。コンペの詳細仕様は [`docs/competition/abstract.md`](../docs/competition/abstract.md) を参照。
 
-## Architecture
+## Agent Pipeline
 
 ```
-Natural Language Question
+observation (planets, fleets, comets, player, ...)
   ↓
-Planner (質問分解・実行計画生成)
+Feature Extraction    (軌道予測・脅威評価・生産ポテンシャル)
   ↓
-Executor (ツール選択・実行)
-  ├── Python Script — データ処理・集計
-  ├── SQL Query — DB問い合わせ (DuckDB/SQLite)
-  ├── Document Parser — PDF/DOCX/JSON読み取り
-  └── Image Analyzer — PNG/チャート解析
+Policy                (ルールベース / 学習済みモデル)
   ↓
-Reasoner (中間結果の推論・統合)
+Action Selection      [[from_planet_id, angle, num_ships], ...]
   ↓
-Integrator (最終回答の合成)
+kaggle_environments   env.step()
 ```
 
 ## Technology Stack
 
-- **Language**: Python 3.12+
-- **AI**: Claude API / Claude CLI
-- **Data Processing**: Pandas, DuckDB/SQLite, Pillow
-- **Document Processing**: PyPDF2, python-docx, PyYAML
+- **Language**: Python 3.14
+- **Simulator**: `kaggle-environments` (Orbit Wars env)
+- **Numerics**: NumPy, Pandas, Polars
+- **AI / RL** (optional): PyTorch, Stable-Baselines3 などを必要に応じて追加
 - **Testing**: Pytest + pytest-cov, Ruff, Mypy
 - **Package Management**: UV
 
 ## Folder Structure
 
 ```
+src/
+  agents/               提出用エージェント（main.py がエントリポイント）
+  env/                  kaggle-environments ラッパー・自己対戦ユーティリティ
+  features/             観測→特徴量変換、軌道予測
+  policies/             ルールベース / 学習済みポリシー
+  utils/                共通ユーティリティ
 pipeline/
-  case1/                     分析ケース1
-    eda/                     探索的データ分析
-  case2/                     分析ケース2（以降同様）
-backend/
-  pyproject.toml             Python dependencies (UV managed)
-  uv.lock                    Lock file
-  src/                       共通ライブラリ・ユーティリティ
-  tests/                     Pytest unit tests
-infra/
-  main.tf                    Root module (provider, backend)
-  variables.tf               Input variables
-  outputs.tf                 Output values
-  modules/                   Terraform modules
-dev/                         Development scripts
-  setup                      Install dependencies (uv sync)
-  format                     Code formatting (ruff)
-  lint                       Static analysis (ruff + mypy)
-  test-backend               Backend CI (format check → lint → type check → pytest)
-  create-worktree            Create git worktree with .env copy
+  case1/                戦略別の学習・評価パイプライン
+    eda/                観測データの探索的分析
+tests/                  Pytest unit tests
+data/                   リプレイ・学習ログ（大きいものは gitignore）
+dev/                    Development scripts
 docs/
-  plans/                     Feature plans
-  research/                  Research prompts and outputs
+  competition/          コンペ仕様まとめ（abstract.md 等）
+  plans/                Feature plans
+  research/             Research prompts and outputs
 ```
 
 ## Commands
 
 ```bash
-dev/setup            # Install dependencies (uv sync in backend/)
-dev/format           # Code formatting (backend: ruff)
-dev/lint             # Static analysis (backend: ruff + mypy)
-dev/test-backend     # Backend CI (format check → lint → type check → pytest)
+dev/setup            # Install dependencies (uv sync)
+dev/format           # Code formatting (ruff)
+dev/lint             # Static analysis (ruff + mypy)
+dev/test-backend     # CI (format check → lint → type check → pytest)
 dev/create-worktree  # Create git worktree with .env copy
 ```
 
@@ -71,24 +60,24 @@ dev/create-worktree  # Create git worktree with .env copy
 
 | Term | Description |
 |------|-------------|
-| DataAgent-Bench | KDD Cup 2026公式ベンチマーク。異種データパッケージ + 自然言語質問 |
-| Data Package | CSV, JSON, SQLite, PDF, PNG, DOCX等を含むデータセット |
-| Reasoning Topology | 推論の構造パターン（逐次チェーン、分岐・統合、反復ループ） |
-| Column Matching | 評価方式。予測が全正答列を完全一致で網羅した場合のみスコア1 |
-| Planner | 質問を多段階実行計画へ分解するモジュール |
-| Executor | Python, SQL, API等のツールを選択・実行するモジュール |
-| Reasoner | 中間結果を推論・統合するモジュール |
+| Orbit Wars | Kaggle主催のシミュレーション対戦コンペ。Planet Warsの現代版 |
+| Planet | `[id, owner, x, y, radius, ships, production]` 形式。静止惑星 / 軌道惑星 |
+| Fleet | `[id, owner, x, y, angle, from_planet_id, ships]`。速度は艦数に依存 |
+| Comet | ターン 50/150/250/350/450 に4つ1組で出現する移動惑星 |
+| Home Planet | プレイヤーの初期所有惑星（初期艦数10） |
+| Skill Rating | 提出ごとの N(μ, σ²) レーティング。勝敗のみで更新 |
+| Overage Time | 各エピソードで共有される追加思考時間バジェット |
 
 ## Rules
 
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
-| `.claude/rules/backend.md` | `backend/**` | Python code changes, pytest, ruff/mypy configuration |
-| `.claude/rules/pipeline.md` | `pipeline/**` | 分析パイプライン、ケース別データ処理、推論ロジック |
-| `.claude/rules/infra.md` | `infra/**` | Terraform changes, AWS resource design, module structure decisions |
-| `.claude/rules/security.md` | Always loaded | Commits, secret handling, CI/CD pipeline changes |
+| `.claude/rules/backend.md` | `src/**`, `tests/**` | Python実装、pytest、ruff/mypy設定 |
+| `.claude/rules/pipeline.md` | `pipeline/**` | 自己対戦・学習・評価パイプライン |
+| `.claude/rules/infra.md` | `infra/**` | Terraform / クラウド学習基盤（使用時のみ） |
+| `.claude/rules/security.md` | Always loaded | コミット、シークレット、CI/CD |
 
 ## Response Language
 
 - Internal reasoning should be in English
-- All user-facing output must be in Japanese(全てのユーザー向けの出力は日本語で行うこと)
+- All user-facing output must be in Japanese（全てのユーザー向けの出力は日本語で行うこと）

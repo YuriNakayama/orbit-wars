@@ -1,6 +1,7 @@
 ---
 paths:
-  - "backend/**"
+  - "src/**"
+  - "tests/**"
 ---
 
 # Backend Rules
@@ -22,89 +23,77 @@ paths:
 
 ## Module Architecture
 
-データエージェントの共通ライブラリとして以下のモジュール構成を想定:
+Orbit Wars エージェントの共通ライブラリとして以下のモジュール構成を想定:
 
 ```
-backend/src/
-  planner/         質問分解・実行計画生成
-  executor/        ツール選択・実行（Python, SQL, API）
-  reasoner/        中間結果の推論・統合
-  integrator/      最終回答の合成
-  parsers/         データパーサー（CSV, JSON, PDF, DOCX, PNG）
-  utils/           共通ユーティリティ
+src/
+  agents/          提出用エージェント（Kaggle Submission entrypoint）
+  env/             kaggle-environments ラッパー、自己対戦ユーティリティ
+  features/        観測→特徴量、軌道予測、脅威評価
+  policies/        ルールベース / 学習済みポリシー
+  utils/           共通ユーティリティ（数学・可視化・ロギング）
 ```
 
 ### モジュール設計原則
 
 - 各モジュールは単一責任を持つ
 - モジュール間の依存は明示的にインポートで表現
-- パーサーはデータ形式ごとに独立して実装
-- 共通インターフェースを定義し、拡張可能に設計
+- 特徴量抽出とポリシーは疎結合に保ち、差し替え可能に設計
+- Submission (`src/agents/main.py`) は依存を最小化（Kaggle環境にない重い依存は避ける）
 
 ## Type Hints & Naming
 
-- Use Python 3.12 standard types (`list[str]`, `str | None` instead of `List`, `Optional`)
+- Use Python 3.14 standard types (`list[str]`, `str | None` instead of `List`, `Optional`)
 - Avoid `Any` type, `cast`, and `type: ignore` comments
 - Type hints for all function arguments and return values
 - `snake_case` (functions/variables), `PascalCase` (classes), `UPPER_SNAKE_CASE` (constants)
 
 ```python
 # GOOD
-def get_user(user_id: str) -> User | None:
+def select_action(obs: Observation) -> list[Action]:
     ...
 
 # BAD
-def get_user(user_id) -> Any:
+def select_action(obs) -> Any:
     ...
 ```
 
-## Data Processing Conventions
+## Numerics & Performance Conventions
 
-- DataFrameの操作はメソッドチェーンを活用し、中間変数を減らす
-- SQLクエリはパラメータ化して実行（SQLインジェクション防止）
-- 大規模データはチャンク処理でメモリ効率を確保
+- 盤面計算はベクトル化する（NumPyで艦・惑星の相対位置を一括計算）
+- 1ターン 1秒（`actTimeout=1`）のため、ホットパスでの Python ループ・動的確保を避ける
+- 軌道惑星・コメットの未来位置は初期化時にキャッシュ
+- マジックナンバー（`boardSize=100.0`, `sunRadius=10.0` 等）は定数として宣言
 - ファイルパスは `pathlib.Path` を使用
 
 ```python
-# GOOD: パラメータ化クエリ
-import duckdb
+# GOOD: ベクトル化
+import numpy as np
 
-conn = duckdb.connect(db_path)
-result = conn.execute(
-    "SELECT * FROM sales WHERE region = ?", [region]
-).fetchdf()
-
-# BAD: 文字列結合
-result = conn.execute(f"SELECT * FROM sales WHERE region = '{region}'").fetchdf()
+def distances(fleets_xy: np.ndarray, planet_xy: np.ndarray) -> np.ndarray:
+    return np.linalg.norm(fleets_xy - planet_xy, axis=1)
 ```
 
 ## Async & Error Handling
 
-- I/O bound operations: use `async`/`await`
-- Parallel processing: use `asyncio.gather`
+- I/O bound operations (リプレイ保存・APIアクセス): use `async`/`await`
+- Parallel self-play: `asyncio.gather` or `multiprocessing.Pool`
 - Define appropriate exception classes
 - Output structured logs
 - Use exception chaining (`raise ... from e`)
 
 ```python
-class DataParseError(Exception):
-    def __init__(self, file_path: str, reason: str) -> None:
-        super().__init__(f"Failed to parse {file_path}: {reason}")
-        self.file_path = file_path
-
-async def parse_data(file_path: str) -> DataFrame:
-    try:
-        return await _read_file(file_path)
-    except FileNotFoundError as e:
-        raise DataParseError(file_path, "file not found") from e
+class ObservationParseError(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Failed to parse observation: {reason}")
 ```
 
 ## Logging
 
 - Use structured logging with JSON format
-- Exclude sensitive information (tokens, passwords, PII)
-- Use `logging.getLogger(__name__)` or project logger
-- NEVER use `print()` for logging
+- Exclude sensitive information (API tokens)
+- Use `logging.getLogger(__name__)`
+- NEVER use `print()` for logging（Submission でも stdout を汚さない）
 
 ## Lint/Formatting
 
@@ -119,7 +108,7 @@ uv run mypy .
 ### Frameworks
 
 - **Unit/Integration**: Pytest + pytest-asyncio
-- Tests mirror `src/` structure in `backend/tests/`
+- Tests mirror `src/` structure in `tests/`
 
 ### Test Guidelines
 
@@ -127,28 +116,22 @@ uv run mypy .
 - Use Fixtures for common setup
 - Minimize use of mock and patch — keep close to actual behavior
 - Each test should be executable independently
-- データパーサーのテストにはサンプルデータファイルを `tests/fixtures/` に配置
+- エージェントのテストでは `kaggle_environments.make("orbit_wars")` を使ってシナリオを構築
 
 ```python
 import pytest
-from pathlib import Path
+from kaggle_environments import make
 
 @pytest.fixture
-def sample_csv(tmp_path: Path) -> Path:
-    csv_file = tmp_path / "sales.csv"
-    csv_file.write_text("region,amount\neast,100\nwest,200\n")
-    return csv_file
+def env():
+    return make("orbit_wars", debug=True)
 
-def test_parse_csv(sample_csv: Path):
-    # Arrange
-    parser = CsvParser()
+def test_agent_does_nothing_is_legal(env):
+    def noop(obs):
+        return []
 
-    # Act
-    result = parser.parse(sample_csv)
-
-    # Assert
-    assert len(result) == 2
-    assert result.columns.tolist() == ["region", "amount"]
+    env.run([noop, noop])
+    assert env.state[0]["status"] in {"DONE", "ACTIVE"}
 ```
 
 ### Test-Driven Development
@@ -168,5 +151,4 @@ def test_parse_csv(sample_csv: Path):
 - [ ] No hardcoded values
 - [ ] No mutation (immutable patterns used)
 - [ ] Type hints for all functions (no `Any`)
-- [ ] SQL queries are parameterized
 - [ ] `ruff format`, `ruff check`, `mypy` pass
