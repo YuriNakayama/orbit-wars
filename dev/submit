@@ -1,0 +1,31 @@
+#!/bin/bash
+# Kaggle Orbit Wars への提出自動化ラッパー
+#
+# Usage:
+#   dev/submit case0 -m "初回提出"
+#   dev/submit case0 -m "テスト" --dry-run
+#   dev/submit case0 -m "wait" --wait
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ $# -lt 1 ]; then
+  cat <<'EOS'
+Usage: dev/submit <case> -m "<message>" [オプション]
+
+  <case>               pipeline/<case> ディレクトリ名 (例: case0)
+  -m, --message TEXT   提出メッセージ (必須)
+  --dry-run            検証とパッケージングのみ (Kaggle へは投げない)
+  --single-file        main.py 単体で提出
+  --wait               提出後に validation 結果をポーリング
+  --force              1日5提出の制限チェックをスキップ
+  --skip-validation    ローカルドライランをスキップ (非推奨)
+
+Examples:
+  dev/submit case0 -m "nearest planet sniper baseline"
+  dev/submit case0 -m "dry run test" --dry-run
+EOS
+  exit 1
+fi
+
+exec uv run python -m submit submit "$@"

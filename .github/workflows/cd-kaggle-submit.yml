@@ -1,0 +1,76 @@
+name: CD Kaggle Submit
+
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        description: "pipeline 配下の case 名 (例: case0)"
+        required: true
+        type: string
+      message:
+        description: "Kaggle 提出メッセージ"
+        required: true
+        type: string
+      dry_run:
+        description: "dry-run (提出しない)"
+        required: false
+        type: boolean
+        default: false
+      single_file:
+        description: "main.py 単体で提出"
+        required: false
+        type: boolean
+        default: false
+      wait:
+        description: "提出後に validation 結果をポーリング"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Verify competition access
+        run: uv run kaggle competitions list --group entered
+
+      - name: Submit
+        run: |
+          ARGS=(submit "${{ inputs.case }}" -m "${{ inputs.message }}")
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          if [ "${{ inputs.single_file }}" = "true" ]; then
+            ARGS+=(--single-file)
+          fi
+          if [ "${{ inputs.wait }}" = "true" ]; then
+            ARGS+=(--wait)
+          fi
+          uv run python -m submit "${ARGS[@]}"
+
+      - name: Upload submission log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-submission-log
+          path: data/submissions/${{ inputs.case }}/
+          if-no-files-found: ignore
+          retention-days: 30
