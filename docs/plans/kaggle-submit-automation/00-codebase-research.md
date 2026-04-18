@@ -54,7 +54,7 @@
 
 - **Files analyzed**: `pyproject.toml` (1–182行)
 - **Key findings**:
-  - Python 3.14 固定、`kaggle-environments>=1.17.0` は依存済み。
+  - Python 3.13 固定、`kaggle-environments>=1.17.0` は依存済み。
   - `typer>=0.15.2`, `rich>=13.9.4` が利用可能 → 提出CLIに最適。
   - `python-dotenv>=1.0.0` が既に依存 → Kaggle認証の `.env` 読み込みが自然。
   - **`kaggle` パッケージ自体は依存に含まれていない** → 追加が必要（または PATH に存在する CLI を呼ぶ方針）。
@@ -73,7 +73,7 @@
    - 単一ファイル: `main.py` を直接投げる
    - 複数ファイル: `tar -czf submission.tar.gz main.py ...` でルートに `main.py` を含める
 4. **1日5提出まで**。自動化で誤爆防止が重要（確認プロンプト or dry-run モード）。
-5. **Python バージョン**: ローカル 3.14 指定だが、Kaggle 実行環境は Kaggle 側Pythonランタイムで走るため、標準ライブラリ＋ kaggle-environments のみ依存という点に注意。
+5. **Python バージョン**: ローカル 3.13 指定だが、Kaggle 実行環境は Kaggle 側Pythonランタイムで走るため、標準ライブラリ＋ kaggle-environments のみ依存という点に注意。
 6. **venv 未作成**: 初回実行前に `uv sync` が必要。
 
 ## 主要な発見まとめ

@@ -47,7 +47,7 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポ
 
 ## Technology Stack
 
-- **Language**: Python 3.14
+- **Language**: Python 3.13
 - **Simulator**: `kaggle-environments` (Orbit Wars env)
 - **Numerics**: NumPy, Pandas, Polars
 - **AI / RL**: PyTorch / Stable-Baselines3 など（必要に応じて導入）

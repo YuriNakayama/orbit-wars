@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Kaggle Orbit Wars competition agents"
 readme = "README.md"
 authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "python-dotenv>=1.0.0",
     "kaggle>=1.6.17",
@@ -21,22 +21,6 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/submit", "pipeline"]
-
-[tool.uv]
-# orbit_wars 環境は pygame を使わないため、pygame/gymnax のビルドをスキップする。
-# （Python 3.14 用 wheel が未提供で SDL.h がないと source build に失敗するため）
-override-dependencies = [
-    "pygame; sys_platform == 'never'",
-    "gymnax; sys_platform == 'never'",
-    "open_spiel; sys_platform == 'never'",
-    "pettingzoo; sys_platform == 'never'",
-    "pokerkit; sys_platform == 'never'",
-    "litellm; sys_platform == 'never'",
-    "transformers; sys_platform == 'never'",
-    "shimmy; sys_platform == 'never'",
-    "jax; sys_platform == 'never'",
-    "gymnasium; sys_platform == 'never'",
-]
 
 [build-system]
 requires = ["hatchling"]
@@ -89,7 +73,7 @@ exclude = [
 ]
 line-length = 88
 indent-width = 4
-target-version = "py314"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
@@ -113,7 +97,7 @@ line-ending = "auto"
 
 [tool.mypy]
 exclude = [".venv", ".github", "poetry.lock", "__pycache__"]
-python_version = "3.14"
+python_version = "3.13"
 strict = true
 disallow_any_decorated = false
 disallow_any_unimported = false
