@@ -13,7 +13,9 @@ pipeline/case1/
 │   ├── core/             # config / types / geometry / physics / world_model
 │   └── missions/         # snipe / reinforcement / crash_exploit
 ├── evaluation/
-│   └── selfplay.py       # typer CLI
+│   └── snapshot_update.py  # 観測/action スナップショット再生成
+├── eda/
+│   └── replay_viewer.py    # Jupyter 再生ビューア
 ├── configs/
 │   └── baseline.yaml     # CONFIG を YAML 化 (参考値)
 └── notebook/
@@ -58,19 +60,26 @@ kaggle kernels pull sigmaborov/lb-897-orbit-wars-2026-reinforce \
   -p pipeline/case1/notebook/ -m
 ```
 
-## 自己対局 (selfplay)
+## 自己対局 (evaluation フレームワーク)
+
+対戦実行は汎用フレームワーク `src/env/` に移管済み。以下のように呼ぶ:
 
 ```bash
 # 1v1 × 5 エピソード (seed 固定)
-uv run python -m pipeline.case1.evaluation.selfplay \
-  --episodes 5 --mode 1v1 --seed 0
+uv run python -m env run \
+  --agents baseline_v1,baseline_v1 --mode 1v1 -n 5 --seed 0 --parallel 4
 
 # 4P FFA × 10 エピソード
-uv run python -m pipeline.case1.evaluation.selfplay \
-  --episodes 10 --mode ffa4
+uv run python -m env run \
+  --agents baseline_v1,baseline_v1,baseline_v1,baseline_v1 \
+  --mode ffa4 -n 10 --parallel 4
+
+# 集計 / 一覧
+uv run python -m env list --mode 1v1 --limit 10
 ```
 
-結果は `data/replays/case1/<timestamp>/` に保存される (`data/` は gitignore)。
+結果は `data/matches/index.parquet/mode={1v1,ffa4}/...` (Parquet hive) と
+`data/matches/replays/{match_id}.json.gz` に保存される (`data/` は gitignore)。
 
 ## テスト
 
@@ -89,7 +98,7 @@ uv run pytest tests/pipeline/case1 -v -m "not slow"
 
 - **ノートブック挙動一致** — `tests/pipeline/case1/snapshots/obs_seed0_turn10.json` + `action_seed0_turn10.json` に固定したターン観測と action の diff が 0 件。環境本体は seed 固定でも完全再現ではないため、`obs` を固定してエージェントの決定性を担保している。再生成は `uv run python -m pipeline.case1.evaluation.snapshot_update`。
 - **DONE 到達** — `env.run([agent, agent])` が例外なく完走する。
-- **タイムアウト** — selfplay CLI が出力する `summary.csv` の `p95_turn_sec < 1.0`。
+- **タイムアウト** — `python -m env run` の Summary に表示される `turn_p95 < 1.0s`。
 
 ## ライセンス
 

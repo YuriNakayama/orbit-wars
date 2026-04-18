@@ -90,6 +90,26 @@ dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
 ```
 
+## Evaluation Framework (`src/env/`)
+
+ローカルでの対戦実行・データ蓄積・分析・再生を提供する汎用フレームワーク。
+
+```bash
+# 対戦実行 (結果は data/matches/ に保存)
+uv run python -m env run \
+  --agents baseline_v1,case0 --mode 1v1 -n 10 --parallel 4
+
+# 最新 10 件を一覧
+uv run python -m env list --mode 1v1 --limit 10
+
+# 指定 match_id のリプレイを検査
+uv run python -m env replay-inspect <match_id>
+```
+
+- **データ**: Parquet (hive partition: `mode=`) に指標、`replays/{match_id}.json.gz` に env.toJSON。
+- **分析**: `env.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
+- **可視化**: `pipeline/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
+
 ## Glossary
 
 | Term | Description |
