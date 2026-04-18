@@ -7,6 +7,7 @@ authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "python-dotenv>=1.0.0",
+    "kaggle>=1.6.17",
     "kaggle-environments>=1.17.0",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
@@ -19,7 +20,23 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src", "pipeline"]
+packages = ["src/submit", "pipeline"]
+
+[tool.uv]
+# orbit_wars 環境は pygame を使わないため、pygame/gymnax のビルドをスキップする。
+# （Python 3.14 用 wheel が未提供で SDL.h がないと source build に失敗するため）
+override-dependencies = [
+    "pygame; sys_platform == 'never'",
+    "gymnax; sys_platform == 'never'",
+    "open_spiel; sys_platform == 'never'",
+    "pettingzoo; sys_platform == 'never'",
+    "pokerkit; sys_platform == 'never'",
+    "litellm; sys_platform == 'never'",
+    "transformers; sys_platform == 'never'",
+    "shimmy; sys_platform == 'never'",
+    "jax; sys_platform == 'never'",
+    "gymnasium; sys_platform == 'never'",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -84,6 +101,7 @@ unfixable = []
 max-complexity = 5
 
 [tool.ruff.lint.per-file-ignores]
+"src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 
 [tool.ruff.lint.isort]
 case-sensitive = true
