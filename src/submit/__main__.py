@@ -12,7 +12,6 @@ from submit import (
     ValidationError,
     build_archive,
     confirm_submission,
-    count_today,
     dry_run,
     ensure_credentials,
     kaggle_submit,
@@ -57,11 +56,6 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
         False,
         "--wait",
         help="提出後に validation 結果をポーリング",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="1日5提出の制限チェックをスキップ",
     ),
     skip_validation: bool = typer.Option(
         False,
@@ -129,21 +123,7 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
         raise typer.Exit(code=4) from exc
     console.print(f"  認証方式: {method}")
 
-    if not force:
-        console.print("\n[bold]4) 本日の提出数チェック[/]")
-        try:
-            today = count_today()
-        except KaggleCLIError as exc:
-            console.print(f"[yellow]履歴取得失敗（続行しません）: {exc}[/]")
-            raise typer.Exit(code=5) from exc
-        console.print(f"  本日の提出数: {today}/5")
-        if today >= 5:
-            console.print(
-                "[red]本日の提出枠は使い切っています。--force で強制可能。[/]"
-            )
-            raise typer.Exit(code=6)
-
-    console.print("\n[bold]5) Kaggle へ提出[/]")
+    console.print("\n[bold]4) Kaggle へ提出[/]")
     try:
         stdout = kaggle_submit(archive, message)
     except KaggleCLIError as exc:
@@ -161,7 +141,7 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
 
     result: dict[str, object] = {"stdout": stdout}
 
-    console.print("\n[bold]5b) 履歴APIで提出確認[/]")
+    console.print("\n[bold]4b) 履歴APIで提出確認[/]")
     confirmed = confirm_submission(message)
     if confirmed is None:
         console.print(
@@ -174,7 +154,7 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
         result["confirmed_row"] = confirmed
 
     if wait:
-        console.print("\n[bold]6) Validation ポーリング[/]")
+        console.print("\n[bold]5) Validation ポーリング[/]")
         outcome = poll(message)
         result["poll"] = outcome
         console.print(f"  結果: {outcome.get('status')}")

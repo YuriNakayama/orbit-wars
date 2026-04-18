@@ -18,7 +18,6 @@ Usage: dev/submit <case> -m "<message>" [オプション]
   --dry-run            検証とパッケージングのみ (Kaggle へは投げない)
   --single-file        main.py 単体で提出
   --wait               提出後に validation 結果をポーリング
-  --force              1日5提出の制限チェックをスキップ
   --skip-validation    ローカルドライランをスキップ (非推奨)
 
 Examples:
