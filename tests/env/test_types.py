@@ -69,4 +69,52 @@ def test_to_row_roundtrip_ffa4() -> None:
 def test_to_row_contains_schema_version() -> None:
     record = _sample_record()
     row = record.to_row()
-    assert row["schema_version"] == 1
+    assert row["schema_version"] == 2
+
+
+def test_to_row_defaults_kaggle_fields_for_selfplay() -> None:
+    row = _sample_record().to_row()
+    assert row["source"] == "selfplay"
+    assert row["episode_id"] == -1
+    assert row["scraped_at"] == ""
+    for idx in range(4):
+        assert row[f"agent_{idx}_submission_id"] == 0
+        assert row[f"agent_{idx}_team_id"] == 0
+        assert row[f"agent_{idx}_rating_mu"] == 0.0
+        assert row[f"agent_{idx}_state"] == ""
+
+
+def test_to_row_roundtrip_with_kaggle_meta() -> None:
+    from env.types import AgentKaggleMeta, MatchRecord
+
+    metas = (
+        AgentKaggleMeta(
+            submission_id=111,
+            team_id=999,
+            rating_mu=820.5,
+            rating_sigma=40.1,
+            state="ACTIVE",
+        ),
+        AgentKaggleMeta(
+            submission_id=222,
+            team_id=888,
+            rating_mu=700.0,
+            rating_sigma=55.0,
+            state="INACTIVE",
+        ),
+    )
+    original = _sample_record(num_agents=2)
+    kaggle_record = MatchRecord(
+        **{
+            **original.__dict__,
+            "source": "kaggle",
+            "episode_id": 42,
+            "scraped_at": "2026-04-18T11:00:00+00:00",
+            "agent_kaggle_meta": metas,
+        }
+    )
+    row = kaggle_record.to_row()
+    restored = MatchRecord.from_row(row)
+    assert restored.source == "kaggle"
+    assert restored.episode_id == 42
+    assert restored.agent_kaggle_meta == metas

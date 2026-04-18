@@ -73,3 +73,23 @@ def test_load_replay_payload_rejects_non_dict(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="not a dict"):
         loader.load_replay_payload("m1", data_root=tmp_path)
+
+
+def test_recorder_works_with_alternate_data_root(tmp_path: Path) -> None:
+    kaggle_root = tmp_path / "kaggle_episodes"
+    records = [_record("kaggle_ep_1"), _record("kaggle_ep_2")]
+    written = recorder.write_records(records, kaggle_root)
+
+    assert all(str(p).startswith(str(kaggle_root)) for p in written)
+    df = loader.list_matches(kaggle_root)
+    assert set(df["match_id"].to_list()) == {"kaggle_ep_1", "kaggle_ep_2"}
+
+
+def test_load_kaggle_replay_roundtrip(tmp_path: Path) -> None:
+    payload = {"name": "orbit_wars", "configuration": {}, "steps": []}
+    raw = gzip.compress(json.dumps(payload).encode("utf-8"))
+    kaggle_root = tmp_path / "kaggle_episodes"
+    recorder.write_replay("kaggle_ep_42", raw, kaggle_root)
+
+    decoded = loader.load_replay_payload("kaggle_ep_42", data_root=kaggle_root)
+    assert decoded == payload
