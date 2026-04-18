@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.case1.baseline.core.types import Fleet, Planet
-from pipeline.case1.baseline.core.world_model import WorldModel
-from pipeline.case1.baseline.strategy import plan_moves
+from .core.types import Fleet, Planet
+from .core.world_model import WorldModel
+from .strategy import plan_moves
 
 
 def _read(obs: Any, key: str, default: Any = None) -> Any:

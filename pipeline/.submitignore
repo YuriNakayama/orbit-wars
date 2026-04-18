@@ -1,0 +1,11 @@
+# Kaggle 提出アーカイブから除外するパス (pipeline ルート共通)
+# 書式: gitignore 互換 (行頭 # はコメント、空行は無視、末尾 / でディレクトリ指定、* は fnmatch)
+# case_dir 相対パスで評価される。pipeline/case*/ 配下すべてに適用。
+
+# 開発ツール (本番提出に不要)
+eda/
+notebook/
+evaluation/
+
+# ローカル参照用の config (baseline は定数として core/config.py に持つ)
+configs/

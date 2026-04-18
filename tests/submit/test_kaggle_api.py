@@ -2,37 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
 from submit import kaggle_api
-
-
-def test_count_today_counts_utc_today(monkeypatch: pytest.MonkeyPatch) -> None:
-    today = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
-    yesterday = "2000-01-01 00:00:00"
-    rows = [
-        {"date": today, "description": "a"},
-        {"date": yesterday, "description": "b"},
-        {"date": today, "description": "c"},
-    ]
-    assert kaggle_api.count_today(rows) == 2
-
-
-def test_count_today_handles_unparseable_dates() -> None:
-    rows = [{"date": "garbage", "description": "x"}]
-    assert kaggle_api.count_today(rows) == 0
-
-
-def test_count_today_returns_five_on_cli_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def raise_err() -> list[dict[str, str]]:
-        raise kaggle_api.KaggleCLIError("fail")
-
-    monkeypatch.setattr(kaggle_api, "list_submissions", raise_err)
-    assert kaggle_api.count_today() == 5
 
 
 def test_extract_submission_id() -> None:

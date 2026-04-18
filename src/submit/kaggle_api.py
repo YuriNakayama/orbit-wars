@@ -131,23 +131,6 @@ def _parse_utc_date(value: str) -> date | None:
     return None
 
 
-def count_today(submissions: list[dict[str, str]] | None = None) -> int:
-    """UTC 当日の提出件数を数える。パース不能時は保守的に 5 を返す。"""
-
-    try:
-        rows = submissions if submissions is not None else list_submissions()
-    except KaggleCLIError:
-        return 5
-    today = datetime.now(UTC).date()
-    count = 0
-    for row in rows:
-        date_str = row.get("date") or row.get("Date") or row.get("submittedAt") or ""
-        parsed = _parse_utc_date(date_str)
-        if parsed == today:
-            count += 1
-    return count
-
-
 def _extract_submission_id(stdout: str) -> str | None:
     match = re.search(r"submission\s*id[:\s]+(\d+)", stdout, re.IGNORECASE)
     return match.group(1) if match else None
@@ -194,7 +177,6 @@ __all__ = [
     "KaggleCLIError",
     "_extract_submission_id",
     "confirm_submission",
-    "count_today",
     "list_submissions",
     "poll",
     "submit",

@@ -36,6 +36,8 @@ EXCLUDE_DIR_NAMES: frozenset[str] = frozenset(
     }
 )
 
+SUBMITIGNORE_FILENAME = ".submitignore"
+
 
 class PackagingError(RuntimeError):
     """パッケージング中に発生するエラー。"""
@@ -49,13 +51,55 @@ def _is_included(relative: Path, include_patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(relative.name, pat) for pat in include_patterns)
 
 
+def _parse_submitignore(path: Path) -> list[str]:
+    """`.submitignore` を読み、非コメント・非空行のパターンを返す。"""
+    patterns: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        patterns.append(line)
+    return patterns
+
+
+def _matches_submitignore(relative: Path, patterns: list[str]) -> bool:
+    """case_dir 相対パスが除外パターンに該当するか判定する。
+
+    - 末尾 `/`: ディレクトリ指定。配下すべてにマッチ。
+    - それ以外: fnmatch でパス全体とファイル名の両方に評価。
+    """
+    rel_posix = relative.as_posix()
+    for pat in patterns:
+        if pat.endswith("/"):
+            prefix = pat.rstrip("/")
+            if prefix in relative.parts:
+                return True
+            continue
+        if fnmatch.fnmatch(rel_posix, pat):
+            return True
+        if fnmatch.fnmatch(relative.name, pat):
+            return True
+    return False
+
+
+def _load_submitignore(case_dir: Path) -> list[str]:
+    """`pipeline/.submitignore` (case_dir の親) を読む。存在しなければ空。"""
+    ignore_path = case_dir.parent / SUBMITIGNORE_FILENAME
+    if not ignore_path.is_file():
+        return []
+    return _parse_submitignore(ignore_path)
+
+
 def _iter_case_files(case_dir: Path, include_patterns: tuple[str, ...]) -> list[Path]:
+    ignore_patterns = _load_submitignore(case_dir)
     files: list[Path] = []
     for entry in sorted(case_dir.rglob("*")):
         if entry.is_dir():
             continue
         rel = entry.relative_to(case_dir)
         if any(part in EXCLUDE_DIR_NAMES for part in rel.parts):
+            continue
+        if ignore_patterns and _matches_submitignore(rel, ignore_patterns):
             continue
         if not _is_included(rel, include_patterns):
             continue

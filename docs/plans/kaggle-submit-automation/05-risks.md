@@ -5,12 +5,12 @@
 | # | リスク | 影響 | 確率 | 緩和策 |
 |---|-------|------|------|-------|
 | 1 | Kaggle認証未設定のまま submit が走り失敗 | 中 | 中 | `auth.ensure_credentials()` を最初に必ず呼ぶ。未設定なら明確エラー |
-| 2 | 1日5提出の枠を浪費 | 高 | 中 | `kaggle_api.count_today()` を submit 前に呼ぶ。`--force` が無ければ停止 |
+| 2 | 1日5提出の枠を浪費 | 高 | 中 | 提出前に `uv run python -m submit submissions` で消費状況を確認。ERROR はクォータに含まれないため再挑戦可 |
 | 3 | tar.gz のルート階層がずれて Kaggle 側で `main.py` が見つからない | 高 | 低 | `packager` は常にルート直下に配置、pytestで検証 |
 | 4 | エージェントがローカルで例外 → 提出後 validation 失敗 | 中 | 中 | `validator.dry_run` を必須化（`--skip-validation` は用意しない） |
 | 5 | `KAGGLE_KEY` がログに漏れる | 高 | 低 | subprocess 呼び出しで env を明示せず継承、stdout のみ表示、stderr はパースのみ |
 | 6 | CI でルールが未受諾のままsubmit | 中 | 低 | 事前に `kaggle competitions list --group entered` で確認 |
-| 7 | Kaggle API 仕様変更で CLI 出力パース失敗 | 低 | 低 | `count_today()` はパース失敗時に conservative=5 扱い（安全側） |
+| 7 | Kaggle API 仕様変更で CLI 出力パース失敗 | 低 | 低 | `list_submissions()` のパース例外は呼び出し側で捕捉して UI 確認にフォールバック |
 | 8 | `data/submissions/` が肥大 | 低 | 高 | `.gitignore` で除外済（`data/` は既に ignore） |
 | 9 | Kaggle ランタイム依存ライブラリが不足 | 中 | 低 | case0 は標準ライブラリのみ。将来は kaggle docker image を参照 |
 
@@ -42,3 +42,8 @@
   `kaggle_api.submit()` は stdout に "Successfully submitted" を含むか、または stderr に
   100% アップロード完了マーカーがあれば成功扱いとする。加えて `confirm_submission()` で
   履歴 API の description 一致を確認するフェイルセーフを CLI フローに組み込んでいる。
+- **クォータ挙動 (2026-04-18 判明)**: Orbit Wars の 1 日 5 提出制限は `SubmissionStatus.ERROR`
+  (validation 失敗) を含めない。validation に通らない提出は何度でも再挑戦できるので、
+  ERROR 時は Kaggle Web UI の submission 詳細ページでエラーログを確認し、原因特定 → 即再提出
+  のフローが推奨。`src/submit/` はローカルで提出数をチェックしない方針に統一 (Kaggle 側の集計
+  タイミングと乖離しやすいため)。

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from pipeline.case1.baseline.core.config import (
+from .core.config import (
     ATTACK_COST_TURN_WEIGHT,
     COMET_MAX_CHASE_TURNS,
     FOLLOWUP_MIN_SHIPS,
@@ -32,19 +32,19 @@ from pipeline.case1.baseline.core.config import (
     THREE_SOURCE_SWARM_ENABLED,
     VERY_LATE_CAPTURE_BUFFER,
 )
-from pipeline.case1.baseline.core.types import Mission, Planet, ShotOption
-from pipeline.case1.baseline.core.world_model import (
+from .core.types import Mission, Planet, ShotOption
+from .core.world_model import (
     WorldModel,
     nearest_distance_to_set,
 )
-from pipeline.case1.baseline.missions.crash_exploit import (
+from .missions.crash_exploit import (
     build_crash_exploit_missions,
 )
-from pipeline.case1.baseline.missions.reinforcement import (
+from .missions.reinforcement import (
     build_reinforcement_missions,
 )
-from pipeline.case1.baseline.missions.snipe import build_snipe_mission
-from pipeline.case1.baseline.strategy_helpers import (
+from .missions.snipe import build_snipe_mission
+from .strategy_helpers import (
     apply_score_modifiers,
     build_modes,
     opening_filter,

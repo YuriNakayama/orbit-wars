@@ -5,7 +5,6 @@ from submit.history import record
 from submit.kaggle_api import (
     COMPETITION,
     confirm_submission,
-    count_today,
     list_submissions,
     poll,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "ValidationError",
     "build_archive",
     "confirm_submission",
-    "count_today",
     "dry_run",
     "ensure_credentials",
     "kaggle_submit",

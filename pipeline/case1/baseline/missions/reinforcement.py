@@ -7,16 +7,16 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from pipeline.case1.baseline.core.config import (
+from ..core.config import (
     PARTIAL_SOURCE_MIN_SHIPS,
     REINFORCE_ENABLED,
     REINFORCE_MAX_SOURCE_FRACTION,
     REINFORCE_MAX_TRAVEL_TURNS,
     REINFORCE_SAFETY_MARGIN,
 )
-from pipeline.case1.baseline.core.types import Mission, ShotOption
-from pipeline.case1.baseline.core.world_model import WorldModel
-from pipeline.case1.baseline.strategy_helpers import target_value
+from ..core.types import Mission, ShotOption
+from ..core.world_model import WorldModel
+from ..strategy_helpers import target_value
 
 
 def build_reinforcement_missions(
