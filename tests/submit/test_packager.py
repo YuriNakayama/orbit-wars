@@ -107,3 +107,60 @@ def test_build_archive_missing_main_raises(tmp_path: Path) -> None:
 def test_build_archive_missing_case_dir_raises(tmp_path: Path) -> None:
     with pytest.raises(PackagingError):
         build_archive(tmp_path / "nope", tmp_path / "out")
+
+
+def test_build_archive_honors_submitignore_directory(tmp_path: Path) -> None:
+    """pipeline/.submitignore の `dir/` 指定でディレクトリを除外する。"""
+
+    pipeline_root = tmp_path / "pipeline"
+    case_dir = pipeline_root / "caseI"
+    _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
+    _write(case_dir / "baseline" / "agent.py", "x = 1\n")
+    _write(case_dir / "eda" / "viewer.py", "y = 2\n")
+    _write(case_dir / "notebook" / "nb.py", "z = 3\n")
+    _write(pipeline_root / ".submitignore", "eda/\nnotebook/\n")
+
+    archive = build_archive(case_dir, tmp_path / "out")
+    with tarfile.open(archive, "r:gz") as tar:
+        names = sorted(tar.getnames())
+    assert "main.py" in names
+    assert "baseline/agent.py" in names
+    assert "eda/viewer.py" not in names
+    assert "notebook/nb.py" not in names
+
+
+def test_build_archive_submitignore_ignores_comments_and_blank(
+    tmp_path: Path,
+) -> None:
+    pipeline_root = tmp_path / "pipeline"
+    case_dir = pipeline_root / "caseC"
+    _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
+    _write(case_dir / "keep.py", "ok = True\n")
+    _write(case_dir / "drop_me" / "x.py", "z = 1\n")
+    _write(
+        pipeline_root / ".submitignore",
+        "# comment\n\n   # indented comment\ndrop_me/\n",
+    )
+
+    archive = build_archive(case_dir, tmp_path / "out")
+    with tarfile.open(archive, "r:gz") as tar:
+        names = sorted(tar.getnames())
+    assert "main.py" in names
+    assert "keep.py" in names
+    assert not any(n.startswith("drop_me/") for n in names)
+
+
+def test_build_archive_submitignore_glob_pattern(tmp_path: Path) -> None:
+    """fnmatch パターンでファイル単位の除外ができる。"""
+
+    pipeline_root = tmp_path / "pipeline"
+    case_dir = pipeline_root / "caseG"
+    _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
+    _write(case_dir / "local_debug.py", "debug = True\n")
+    _write(pipeline_root / ".submitignore", "local_*.py\n")
+
+    archive = build_archive(case_dir, tmp_path / "out")
+    with tarfile.open(archive, "r:gz") as tar:
+        names = sorted(tar.getnames())
+    assert "main.py" in names
+    assert "local_debug.py" not in names
