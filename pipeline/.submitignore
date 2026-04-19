@@ -1,6 +1,6 @@
-# Kaggle 提出アーカイブから除外するパス (pipeline/rulebase/ 配下共通)
+# Kaggle 提出アーカイブから除外するパス (pipeline/<category>/case*/ 配下すべてに適用)
 # 書式: gitignore 互換 (行頭 # はコメント、空行は無視、末尾 / でディレクトリ指定、* は fnmatch)
-# case_dir 相対パスで評価される。pipeline/rulebase/case*/ 配下すべてに適用。
+# case_dir 相対パスで評価される。
 
 # 開発ツール (本番提出に不要)
 eda/

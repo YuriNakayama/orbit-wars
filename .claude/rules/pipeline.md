@@ -102,13 +102,13 @@ __all__ = ["agent", "build_world"]
 5. `dev/submit <category>/case<N> --dry-run -m "..."` を実行し、validator が `main.py` をロードして `env.run([agent, "random"])` が通ることを確認。
 6. `pytest tests/pipeline/<category>/case<N>` が通ることを確認してから本番提出。
 
-## 提出アーカイブの除外 (`pipeline/<category>/.submitignore`)
+## 提出アーカイブの除外 (`pipeline/.submitignore`)
 
-packager は `pipeline/<category>/.submitignore` (case_dir の親ディレクトリ) を読んで tar.gz から除外するパスを決定する。**同じカテゴリ内の全 case 共通** で効く。
+packager は `pipeline/.submitignore` を読んで tar.gz から除外するパスを決定する。**全 category / 全 case 共通** で効く (pipeline ルート直下に 1 ファイルのみ)。
 
 ### 配置と書式
 
-- 配置: `pipeline/<category>/.submitignore` (category ディレクトリ直下。`rulebase/`, `imitation/` それぞれに 1 ファイルずつ)
+- 配置: `pipeline/.submitignore` (pipeline ルート直下、1 ファイルのみ)
 - 書式: gitignore 互換サブセット
   - 行頭 `#` はコメント、空行は無視
   - 末尾 `/` はディレクトリ指定 (配下全ファイルを除外)
