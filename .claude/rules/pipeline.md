@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 **代わりに `Path.cwd()` を使う**。Kaggle は tar.gz を展開したディレクトリが cwd になる前提で実装されているため、`Path.cwd()` なら確実に展開先を指す。
 
-この挙動差により **ローカル validator (`src/submit/validator.py`) は cwd を移動しないため `Path.cwd()` 方式の main.py は dry-run で `ModuleNotFoundError` になる**。ローカルで `--dry-run` を通したい場合は `--skip-validation` を併用するか、自前で `cd pipeline/<category>/case<N>` してから exec する。ローカルの他経路 (`src/env/agents.py` 経由の `pipeline.<category>.case<N>.baseline.agent:agent` import) は main.py を経由しないので影響を受けない。
+この挙動差により **ローカル validator (`src/submit/validator.py`) は cwd を移動しないため `Path.cwd()` 方式の main.py は dry-run で `ModuleNotFoundError` になる**。ローカルで `--dry-run` を通したい場合は `--skip-validation` を併用するか、自前で `cd pipeline/<category>/case<N>` してから exec する。ローカルの他経路 (`src/dataset/selfplay/agents.py` 経由の `pipeline.<category>.case<N>.baseline.agent:agent` import) は main.py を経由しないので影響を受けない。
 
 ### 2) サブパッケージ内部は相対 import に統一する
 
@@ -87,7 +87,7 @@ __all__ = ["agent", "build_world"]
 
 以下はローカルで使い続けて良い (相対 import 化後も解決可能):
 
-- `src/env/agents.py` — `"baseline_v1": "pipeline.rulebase.case1.baseline.agent:agent"`
+- `src/dataset/selfplay/agents.py` — `"baseline_v1": "pipeline.rulebase.case1.baseline.agent:agent"`
 - `pipeline/<category>/case<N>/evaluation/*.py` — `from pipeline.<category>.case<N>.baseline import agent as baseline_agent`
 - `tests/pipeline/<category>/case<N>/*.py` — `from pipeline.<category>.case<N>.baseline.xxx import ...`
 
@@ -98,17 +98,17 @@ __all__ = ["agent", "build_world"]
 1. 既存カテゴリ (`rulebase/`, `imitation/`) のいずれか、または新カテゴリ配下に `pipeline/<category>/case<N>/baseline/` (または戦略名ディレクトリ) を作成し、内部 import をすべて相対 import で書く。
 2. `pipeline/<category>/case<N>/main.py` を上記テンプレで作成。
 3. `pipeline/<category>/case<N>/baseline/__init__.py` も相対 import。
-4. `src/env/agents.py` の `AGENT_REGISTRY` に `"<name>": "pipeline.<category>.case<N>.baseline.agent:agent"` を追加。
+4. `src/dataset/selfplay/agents.py` の `AGENT_REGISTRY` に `"<name>": "pipeline.<category>.case<N>.baseline.agent:agent"` を追加。
 5. `dev/submit <category>/case<N> --dry-run -m "..."` を実行し、validator が `main.py` をロードして `env.run([agent, "random"])` が通ることを確認。
 6. `pytest tests/pipeline/<category>/case<N>` が通ることを確認してから本番提出。
 
-## 提出アーカイブの除外 (`pipeline/<category>/.submitignore`)
+## 提出アーカイブの除外 (`pipeline/.submitignore`)
 
-packager は `pipeline/<category>/.submitignore` (case_dir の親ディレクトリ) を読んで tar.gz から除外するパスを決定する。**同じカテゴリ内の全 case 共通** で効く。
+packager は `pipeline/.submitignore` を読んで tar.gz から除外するパスを決定する。**全 category / 全 case 共通** で効く (pipeline ルート直下に 1 ファイルのみ)。
 
 ### 配置と書式
 
-- 配置: `pipeline/<category>/.submitignore` (category ディレクトリ直下。`rulebase/`, `imitation/` それぞれに 1 ファイルずつ)
+- 配置: `pipeline/.submitignore` (pipeline ルート直下、1 ファイルのみ)
 - 書式: gitignore 互換サブセット
   - 行頭 `#` はコメント、空行は無視
   - 末尾 `/` はディレクトリ指定 (配下全ファイルを除外)

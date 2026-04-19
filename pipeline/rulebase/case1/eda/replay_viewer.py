@@ -7,7 +7,7 @@ VS Code / Jupyter で "Run Cell" ボタンから各 `# %%` セルを実行する
 # %%
 from pathlib import Path
 
-from env import list_matches, load_replay
+from dataset import list_matches, load_replay
 
 DATA_ROOT = Path("data")
 

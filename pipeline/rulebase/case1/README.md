@@ -62,24 +62,24 @@ kaggle kernels pull sigmaborov/lb-897-orbit-wars-2026-reinforce \
 
 ## 自己対局 (evaluation フレームワーク)
 
-対戦実行は汎用フレームワーク `src/env/` に移管済み。以下のように呼ぶ:
+対戦実行は汎用フレームワーク `src/dataset/` に移管済み。以下のように呼ぶ:
 
 ```bash
 # 1v1 × 5 エピソード (seed 固定)
-uv run python -m env run \
+uv run python -m dataset run \
   --agents baseline_v1,baseline_v1 --mode 1v1 -n 5 --seed 0 --parallel 4
 
 # 4P FFA × 10 エピソード
-uv run python -m env run \
+uv run python -m dataset run \
   --agents baseline_v1,baseline_v1,baseline_v1,baseline_v1 \
   --mode ffa4 -n 10 --parallel 4
 
 # 集計 / 一覧
-uv run python -m env list --mode 1v1 --limit 10
+uv run python -m dataset list --mode 1v1 --limit 10
 ```
 
-結果は `data/matches/index.parquet/mode={1v1,ffa4}/...` (Parquet hive) と
-`data/matches/replays/{match_id}.json.gz` に保存される (`data/` は gitignore)。
+結果は `data/lake/selfplay/matches/index.parquet/mode={1v1,ffa4}/...` (Parquet hive) と
+`data/lake/selfplay/matches/replays/{match_id}.json.gz` に保存される (`data/` は gitignore)。
 
 ## テスト
 
@@ -98,7 +98,7 @@ uv run pytest tests/pipeline/rulebase/case1 -v -m "not slow"
 
 - **ノートブック挙動一致** — `tests/pipeline/rulebase/case1/snapshots/obs_seed0_turn10.json` + `action_seed0_turn10.json` に固定したターン観測と action の diff が 0 件。環境本体は seed 固定でも完全再現ではないため、`obs` を固定してエージェントの決定性を担保している。再生成は `uv run python -m pipeline.rulebase.case1.evaluation.snapshot_update`。
 - **DONE 到達** — `env.run([agent, agent])` が例外なく完走する。
-- **タイムアウト** — `python -m env run` の Summary に表示される `turn_p95 < 1.0s`。
+- **タイムアウト** — `python -m dataset run` の Summary に表示される `turn_p95 < 1.0s`。
 
 ## ライセンス
 

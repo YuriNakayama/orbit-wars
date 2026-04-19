@@ -5,7 +5,7 @@ set -euo pipefail
 # data/ を main の data/ への symlink に置き換える。
 #
 # 想定シナリオ:
-#   - worktree で `uv run python -m env.kaggle scrape ...` を実行
+#   - worktree で `uv run python -m dataset kaggle scrape ...` を実行
 #   - data/ が実ディレクトリとしてローカルに積み上がる
 #   - このスクリプトで main に merge → symlink 化
 #

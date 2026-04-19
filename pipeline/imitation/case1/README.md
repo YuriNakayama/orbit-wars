@@ -1,6 +1,6 @@
 # Imitation Case1 — Imitation Learning Baseline
 
-過去の Kaggle 上位リプレイ (`data/kaggle_episodes/matches/`) からの **行動クローニング (BC)** で
+過去の Kaggle 上位リプレイ (`data/lake/kaggle_episodes/matches/`) からの **行動クローニング (BC)** で
 動く PyTorch エージェント。`pipeline/rulebase/case1` (rule-based) との 1v1 勝率 ≥ 50% を目標とする。
 
 設計詳細は [`docs/plans/imitation-learning-baseline/`](../../../docs/plans/imitation-learning-baseline/) を参照。
