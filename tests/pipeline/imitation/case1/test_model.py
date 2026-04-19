@@ -17,6 +17,7 @@ from pipeline.imitation.case1.policy.model import (
     build_model,
     count_parameters,
 )
+from pipeline.imitation.case1.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case1.policy.types import BatchFeatures
 
 
@@ -42,7 +43,7 @@ def test_forward_shapes() -> None:
     model = build_model()
     out = model(_make_batch())
     assert out.from_logits.shape == (2, MAX_PLANETS)
-    assert out.target_logits.shape == (2, MAX_PLANETS, MAX_PLANETS + 1)
+    assert out.target_logits.shape == (2, MAX_PLANETS, NUM_TEMPLATES)
     assert out.ships_logits.shape == (2, MAX_PLANETS, ModelConfig().ships_buckets)
 
 
@@ -56,16 +57,13 @@ def test_from_mask_applied() -> None:
     assert torch.all(torch.isfinite(out.from_logits[:, 0]))
 
 
-def test_target_mask_applied() -> None:
+def test_target_logits_finite() -> None:
     model = build_model()
     batch = _make_batch()
     out = model(batch)
-    # padding slots (>=5) must be -inf (reinforcing owned planets is legal)
-    assert torch.all(torch.isinf(out.target_logits[:, :, 5:MAX_PLANETS]))
-    # no-op slot (last) is finite
-    assert torch.all(torch.isfinite(out.target_logits[:, :, -1]))
-    # valid planet slots (0..4) are finite
-    assert torch.all(torch.isfinite(out.target_logits[:, :, :5]))
+    # template head emits (B, P, NUM_TEMPLATES) — all logits should be finite,
+    # since templates are not tied to planet slot indices.
+    assert torch.all(torch.isfinite(out.target_logits))
 
 
 def test_param_count_under_100k() -> None:

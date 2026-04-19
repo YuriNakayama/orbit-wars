@@ -1,13 +1,8 @@
 """Replay → parquet preprocess for imitation/case1 IL baseline.
 
-Pipeline:
-  1) load index.parquet, filter mode ∈ cfg.modes, drop draws.
-  2) per (match_id, player) pick winner side only; require both seats' rating_mu
-     to clear the rating_quantile cutoff (top 25% by default).
-  3) split episodes 90/10 deterministically by hash(match_id).
-  4) walk steps[*][player_slot]; for each (obs, action) emit one row per action,
-     plus one no-op row when the action list is empty.
-  5) write data/lake/imitation_case1/{train,val}.parquet via polars.
+One row per (obs, player) frame. Multi-hot from-set + per-source target/ships
+labels (slot -1 for "not selected" sources). Both winner and loser sides are
+included.
 """
 
 from __future__ import annotations
@@ -32,10 +27,17 @@ from pipeline.imitation.case1.policy.featurizer import (
     PLANET_FEAT_DIM,
     featurize,
 )
+from pipeline.imitation.case1.policy.geometry import Planet, aim_with_prediction
+from pipeline.imitation.case1.policy.templates import (
+    T_NO_OP,
+    classify_actual_target,
+)
 
 logger = logging.getLogger(__name__)
 
-NO_OP_LABEL = MAX_PLANETS  # virtual slot for "do nothing"
+UNUSED_LABEL = -1
+SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100%
+ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 
 
 @dataclass(frozen=True)
@@ -49,53 +51,69 @@ class PreprocessReport:
     out_val: Path
 
 
-def _fleet_target_planet_id(
-    src_id: int,
-    src_x: float,
-    src_y: float,
+def _build_planet(row: list[Any]) -> Planet:
+    return Planet(
+        id=int(row[0]),
+        owner=int(row[1]),
+        x=float(row[2]),
+        y=float(row[3]),
+        radius=float(row[4]),
+        ships=int(row[5]),
+        production=int(row[6]),
+    )
+
+
+def _angle_diff(a: float, b: float) -> float:
+    d = (a - b) % (2 * math.pi)
+    if d > math.pi:
+        d -= 2 * math.pi
+    return abs(d)
+
+
+def _resolve_action_target(
+    src: Planet,
     angle: float,
     ships: int,
-    planets: list[list[Any]],
+    candidates: list[Planet],
+    initial_by_id: dict[int, Planet],
+    ang_vel: float,
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
 ) -> int | None:
-    """Mirror world_model.fleet_target_planet but return planet id only.
+    """Reverse-resolve fired (angle, ships) into the most likely target planet id.
 
-    Excludes the source planet from candidates (fleets spawn just outside its
-    radius in the real sim, so self-hit is a reconstruction artifact).
+    Walks every non-source planet, calls aim_with_prediction (the same routine the
+    pro player uses) and picks the candidate whose predicted angle is closest to
+    the actually-fired angle (within ANGLE_TOLERANCE).
     """
-    speed = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, ships)))
-    if speed <= 0:
-        return None
-    dir_x = math.cos(angle)
-    dir_y = math.sin(angle)
     best_id: int | None = None
-    best_t = 1e9
-    for row in planets:
-        pid, _owner, px, py, radius, _s, _p = row
-        if int(pid) == src_id:
+    best_diff = ANGLE_TOLERANCE
+    for cand in candidates:
+        if cand.id == src.id:
             continue
-        dx = float(px) - src_x
-        dy = float(py) - src_y
-        proj = dx * dir_x + dy * dir_y
-        if proj < 0:
+        aim = aim_with_prediction(
+            src, cand, ships, initial_by_id, ang_vel, comets, comet_ids
+        )
+        if aim is None:
             continue
-        perp_sq = dx * dx + dy * dy - proj * proj
-        radius_sq = float(radius) * float(radius)
-        if perp_sq >= radius_sq:
-            continue
-        hit_d = max(0.0, proj - math.sqrt(max(0.0, radius_sq - perp_sq)))
-        t = hit_d / speed
-        if t < best_t:
-            best_t = t
-            best_id = int(pid)
+        diff = _angle_diff(aim[0], angle)
+        if diff < best_diff:
+            best_diff = diff
+            best_id = cand.id
     return best_id
 
 
-def _ships_bucket(ships: int, src_ships: int, num_buckets: int) -> int:
+def _ships_bucket(ships: int, src_ships: int) -> int:
     if src_ships <= 0:
         return 0
     ratio = max(0.0, min(1.0, ships / max(1, src_ships)))
-    bucket = int(ratio * num_buckets)
-    return min(bucket, num_buckets - 1)
+    # Map (0, 1] to bucket [0, SHIPS_BUCKETS-1]:
+    #  ratio in (0,    0.375] → 0 (~25%)
+    #  ratio in (0.375,0.625] → 1 (~50%)
+    #  ratio in (0.625,0.875] → 2 (~75%)
+    #  ratio in (0.875,1.0  ] → 3 (~100%)
+    bucket = int(round(ratio * (SHIPS_BUCKETS - 1) - 0.001))
+    return max(0, min(SHIPS_BUCKETS - 1, bucket))
 
 
 def _split_episode(match_id: str, val_split: float) -> str:
@@ -104,22 +122,18 @@ def _split_episode(match_id: str, val_split: float) -> str:
     return "val" if val < val_split else "train"
 
 
-def _winner_slots(row: dict[str, Any]) -> list[int]:
+def _player_slots(row: dict[str, Any], num_slots: int) -> list[int]:
     if row.get("draw"):
         return []
-    winner = int(row.get("winner", -1))
-    if winner < 0:
-        return []
-    return [winner]
+    return list(range(num_slots))
 
 
-def _build_frames(
+def _build_frame(
     obs: dict[str, Any],
     action_list: list[list[Any]],
-    src_planets: list[list[Any]],
-    ships_buckets: int,
-) -> list[dict[str, Any]]:
-    """Build one parquet row per action (or one no-op row if empty)."""
+    raw_planets: list[list[Any]],
+) -> dict[str, Any] | None:
+    """Build one parquet row representing the frame's full action set."""
     batch, snap = featurize(obs)
     planet_feats = batch.planet_feats[0].numpy().astype(np.float32)
     global_feats = batch.global_feats[0].numpy().astype(np.float32)
@@ -128,65 +142,66 @@ def _build_frames(
     target_mask = batch.target_mask[0].numpy().astype(np.bool_)
 
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
-    src_ships_by_id = {int(p[0]): int(p[5]) for p in src_planets}
+    planets = [_build_planet(row) for row in raw_planets]
+    by_id = {p.id: p for p in planets}
+    initial_planets = [_build_planet(row) for row in (obs.get("initial_planets") or [])]
+    initial_by_id = {p.id: p for p in initial_planets}
+    ang_vel = float(obs.get("angular_velocity", 0.0) or 0.0)
+    comets = list(obs.get("comets") or [])
+    comet_ids = set(obs.get("comet_planet_ids") or [])
 
-    base = {
+    from_multihot = np.zeros(MAX_PLANETS, dtype=np.bool_)
+    target_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+
+    player = int(obs.get("player", 0) or 0)
+    for act in action_list:
+        from_pid = int(act[0])
+        angle = float(act[1])
+        ships = int(act[2])
+        slot = pid_to_slot.get(from_pid)
+        if slot is None or not my_planet_mask[slot]:
+            continue
+        src = by_id.get(from_pid)
+        if src is None:
+            continue
+        target_pid = _resolve_action_target(
+            src, angle, ships, planets, initial_by_id, ang_vel, comets, comet_ids
+        )
+        if target_pid is None or target_pid not in pid_to_slot:
+            template_id = T_NO_OP
+        else:
+            src_row = raw_planets[slot]
+            tgt_row = raw_planets[pid_to_slot[target_pid]]
+            template_id = classify_actual_target(src_row, tgt_row, raw_planets, player)
+        from_multihot[slot] = True
+        target_per_src[slot] = int(template_id)
+        ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
+
+    is_noop = not bool(from_multihot.any())
+
+    return {
         "planet_feats": planet_feats.reshape(-1).tolist(),
         "global_feats": global_feats.tolist(),
         "planet_mask": planet_mask.tolist(),
         "my_planet_mask": my_planet_mask.tolist(),
         "target_mask": target_mask.tolist(),
+        "from_multihot": from_multihot.tolist(),
+        "target_per_src": target_per_src.tolist(),
+        "ships_per_src": ships_per_src.tolist(),
+        "is_noop": bool(is_noop),
     }
-
-    if not action_list:
-        row = dict(base)
-        row.update(
-            from_label=NO_OP_LABEL,
-            target_label=NO_OP_LABEL,
-            ships_label=0,
-            is_noop=True,
-        )
-        return [row]
-
-    rows: list[dict[str, Any]] = []
-    for act in action_list:
-        from_pid, angle, ships = int(act[0]), float(act[1]), int(act[2])
-        from_slot = pid_to_slot.get(from_pid)
-        if from_slot is None:
-            continue
-        target_pid = _fleet_target_planet_id(
-            from_pid,
-            float(src_planets[from_slot][2]),
-            float(src_planets[from_slot][3]),
-            angle,
-            ships,
-            src_planets,
-        )
-        target_slot = pid_to_slot.get(target_pid) if target_pid is not None else None
-        if target_slot is None:
-            target_slot = NO_OP_LABEL
-        bucket = _ships_bucket(ships, src_ships_by_id.get(from_pid, 0), ships_buckets)
-        row = dict(base)
-        row.update(
-            from_label=int(from_slot),
-            target_label=int(target_slot),
-            ships_label=int(bucket),
-            is_noop=False,
-        )
-        rows.append(row)
-    return rows
 
 
 def _iter_episode_frames(
     replay_path: Path,
     player_slots: list[int],
-    ships_buckets: int,
 ) -> list[dict[str, Any]]:
     with gzip.open(replay_path, "rt") as f:
         data = json.load(f)
     steps = data.get("steps", [])
     out: list[dict[str, Any]] = []
-    for step in steps:
+    for step_idx, step in enumerate(steps):
         for slot in player_slots:
             if slot >= len(step):
                 continue
@@ -198,8 +213,14 @@ def _iter_episode_frames(
             planets = obs.get("planets") or []
             if not planets:
                 continue
-            frames = _build_frames(obs, action_list, planets, ships_buckets)
-            out.extend(frames)
+            # Kaggle replay の loser 側 obs は `step` が None なので注入する
+            if obs.get("step") is None:
+                obs = {**obs, "step": step_idx}
+            if obs.get("player") is None:
+                obs = {**obs, "player": slot}
+            frame = _build_frame(obs, action_list, planets)
+            if frame is not None:
+                out.append(frame)
     return out
 
 
@@ -218,11 +239,10 @@ def _filter_index(
         return df, 0.0
     cutoff = float(rating.quantile(rating_quantile).item())
 
-    # require winner side rating to clear cutoff. We only know the winner slot,
-    # so build per-row check via list of (winner_col -> rating_col) lookup.
+    # require AT LEAST ONE seat to clear cutoff (loser side included).
     cond = pl.lit(False)
-    for slot, col in enumerate(rating_cols):
-        cond = cond | ((pl.col("winner") == slot) & (pl.col(col) >= cutoff))
+    for col in rating_cols:
+        cond = cond | (pl.col(col) >= cutoff)
     df = df.filter(cond)
     return df, cutoff
 
@@ -230,7 +250,6 @@ def _filter_index(
 def _write_parquet(rows: list[dict[str, Any]], path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        # write empty schema-compatible file
         empty = pl.DataFrame(schema=_empty_schema())
         empty.write_parquet(path)
         return 0
@@ -246,11 +265,18 @@ def _empty_schema() -> dict[str, pl.DataType]:
         "planet_mask": pl.List(pl.Boolean),
         "my_planet_mask": pl.List(pl.Boolean),
         "target_mask": pl.List(pl.Boolean),
-        "from_label": pl.Int32(),
-        "target_label": pl.Int32(),
-        "ships_label": pl.Int32(),
+        "from_multihot": pl.List(pl.Boolean),
+        "target_per_src": pl.List(pl.Int32),
+        "ships_per_src": pl.List(pl.Int32),
         "is_noop": pl.Boolean(),
     }
+
+
+def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
+    mode = str(row.get("mode", "1v1"))
+    if mode == "ffa4":
+        return 4
+    return 2
 
 
 def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
@@ -258,12 +284,10 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     modes = list(data_cfg.get("modes", ["1v1"]))
     rating_quantile = float(data_cfg.get("rating_quantile", 0.75))
     val_split = float(data_cfg.get("val_split", 0.10))
-    ships_buckets = int(cfg.get("model", {}).get("ships_buckets", 5))
     max_episodes = data_cfg.get("max_episodes")
     out_train = Path(data_cfg["out_train"])
     out_val = Path(data_cfg["out_val"])
     index_path = Path(data_cfg["kaggle_index_root"])
-    # replay_path stored in index is relative to index.parquet's parent dir
     base_dir = index_path.parent
 
     index = pl.read_parquet(index_path)
@@ -280,14 +304,14 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 
     kept = 0
     for rec in rows:
-        slots = _winner_slots(rec)
+        slots = _player_slots(rec, _num_player_slots(rec, modes))
         if not slots:
             continue
         rp = rec.get("replay_path") or ""
         replay_path = (base_dir / rp).resolve() if rp else None
         if replay_path is None or not replay_path.exists():
             continue
-        frames = _iter_episode_frames(replay_path, slots, ships_buckets)
+        frames = _iter_episode_frames(replay_path, slots)
         if not frames:
             continue
         bucket = _split_episode(str(rec["match_id"]), val_split)

@@ -24,9 +24,11 @@ class Sample:
     planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     my_planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     target_mask: torch.Tensor  # (MAX_PLANETS,) bool
-    from_label: int
-    target_label: int
-    ships_label: int
+    from_multihot: torch.Tensor  # (MAX_PLANETS,) bool — True for fired-from sources
+    target_per_src: (
+        torch.Tensor
+    )  # (MAX_PLANETS,) int64 — target slot or NO_OP, -1 if unused
+    ships_per_src: torch.Tensor  # (MAX_PLANETS,) int64 — bucket index, -1 if unused
     is_noop: bool
 
 
@@ -37,18 +39,14 @@ class BatchedSample:
     planet_mask: torch.Tensor  # (B, MAX_PLANETS)
     my_planet_mask: torch.Tensor  # (B, MAX_PLANETS)
     target_mask: torch.Tensor  # (B, MAX_PLANETS)
-    from_label: torch.Tensor  # (B,)
-    target_label: torch.Tensor  # (B,)
-    ships_label: torch.Tensor  # (B,)
+    from_multihot: torch.Tensor  # (B, MAX_PLANETS) bool
+    target_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
+    ships_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
     is_noop: torch.Tensor  # (B,) bool
 
 
 class CaseThreeDataset(Dataset[Sample]):
-    """In-memory parquet-backed Dataset.
-
-    Loads the entire parquet via polars then materializes per-row tensors
-    on demand. Memory: ~100k rows × ~1.6KB ≈ 160MB which fits comfortably.
-    """
+    """In-memory parquet-backed Dataset (rows ≈ 1.6 KB each)."""
 
     def __init__(self, parquet_path: Path | str) -> None:
         self._df = pl.read_parquet(str(parquet_path))
@@ -67,9 +65,15 @@ class CaseThreeDataset(Dataset[Sample]):
         self._target_mask = np.array(
             self._df["target_mask"].to_list(), dtype=np.bool_
         ).reshape(-1, MAX_PLANETS)
-        self._from_label = self._df["from_label"].to_numpy().astype(np.int64)
-        self._target_label = self._df["target_label"].to_numpy().astype(np.int64)
-        self._ships_label = self._df["ships_label"].to_numpy().astype(np.int64)
+        self._from_multihot = np.array(
+            self._df["from_multihot"].to_list(), dtype=np.bool_
+        ).reshape(-1, MAX_PLANETS)
+        self._target_per_src = np.array(
+            self._df["target_per_src"].to_list(), dtype=np.int64
+        ).reshape(-1, MAX_PLANETS)
+        self._ships_per_src = np.array(
+            self._df["ships_per_src"].to_list(), dtype=np.int64
+        ).reshape(-1, MAX_PLANETS)
         self._is_noop = self._df["is_noop"].to_numpy().astype(np.bool_)
 
     def __len__(self) -> int:
@@ -82,9 +86,9 @@ class CaseThreeDataset(Dataset[Sample]):
             planet_mask=torch.from_numpy(self._planet_mask[idx]),
             my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
             target_mask=torch.from_numpy(self._target_mask[idx]),
-            from_label=int(self._from_label[idx]),
-            target_label=int(self._target_label[idx]),
-            ships_label=int(self._ships_label[idx]),
+            from_multihot=torch.from_numpy(self._from_multihot[idx]),
+            target_per_src=torch.from_numpy(self._target_per_src[idx]),
+            ships_per_src=torch.from_numpy(self._ships_per_src[idx]),
             is_noop=bool(self._is_noop[idx]),
         )
 
@@ -96,8 +100,8 @@ def collate(samples: list[Sample]) -> BatchedSample:
         planet_mask=torch.stack([s.planet_mask for s in samples]),
         my_planet_mask=torch.stack([s.my_planet_mask for s in samples]),
         target_mask=torch.stack([s.target_mask for s in samples]),
-        from_label=torch.tensor([s.from_label for s in samples], dtype=torch.long),
-        target_label=torch.tensor([s.target_label for s in samples], dtype=torch.long),
-        ships_label=torch.tensor([s.ships_label for s in samples], dtype=torch.long),
+        from_multihot=torch.stack([s.from_multihot for s in samples]),
+        target_per_src=torch.stack([s.target_per_src for s in samples]),
+        ships_per_src=torch.stack([s.ships_per_src for s in samples]),
         is_noop=torch.tensor([s.is_noop for s in samples], dtype=torch.bool),
     )

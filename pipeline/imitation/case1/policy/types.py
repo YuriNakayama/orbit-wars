@@ -19,7 +19,9 @@ class BatchFeatures:
 @dataclass(frozen=True)
 class PolicyOutput:
     from_logits: torch.Tensor  # (B, MAX_PLANETS) — sigmoid → from_prob
-    target_logits: torch.Tensor  # (B, MAX_PLANETS, MAX_PLANETS + 1) — last slot = no-op
+    target_logits: (
+        torch.Tensor
+    )  # (B, MAX_PLANETS, NUM_TEMPLATES) — argmax = template id
     ships_logits: torch.Tensor  # (B, MAX_PLANETS, SHIPS_BUCKETS)
 
 

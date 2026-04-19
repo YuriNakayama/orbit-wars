@@ -87,9 +87,9 @@ def _run_epoch(
             output = model(features)
             report = compute_loss(
                 output,
-                from_label=batch.from_label,
-                target_label=batch.target_label,
-                ships_label=batch.ships_label,
+                from_multihot=batch.from_multihot,
+                target_per_src=batch.target_per_src,
+                ships_per_src=batch.ships_per_src,
                 my_planet_mask=batch.my_planet_mask,
                 weights=loss_weights,
             )
@@ -143,7 +143,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         planet_in_dim=int(model_cfg.get("planet_in_dim", 11)),
         global_in_dim=int(model_cfg.get("global_in_dim", 6)),
         hidden=int(model_cfg.get("hidden", 64)),
-        ships_buckets=int(model_cfg.get("ships_buckets", 5)),
+        ships_buckets=int(model_cfg.get("ships_buckets", 4)),
     )
     model = DeepSetsPolicy(model_config)
 
@@ -158,6 +158,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         from_w=float(lw_cfg.get("from", 1.0)),
         target_w=float(lw_cfg.get("target", 1.0)),
         ships_w=float(lw_cfg.get("ships", 0.5)),
+        from_pos_weight=float(lw_cfg.get("from_pos_weight", 8.5)),
     )
 
     weights_out = Path(train_cfg["weights_out"])
