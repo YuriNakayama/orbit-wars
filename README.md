@@ -65,8 +65,13 @@ src/
     kaggle/             Kaggle EpisodeService scraper
   submit/               Kaggle 提出の archive / validator / uploader
 pipeline/
-  case1/                戦略別の学習・評価パイプライン (ルールベース)
-  case3/                Imitation Learning baseline (PyTorch)
+  rulebase/             ルールベース戦略パイプライン
+    case0/              単純スナイパー (参考実装)
+    case1/              baseline_v1
+      eda/              観測データの探索的分析
+    case2/              baseline_v2
+  imitation/            模倣学習パイプライン
+    case1/              DeepSets BC
 tests/                  Pytest unit tests
 data/                   3 層構造 (gitignore)
   lake/                 生データ層
@@ -74,7 +79,7 @@ data/                   3 層構造 (gitignore)
     kaggle_episodes/matches/  Kaggle 上位リプレイ・index
   processed/            クレンジング層
   mart/                 集計済み層 (学習向け parquet)
-    case3/              case3 IL baseline 用 train/val.parquet
+    imitation/case1/    imitation/case1 (DeepSets BC) 用 train/val.parquet
   submissions/          Kaggle 提出アーカイブ
 dev/                    Development scripts
   setup                 Install dependencies (uv sync)
@@ -119,7 +124,7 @@ uv run python -m dataset kaggle scrape --top 20 --modes 1v1,ffa4
 
 - **データ**: Parquet (hive partition: `mode=`) に指標、`replays/{match_id}.json.gz` に env.toJSON。
 - **分析**: `dataset.storage.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
-- **可視化**: `pipeline/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
+- **可視化**: `pipeline/rulebase/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
 
 ## Glossary
 

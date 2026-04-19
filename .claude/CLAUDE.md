@@ -32,8 +32,13 @@ src/
   dataset/              対戦ログ管理 (schema / storage / selfplay / kaggle)
   submit/               Kaggle 提出 (archive / validator / uploader)
 pipeline/
-  case1/                ルールベース baseline
-  case3/                Imitation Learning baseline (PyTorch)
+  rulebase/             ルールベース戦略パイプライン
+    case0/              単純スナイパー (参考実装)
+    case1/              baseline_v1
+      eda/              観測データの探索的分析
+    case2/              baseline_v2
+  imitation/            模倣学習パイプライン
+    case1/              DeepSets BC
 tests/                  Pytest unit tests
 data/                   3 層構造 (lake / processed / mart) + submissions (gitignore)
 dev/                    Development scripts
