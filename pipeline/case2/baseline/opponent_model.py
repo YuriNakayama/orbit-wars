@@ -16,7 +16,10 @@ from .core.config import (
     OM_MAX_HISTORY_ENTRIES,
     OM_MIN_LAUNCH_SHIPS,
     OM_MIN_LAUNCH_STOCK,
+    OM_PREDICTION_WEIGHT,
+    OM_PREDICT_APPLY_AFTER_STEP,
     OM_PREDICT_HORIZON,
+    OM_PREDICT_MIN_LAUNCHES,
     TOTAL_STEPS,
 )
 from .core.physics import fleet_speed
@@ -318,6 +321,63 @@ def predict_future_arrivals(
         if eta > horizon:
             continue
         ships_predicted = int(math.ceil(rate * my_share))
+        if ships_predicted <= 0:
+            continue
+        predictions.setdefault(target.id, []).append(
+            (eta, enemy.owner, ships_predicted)
+        )
+    return predictions
+
+
+def predict_future_arrivals_v2(
+    enemy_planets: list[Planet],
+    my_planets: list[Planet],
+    launches: list[LaunchEvent],
+    launch_rate: dict[int, float],
+    pref_counts: dict[int, dict[str, float]],
+    current_step: int,
+    horizon: int = OM_PREDICT_HORIZON,
+    weight: float = OM_PREDICTION_WEIGHT,
+    min_launches: int = OM_PREDICT_MIN_LAUNCHES,
+    apply_after_step: int = OM_PREDICT_APPLY_AFTER_STEP,
+) -> dict[int, list[tuple[int, int, int]]]:
+    """Weighted, phase-gated opponent attack prediction.
+
+    Returns 空 dict until both (a) current_step > apply_after_step and
+    (b) 各 enemy planet で少なくとも `min_launches` 件の launch が観測済み。
+    予測された ships 数に `weight` を掛けて uncertainty を反映する。
+    """
+    predictions: dict[int, list[tuple[int, int, int]]] = {}
+    if current_step < apply_after_step:
+        return predictions
+    if not my_planets or not enemy_planets:
+        return predictions
+
+    launches_per_src: dict[int, int] = {}
+    for ev in launches:
+        launches_per_src[ev.from_pid] = launches_per_src.get(ev.from_pid, 0) + 1
+
+    for enemy in enemy_planets:
+        rate = launch_rate.get(enemy.id, 0.0)
+        if rate <= 0 or enemy.ships < OM_MIN_LAUNCH_STOCK:
+            continue
+        if launches_per_src.get(enemy.id, 0) < min_launches:
+            continue
+
+        dist = preference_distribution(pref_counts, enemy.owner)
+        my_share = dist.get("my_planet", 0.0)
+        if my_share <= 0.0:
+            continue
+
+        target = _nearest_non_self(enemy, my_planets, enemy.owner)
+        if target is None:
+            continue
+        dx = target.x - enemy.x
+        dy = target.y - enemy.y
+        eta = max(1, int(math.ceil(math.sqrt(dx * dx + dy * dy) / 3.0)))
+        if eta > horizon:
+            continue
+        ships_predicted = int(math.ceil(rate * my_share * weight))
         if ships_predicted <= 0:
             continue
         predictions.setdefault(target.id, []).append(

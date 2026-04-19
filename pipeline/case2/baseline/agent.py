@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import opponent_model as om
-from .core.config import OPPONENT_MODEL_ENABLED
+from .core.config import OM_V2_ENABLED, OPPONENT_MODEL_ENABLED
 from .core.types import Fleet, Planet
 from .core.world_model import WorldModel
 from .strategy import plan_moves
@@ -45,9 +45,19 @@ def _update_opponent_model(
     my_planets = [p for p in planets if p.owner == player]
     enemy_planets = [p for p in planets if p.owner not in (-1, player)]
     launch_rate = om.compute_launch_rate(state.launches, step)
-    predicted = om.predict_future_arrivals(
-        enemy_planets, my_planets, launch_rate, state.pref_counts
-    )
+    if OM_V2_ENABLED:
+        predicted = om.predict_future_arrivals_v2(
+            enemy_planets,
+            my_planets,
+            state.launches,
+            launch_rate,
+            state.pref_counts,
+            step,
+        )
+    else:
+        predicted = om.predict_future_arrivals(
+            enemy_planets, my_planets, launch_rate, state.pref_counts
+        )
     threat = om.compute_threat_score(my_planets, enemy_planets, None, state.pref_counts)
     return predicted, threat
 

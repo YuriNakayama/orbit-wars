@@ -177,6 +177,12 @@ OM_PROACTIVE_THREAT_BOOST: float = 0.0
 OM_PREDICT_HORIZON: int = 20
 OM_MAX_HISTORY_ENTRIES: int = 600
 
+OM_V2_ENABLED: bool = False
+OM_PREDICTION_WEIGHT: float = 0.5
+OM_PREDICT_MIN_LAUNCHES: int = 2
+OM_PREDICT_APPLY_AFTER_STEP: int = 30
+OM_DEFEND_PREDICTED_ATTACK: bool = True
+
 
 def load_config(path: Path) -> dict[str, Any]:
     """Load the YAML copy of these constants for reference / future tuning."""
