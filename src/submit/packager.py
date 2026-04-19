@@ -83,8 +83,12 @@ def _matches_submitignore(relative: Path, patterns: list[str]) -> bool:
 
 
 def _load_submitignore(case_dir: Path) -> list[str]:
-    """`pipeline/.submitignore` (case_dir の親) を読む。存在しなければ空。"""
-    ignore_path = case_dir.parent / SUBMITIGNORE_FILENAME
+    """`pipeline/.submitignore` (pipeline ルート直下) を読む。存在しなければ空。
+
+    case_dir は `pipeline/<category>/<case>` の 2 階層構造を想定し、
+    pipeline ルートは `case_dir.parent.parent`。
+    """
+    ignore_path = case_dir.parent.parent / SUBMITIGNORE_FILENAME
     if not ignore_path.is_file():
         return []
     return _parse_submitignore(ignore_path)

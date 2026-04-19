@@ -29,11 +29,8 @@ kaggle_environments   env.step()
 
 ```
 src/
-  agents/               提出用エージェント（main.py がエントリポイント）
-  env/                  kaggle-environments ラッパー・自己対戦ユーティリティ
-  features/             観測→特徴量変換、軌道予測
-  policies/             ルールベース / 学習済みポリシー
-  utils/                共通ユーティリティ
+  dataset/              対戦ログ管理 (schema / storage / selfplay / kaggle)
+  submit/               Kaggle 提出 (archive / validator / uploader)
 pipeline/
   rulebase/             ルールベース戦略パイプライン
     case0/              単純スナイパー (参考実装)
@@ -43,7 +40,7 @@ pipeline/
   imitation/            模倣学習パイプライン
     case1/              DeepSets BC
 tests/                  Pytest unit tests
-data/                   リプレイ・学習ログ（大きいものは gitignore）
+data/                   3 層構造 (lake / processed / mart) + submissions (gitignore)
 dev/                    Development scripts
 docs/
   competition/          コンペ仕様まとめ（abstract.md 等）

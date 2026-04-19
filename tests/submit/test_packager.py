@@ -113,7 +113,7 @@ def test_build_archive_honors_submitignore_directory(tmp_path: Path) -> None:
     """pipeline/.submitignore の `dir/` 指定でディレクトリを除外する。"""
 
     pipeline_root = tmp_path / "pipeline"
-    case_dir = pipeline_root / "caseI"
+    case_dir = pipeline_root / "cat" / "caseI"
     _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
     _write(case_dir / "baseline" / "agent.py", "x = 1\n")
     _write(case_dir / "eda" / "viewer.py", "y = 2\n")
@@ -133,7 +133,7 @@ def test_build_archive_submitignore_ignores_comments_and_blank(
     tmp_path: Path,
 ) -> None:
     pipeline_root = tmp_path / "pipeline"
-    case_dir = pipeline_root / "caseC"
+    case_dir = pipeline_root / "cat" / "caseC"
     _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
     _write(case_dir / "keep.py", "ok = True\n")
     _write(case_dir / "drop_me" / "x.py", "z = 1\n")
@@ -154,7 +154,7 @@ def test_build_archive_submitignore_glob_pattern(tmp_path: Path) -> None:
     """fnmatch パターンでファイル単位の除外ができる。"""
 
     pipeline_root = tmp_path / "pipeline"
-    case_dir = pipeline_root / "caseG"
+    case_dir = pipeline_root / "cat" / "caseG"
     _write(case_dir / "main.py", "def agent(obs):\n    return []\n")
     _write(case_dir / "local_debug.py", "debug = True\n")
     _write(pipeline_root / ".submitignore", "local_*.py\n")

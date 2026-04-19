@@ -19,8 +19,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from env.runner import RunSpec, run_episodes  # noqa: E402
-from env.types import MatchRecord  # noqa: E402
+from dataset.schema import MatchRecord  # noqa: E402
+from dataset.selfplay.runner import RunSpec, run_episodes  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
