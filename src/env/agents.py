@@ -15,6 +15,7 @@ AgentCallable = Callable[..., Any]
 
 AGENT_REGISTRY: dict[str, str] = {
     "baseline_v1": "pipeline.case1.baseline.agent:agent",
+    "baseline_v2": "pipeline.case2.baseline.agent:agent",
     "case0": "pipeline.case0.main:agent",
     "case3_il_v1": "pipeline.case3.policy.agent:agent",
     "random": "random",
