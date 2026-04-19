@@ -183,6 +183,11 @@ OM_PREDICT_MIN_LAUNCHES: int = 2
 OM_PREDICT_APPLY_AFTER_STEP: int = 30
 OM_DEFEND_PREDICTED_ATTACK: bool = True
 
+LOOKAHEAD_ENABLED: bool = False
+LOOKAHEAD_MAX_DEPTH: int = 1
+LOOKAHEAD_APPLY_AFTER_STEP: int = 20
+LOOKAHEAD_PREDICTION_WEIGHT: float = 0.6
+
 
 def load_config(path: Path) -> dict[str, Any]:
     """Load the YAML copy of these constants for reference / future tuning."""

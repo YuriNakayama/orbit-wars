@@ -8,9 +8,10 @@ from __future__ import annotations
 from typing import Any
 
 from . import opponent_model as om
-from .core.config import OM_V2_ENABLED, OPPONENT_MODEL_ENABLED
+from .core.config import LOOKAHEAD_ENABLED, OM_V2_ENABLED, OPPONENT_MODEL_ENABLED
 from .core.types import Fleet, Planet
 from .core.world_model import WorldModel
+from .lookahead import predict_enemy_fleets
 from .strategy import plan_moves
 
 _OM_STATE: om.OMState = om.OMState()
@@ -83,6 +84,24 @@ def build_world(obs: Any) -> WorldModel:
         predicted_arrivals, opponent_threat_score = _update_opponent_model(
             step, planets, fleets, player
         )
+
+    if LOOKAHEAD_ENABLED:
+        probe = WorldModel(
+            player=player,
+            step=step,
+            planets=planets,
+            fleets=fleets,
+            initial_by_id=initial_by_id,
+            ang_vel=ang_vel,
+            comets=comets,
+            comet_ids=comet_ids,
+            predicted_arrivals=predicted_arrivals,
+            opponent_threat_score=opponent_threat_score,
+        )
+        lookahead_predictions = predict_enemy_fleets(probe)
+        if lookahead_predictions:
+            for pid, arrivals in lookahead_predictions.items():
+                predicted_arrivals.setdefault(pid, []).extend(arrivals)
 
     return WorldModel(
         player=player,

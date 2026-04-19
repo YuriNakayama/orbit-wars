@@ -29,7 +29,6 @@ from .config import (
     MULTI_ENEMY_PROACTIVE_RATIO,
     MULTI_ENEMY_STACK_WINDOW,
     OPENING_TURN_LIMIT,
-    OPPONENT_MODEL_ENABLED,
     PROACTIVE_DEFENSE_HORIZON,
     PROACTIVE_DEFENSE_RATIO,
     REINFORCE_ENABLED,
@@ -408,7 +407,7 @@ class WorldModel:
         )
 
         self.arrivals_by_planet = build_arrival_ledger(fleets, planets)
-        use_predictions = OPPONENT_MODEL_ENABLED and bool(self.predicted_arrivals)
+        use_predictions = bool(self.predicted_arrivals)
         self.base_timeline: dict[int, dict[str, Any]] = {
             planet.id: simulate_planet_timeline(
                 planet,
