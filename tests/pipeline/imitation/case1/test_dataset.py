@@ -1,4 +1,4 @@
-"""Unit tests for pipeline.imitation.case3.training.dataset."""
+"""Unit tests for pipeline.imitation.case1.training.dataset."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case3.training.dataset import (
+from pipeline.imitation.case1.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     Sample,

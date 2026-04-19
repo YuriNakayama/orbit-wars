@@ -1,10 +1,10 @@
-"""Unit tests for pipeline.imitation.case3.policy.featurizer."""
+"""Unit tests for pipeline.imitation.case1.policy.featurizer."""
 
 from __future__ import annotations
 
 import torch
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,

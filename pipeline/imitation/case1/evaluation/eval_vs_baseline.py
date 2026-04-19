@@ -1,7 +1,7 @@
-"""Evaluate case3_il_v1 vs case1_baseline_v1 over N self-play episodes.
+"""Evaluate il_v1 (imitation/case1) vs baseline_v1 (rulebase/case1) over N episodes.
 
 Usage:
-    uv run python -m pipeline.imitation.case3.evaluation.eval_vs_baseline \
+    uv run python -m pipeline.imitation.case1.evaluation.eval_vs_baseline \
         --episodes 100 --mode 1v1 --parallel 4
 """
 
@@ -24,10 +24,13 @@ from env.types import MatchRecord  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-CHALLENGER = "case3_il_v1"
+CHALLENGER = "il_v1"
 BASELINE = "baseline_v1"
 
-app = typer.Typer(add_completion=False, help="Evaluate case3 IL vs case1 baseline.")
+app = typer.Typer(
+    add_completion=False,
+    help="Evaluate imitation/case1 IL vs rulebase/case1 baseline.",
+)
 
 
 def _summarize(records: list[MatchRecord], challenger_idx: int) -> dict[str, float]:
@@ -57,7 +60,7 @@ def main(
     parallel: int = typer.Option(1, "--parallel", "-p"),
     data_root: Path = typer.Option(Path("data"), "--data-root"),
     out: Path = typer.Option(
-        Path("pipeline/imitation/case3/evaluation/results.json"), "--out"
+        Path("pipeline/imitation/case1/evaluation/results.json"), "--out"
     ),
 ) -> None:
     if mode != "1v1":

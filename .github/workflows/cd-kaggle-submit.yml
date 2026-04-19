@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       case:
-        description: "pipeline 配下の <category>/<case> (例: rulebase/case0, imitation/case3)"
+        description: "pipeline 配下の <category>/<case> (例: rulebase/case0, imitation/case1)"
         required: true
         type: string
       message:

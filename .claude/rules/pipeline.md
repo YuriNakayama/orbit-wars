@@ -5,7 +5,7 @@ paths:
 
 # Pipeline (pipeline/<category>/case*) Submission Rules
 
-Kaggle 提出用 `pipeline/<category>/case*/` ディレクトリを **ローカル実行と Kaggle 提出後実行の両方で** 動作させるための規約。`<category>` は現状 `rulebase/` (case0〜case2) と `imitation/` (case3) の 2 系統。
+Kaggle 提出用 `pipeline/<category>/case*/` ディレクトリを **ローカル実行と Kaggle 提出後実行の両方で** 動作させるための規約。`<category>` は現状 `rulebase/` (case0〜case2) と `imitation/` (case1) の 2 系統。case 番号は **category ごとに独立** に 1 から振る (rulebase/case1 と imitation/case1 は別物)。
 
 ## 前提: submit 基盤の仕様
 

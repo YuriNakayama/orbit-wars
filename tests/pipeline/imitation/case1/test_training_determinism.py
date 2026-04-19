@@ -8,13 +8,13 @@ import numpy as np
 import polars as pl
 import pytest
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case3.training.preprocess import NO_OP_LABEL
-from pipeline.imitation.case3.training.train import train
+from pipeline.imitation.case1.training.preprocess import NO_OP_LABEL
+from pipeline.imitation.case1.training.train import train
 
 pytestmark = pytest.mark.slow
 

@@ -1,12 +1,12 @@
-"""Unit tests for pipeline.imitation.case3.policy.decoder."""
+"""Unit tests for pipeline.imitation.case1.policy.decoder."""
 
 from __future__ import annotations
 
 import torch
 
-from pipeline.imitation.case3.policy.decoder import decode
-from pipeline.imitation.case3.policy.featurizer import MAX_PLANETS
-from pipeline.imitation.case3.policy.types import PolicyOutput, WorldSnapshot
+from pipeline.imitation.case1.policy.decoder import decode
+from pipeline.imitation.case1.policy.featurizer import MAX_PLANETS
+from pipeline.imitation.case1.policy.types import PolicyOutput, WorldSnapshot
 
 NO_OP_LABEL = MAX_PLANETS
 

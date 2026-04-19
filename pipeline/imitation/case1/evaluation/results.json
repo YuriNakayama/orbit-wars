@@ -5,7 +5,7 @@
   "draws": 0.0,
   "win_rate": 0.0,
   "non_draw_win_rate": 0.0,
-  "challenger": "case3_il_v1",
+  "challenger": "il_v1",
   "baseline": "baseline_v1",
   "mode": "1v1"
 }

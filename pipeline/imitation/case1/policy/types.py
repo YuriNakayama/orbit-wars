@@ -1,4 +1,4 @@
-"""Frozen dataclasses for case3 IL baseline data flow."""
+"""Frozen dataclasses for imitation/case1 IL baseline data flow."""
 
 from __future__ import annotations
 

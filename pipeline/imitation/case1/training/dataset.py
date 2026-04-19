@@ -1,4 +1,4 @@
-"""Parquet → torch Dataset/DataLoader for case3 IL baseline."""
+"""Parquet → torch Dataset/DataLoader for imitation/case1 IL baseline."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import polars as pl
 import torch
 from torch.utils.data import Dataset
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,

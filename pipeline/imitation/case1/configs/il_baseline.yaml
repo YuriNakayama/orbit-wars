@@ -1,11 +1,11 @@
-# Imitation Learning Baseline (case3) — default config
+# Imitation Learning Baseline (imitation/case1) — default config
 seed: 0
 
 data:
   kaggle_index_root: data/kaggle_episodes/matches/index.parquet
   replay_dir: data/kaggle_episodes/matches/replays
-  out_train: data/lake/case3/train.parquet
-  out_val: data/lake/case3/val.parquet
+  out_train: data/lake/imitation_case1/train.parquet
+  out_val: data/lake/imitation_case1/val.parquet
   rating_quantile: 0.75      # top 25% by agent_*_rating_mu
   val_split: 0.10            # 10% of episodes for validation
   modes: ["1v1", "ffa4"]
@@ -28,7 +28,7 @@ train:
     from: 1.0
     target: 1.0
     ships: 0.5
-  weights_out: pipeline/imitation/case3/policy/weights.pt
+  weights_out: pipeline/imitation/case1/policy/weights.pt
 
 inference:
   from_threshold: 0.05

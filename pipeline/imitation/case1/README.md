@@ -1,4 +1,4 @@
-# Case3 — Imitation Learning Baseline
+# Imitation Case1 — Imitation Learning Baseline
 
 過去の Kaggle 上位リプレイ (`data/kaggle_episodes/matches/`) からの **行動クローニング (BC)** で
 動く PyTorch エージェント。`pipeline/rulebase/case1` (rule-based) との 1v1 勝率 ≥ 50% を目標とする。
@@ -8,14 +8,14 @@
 ## ディレクトリ構成
 
 ```
-pipeline/imitation/case3/
+pipeline/imitation/case1/
 ├── main.py                  # Kaggle entry (Path.cwd() ベース)
 ├── policy/                  # 提出物
 │   ├── agent.py             # agent(obs) エントリ
 │   ├── featurizer.py        # obs → torch.Tensor
 │   ├── model.py             # DeepSets policy
 │   ├── decoder.py           # PolicyOutput → action list
-│   ├── geometry.py          # aim_with_prediction (case3 独立コピー)
+│   ├── geometry.py          # aim_with_prediction (独立コピー)
 │   └── weights.pt           # 学習済み重み
 ├── training/                # 開発用 (.submitignore)
 │   ├── preprocess.py        # replay → parquet
@@ -32,25 +32,25 @@ pipeline/imitation/case3/
 
 ```bash
 # 1) データ前処理 (replay → parquet)
-uv run python -m pipeline.imitation.case3.training.preprocess --config pipeline/imitation/case3/configs/il_baseline.yaml
+uv run python -m pipeline.imitation.case1.training.preprocess --config pipeline/imitation/case1/configs/il_baseline.yaml
 
 # 2) 学習 (BC)
-uv run python -m pipeline.imitation.case3.training.train --config pipeline/imitation/case3/configs/il_baseline.yaml
+uv run python -m pipeline.imitation.case1.training.train --config pipeline/imitation/case1/configs/il_baseline.yaml
 
-# 3) ローカル評価 (vs case1_baseline_v1, 100 戦)
-uv run python -m pipeline.imitation.case3.evaluation.eval_vs_baseline --episodes 100 --seed 0
+# 3) ローカル評価 (vs rulebase/case1 baseline_v1, 100 戦)
+uv run python -m pipeline.imitation.case1.evaluation.eval_vs_baseline --episodes 100 --seed 0
 ```
 
 ## テスト
 
 ```bash
-uv run pytest tests/pipeline/imitation/case3 -v -m "not slow"
-uv run pytest tests/pipeline/imitation/case3 -v   # determinism 含む
+uv run pytest tests/pipeline/imitation/case1 -v -m "not slow"
+uv run pytest tests/pipeline/imitation/case1 -v   # determinism 含む
 ```
 
 ## 設計原則
 
-- **case 間独立**: `pipeline/imitation/case3/` は `pipeline/rulebase/case[012]/` に依存しない / されない。
+- **case 間独立**: `pipeline/imitation/case1/` は `pipeline/rulebase/case[012]/` に依存しない / されない。
 - **Action 表現**: `(from_planet 分類, target_planet 分類, ships_bucket 分類)` の 3 ヘッド。
   `angle` は `aim_with_prediction()` で決定論的に再構成。
 - **推論**: greedy argmax + 有効ターゲットマスク + from_threshold で no-op 判定。

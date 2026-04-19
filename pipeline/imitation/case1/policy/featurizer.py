@@ -1,4 +1,4 @@
-"""obs (dict) → BatchFeatures (torch.Tensor) for case3 IL baseline.
+"""obs (dict) → BatchFeatures (torch.Tensor) for imitation/case1 IL baseline.
 
 Pure function — no torch.nn, no autograd, no random state.
 Used by both training preprocess and runtime agent inference.

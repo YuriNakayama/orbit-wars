@@ -1,4 +1,4 @@
-"""Unit tests for pipeline.imitation.case3.policy.model."""
+"""Unit tests for pipeline.imitation.case1.policy.model."""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import io
 
 import torch
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case3.policy.model import (
+from pipeline.imitation.case1.policy.model import (
     DeepSetsPolicy,
     ModelConfig,
     build_model,
     count_parameters,
 )
-from pipeline.imitation.case3.policy.types import BatchFeatures
+from pipeline.imitation.case1.policy.types import BatchFeatures
 
 
 def _make_batch(b: int = 2, num_valid: int = 5) -> BatchFeatures:

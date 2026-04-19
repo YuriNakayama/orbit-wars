@@ -1,4 +1,4 @@
-"""DeepSets policy network for case3 IL baseline.
+"""DeepSets policy network for imitation/case1 IL baseline.
 
 3 heads:
   - from: per-planet binary "send fleet from this planet" logit (B, MAX_PLANETS)

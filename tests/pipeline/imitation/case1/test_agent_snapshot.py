@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.imitation.case3.policy.agent import agent
+from pipeline.imitation.case1.policy.agent import agent
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 

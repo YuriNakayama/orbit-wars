@@ -1,4 +1,4 @@
-"""3-head BC loss for case3 IL baseline.
+"""3-head BC loss for imitation/case1 IL baseline.
 
 We treat the action label as (from_planet, target_planet, ships_bucket).
 For no-op frames we still supervise the from-head (predict no fire from any
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from pipeline.imitation.case3.policy.featurizer import MAX_PLANETS
-from pipeline.imitation.case3.policy.types import PolicyOutput
+from pipeline.imitation.case1.policy.featurizer import MAX_PLANETS
+from pipeline.imitation.case1.policy.types import PolicyOutput
 
 NO_OP_LABEL = MAX_PLANETS
 

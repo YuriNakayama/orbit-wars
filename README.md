@@ -70,7 +70,7 @@ pipeline/
       eda/              観測データの探索的分析
     case2/              baseline_v2
   imitation/            模倣学習パイプライン
-    case3/              DeepSets BC
+    case1/              DeepSets BC
 tests/                  Pytest unit tests
 data/                   リプレイ・学習ログ（大きいものは gitignore）
 dev/                    Development scripts

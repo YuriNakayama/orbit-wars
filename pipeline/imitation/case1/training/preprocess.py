@@ -1,4 +1,4 @@
-"""Replay → parquet preprocess for case3 IL baseline.
+"""Replay → parquet preprocess for imitation/case1 IL baseline.
 
 Pipeline:
   1) load index.parquet, filter mode ∈ cfg.modes, drop draws.
@@ -7,7 +7,7 @@ Pipeline:
   3) split episodes 90/10 deterministically by hash(match_id).
   4) walk steps[*][player_slot]; for each (obs, action) emit one row per action,
      plus one no-op row when the action list is empty.
-  5) write data/lake/case3/{train,val}.parquet via polars.
+  5) write data/lake/imitation_case1/{train,val}.parquet via polars.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import polars as pl
 import typer
 import yaml
 
-from pipeline.imitation.case3.policy.featurizer import (
+from pipeline.imitation.case1.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
@@ -324,7 +324,7 @@ app = typer.Typer(add_completion=False)
 @app.command()
 def main(
     config: Path = typer.Option(  # noqa: B008
-        Path("pipeline/imitation/case3/configs/il_baseline.yaml"),
+        Path("pipeline/imitation/case1/configs/il_baseline.yaml"),
         "--config",
         "-c",
         help="YAML config path",

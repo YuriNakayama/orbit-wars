@@ -1,4 +1,4 @@
-"""BC training loop for case3 IL baseline.
+"""BC training loop for imitation/case1 IL baseline.
 
 Pipeline:
   1) load configs from YAML
@@ -25,14 +25,14 @@ import yaml
 from torch import optim
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case3.policy.model import DeepSetsPolicy, ModelConfig
-from pipeline.imitation.case3.policy.types import BatchFeatures
-from pipeline.imitation.case3.training.dataset import (
+from pipeline.imitation.case1.policy.model import DeepSetsPolicy, ModelConfig
+from pipeline.imitation.case1.policy.types import BatchFeatures
+from pipeline.imitation.case1.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     collate,
 )
-from pipeline.imitation.case3.training.losses import LossWeights, compute_loss
+from pipeline.imitation.case1.training.losses import LossWeights, compute_loss
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ app = typer.Typer(add_completion=False)
 @app.command()
 def main(
     config: Path = typer.Option(  # noqa: B008
-        Path("pipeline/imitation/case3/configs/il_baseline.yaml"),
+        Path("pipeline/imitation/case1/configs/il_baseline.yaml"),
         "--config",
         "-c",
         help="YAML config path",

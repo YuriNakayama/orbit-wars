@@ -14,7 +14,7 @@ if [ $# -lt 1 ]; then
 Usage: dev/submit <category>/<case> -m "<message>" [オプション]
 
   <category>/<case>    pipeline/<category>/<case> ディレクトリ名
-                       (例: rulebase/case0, rulebase/case1, imitation/case3)
+                       (例: rulebase/case0, rulebase/case1, imitation/case1)
   -m, --message TEXT   提出メッセージ (必須)
   --dry-run            検証とパッケージングのみ (Kaggle へは投げない)
   --single-file        main.py 単体で提出
@@ -24,7 +24,7 @@ Usage: dev/submit <category>/<case> -m "<message>" [オプション]
 Examples:
   dev/submit rulebase/case0 -m "nearest planet sniper baseline"
   dev/submit rulebase/case1 -m "dry run test" --dry-run
-  dev/submit imitation/case3 -m "IL baseline" --wait
+  dev/submit imitation/case1 -m "IL baseline" --wait
 EOS
   exit 1
 fi

@@ -44,7 +44,7 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
         ...,
         help=(
             "pipeline/<category>/<case> ディレクトリ名 "
-            "(例: rulebase/case0, imitation/case3)"
+            "(例: rulebase/case0, imitation/case1)"
         ),
     ),
     message: str = typer.Option(..., "-m", "--message", help="提出メッセージ"),

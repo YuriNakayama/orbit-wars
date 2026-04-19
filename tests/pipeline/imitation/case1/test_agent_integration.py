@@ -1,11 +1,11 @@
-"""Integration test: case3 agent runs in kaggle_environments without crashing."""
+"""Integration test: imitation/case1 agent runs in kaggle_environments."""
 
 from __future__ import annotations
 
 import pytest
 from kaggle_environments import make
 
-from pipeline.imitation.case3.policy.agent import agent
+from pipeline.imitation.case1.policy.agent import agent
 
 
 @pytest.mark.slow
