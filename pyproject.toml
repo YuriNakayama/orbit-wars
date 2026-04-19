@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0.2",
     "rich>=13.9.4",
     "typer>=0.15.2",
+    "torch>=2.3.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -90,6 +91,10 @@ max-complexity = 5
 [tool.ruff.lint.per-file-ignores]
 "pipeline/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/case1/evaluation/**/*.py" = ["B008"]
+"pipeline/case3/policy/geometry.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/case3/training/preprocess.py" = ["B008"]
+"pipeline/case3/training/train.py" = ["B008"]
+"pipeline/case3/evaluation/eval_vs_baseline.py" = ["B008"]
 "tests/pipeline/case1/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/env/cli.py" = ["B008"]  # typer の慣習
