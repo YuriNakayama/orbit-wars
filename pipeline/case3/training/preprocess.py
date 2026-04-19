@@ -7,7 +7,7 @@ Pipeline:
   3) split episodes 90/10 deterministically by hash(match_id).
   4) walk steps[*][player_slot]; for each (obs, action) emit one row per action,
      plus one no-op row when the action list is empty.
-  5) write data/lake/case3/{train,val}.parquet via polars.
+  5) write data/mart/case3/{train,val}.parquet via polars.
 """
 
 from __future__ import annotations

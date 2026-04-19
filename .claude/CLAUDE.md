@@ -29,16 +29,13 @@ kaggle_environments   env.step()
 
 ```
 src/
-  agents/               提出用エージェント（main.py がエントリポイント）
-  env/                  kaggle-environments ラッパー・自己対戦ユーティリティ
-  features/             観測→特徴量変換、軌道予測
-  policies/             ルールベース / 学習済みポリシー
-  utils/                共通ユーティリティ
+  dataset/              対戦ログ管理 (schema / storage / selfplay / kaggle)
+  submit/               Kaggle 提出 (archive / validator / uploader)
 pipeline/
-  case1/                戦略別の学習・評価パイプライン
-    eda/                観測データの探索的分析
+  case1/                ルールベース baseline
+  case3/                Imitation Learning baseline (PyTorch)
 tests/                  Pytest unit tests
-data/                   リプレイ・学習ログ（大きいものは gitignore）
+data/                   3 層構造 (lake / processed / mart) + submissions (gitignore)
 dev/                    Development scripts
 docs/
   competition/          コンペ仕様まとめ（abstract.md 等）

@@ -130,9 +130,7 @@ def predict_enemy_fleets(
         ships_weighted = int(math.ceil(ships * weight))
         if ships_weighted <= 0:
             continue
-        predictions.setdefault(target.id, []).append(
-            (eta, enemy_id, ships_weighted)
-        )
+        predictions.setdefault(target.id, []).append((eta, enemy_id, ships_weighted))
     return predictions
 
 

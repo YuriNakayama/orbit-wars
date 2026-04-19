@@ -58,16 +58,24 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポ
 
 ```
 src/
-  agents/               提出用エージェント（main.py がエントリポイント）
-  env/                  kaggle-environments ラッパー・自己対戦ユーティリティ
-  features/             観測→特徴量変換、軌道予測
-  policies/             ルールベース / 学習済みポリシー
-  utils/                共通ユーティリティ
+  dataset/              対戦ログ管理 (selfplay 実行 + Kaggle scraper + storage)
+    schema/             MatchRecord 等のドメイン型
+    storage/            parquet 書き出し・読み出し・分析
+    selfplay/           kaggle-environments ラッパー・自己対戦 runner
+    kaggle/             Kaggle EpisodeService scraper
+  submit/               Kaggle 提出の archive / validator / uploader
 pipeline/
-  case1/                戦略別の学習・評価パイプライン
-    eda/                観測データの探索的分析
+  case1/                戦略別の学習・評価パイプライン (ルールベース)
+  case3/                Imitation Learning baseline (PyTorch)
 tests/                  Pytest unit tests
-data/                   リプレイ・学習ログ（大きいものは gitignore）
+data/                   3 層構造 (gitignore)
+  lake/                 生データ層
+    selfplay/matches/   self-play リプレイ・index
+    kaggle_episodes/matches/  Kaggle 上位リプレイ・index
+  processed/            クレンジング層
+  mart/                 集計済み層 (学習向け parquet)
+    case3/              case3 IL baseline 用 train/val.parquet
+  submissions/          Kaggle 提出アーカイブ
 dev/                    Development scripts
   setup                 Install dependencies (uv sync)
   format                Code formatting (ruff)
@@ -90,24 +98,27 @@ dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
 ```
 
-## Evaluation Framework (`src/env/`)
+## Evaluation Framework (`src/dataset/`)
 
-ローカルでの対戦実行・データ蓄積・分析・再生を提供する汎用フレームワーク。
+ローカルでの対戦実行・データ蓄積・分析・再生、および Kaggle 上位リプレイの取得を提供する汎用フレームワーク。
 
 ```bash
-# 対戦実行 (結果は data/matches/ に保存)
-uv run python -m env run \
+# 自己対戦実行 (結果は data/lake/selfplay/matches/ に保存)
+uv run python -m dataset run \
   --agents baseline_v1,case0 --mode 1v1 -n 10 --parallel 4
 
 # 最新 10 件を一覧
-uv run python -m env list --mode 1v1 --limit 10
+uv run python -m dataset list --mode 1v1 --limit 10
 
 # 指定 match_id のリプレイを検査
-uv run python -m env replay-inspect <match_id>
+uv run python -m dataset replay-inspect <match_id>
+
+# Kaggle 上位リプレイをスクレイプ (data/lake/kaggle_episodes/ に保存)
+uv run python -m dataset kaggle scrape --top 20 --modes 1v1,ffa4
 ```
 
 - **データ**: Parquet (hive partition: `mode=`) に指標、`replays/{match_id}.json.gz` に env.toJSON。
-- **分析**: `env.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
+- **分析**: `dataset.storage.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
 - **可視化**: `pipeline/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
 
 ## Glossary
@@ -120,6 +131,43 @@ uv run python -m env replay-inspect <match_id>
 | Comet | ターン 50/150/.../450 に出現する移動惑星。占領・生産可能 |
 | Home Planet | 各プレイヤーの初期所有惑星（初期艦数10） |
 | Skill Rating | 提出ごとのガウス分布 N(μ, σ²) によるレーティング |
+
+## data processing flow
+
+|   layer   |    directory     | description                                                                                                                                          |
+| :-------: | :--------------: | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| datalake  |   `data/lake`    | 整備されていない生データを配置する.                                                                                                                  |
+| cleansing | `data/processed` | 生データから必要な情報を落とさずにクレンジング（欠損補完や異常値処理など）した前処理済みデータを配置する。                                           |
+| datamart  |   `data/mart`    | クレンジング層のデータに対して集約や結合、カラムの追加などを行い、分析に利用する形に整形したデータを配置する。重要な集計ロジックはここに集約させる。 |
+
+```mermaid
+graph LR
+    subgraph datalake layer
+    direction TB
+        source_a@{shape: cyl, label: "data source A"}
+        source_b@{shape: cyl, label: "data source B"}
+        source_c@{shape: cyl, label: "data source C"}
+    end
+
+    subgraph cleansing layer
+    direction TB
+        processed_a@{shape: cyl, label: "processed data A"}
+        processed_b@{shape: cyl, label: "processed data B"}
+        processed_c@{shape: cyl, label: "processed data C"}
+    end
+    subgraph datamart layer
+    direction TB
+        mart_x@{shape: cyl, label: "data mart X"}
+        mart_y@{shape: cyl, label: "data mart Y"}
+    end
+    source_a --> processed_a
+    source_b --> processed_b
+    source_c --> processed_c
+    processed_a --> mart_x
+    processed_b --> mart_x
+    processed_c --> mart_y
+```
+
 
 ## Links
 

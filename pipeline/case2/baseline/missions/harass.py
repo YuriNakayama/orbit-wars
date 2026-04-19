@@ -77,7 +77,9 @@ def build_harass_missions(
                 continue
 
             stolen_production = (
-                int(target.production) * HARASS_PRODUCTION_STEAL_TURNS * HARASS_VALUE_MULT
+                int(target.production)
+                * HARASS_PRODUCTION_STEAL_TURNS
+                * HARASS_VALUE_MULT
             )
             score = stolen_production / (need + turns * HARASS_COST_TURN_WEIGHT + 1.0)
 

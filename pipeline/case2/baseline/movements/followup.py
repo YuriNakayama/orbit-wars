@@ -100,9 +100,7 @@ def emit_followup_moves(
             continue
 
         angle, turns, _, _ = aim
-        missing = world.ships_needed_to_capture(
-            target.id, turns, planned_commitments
-        )
+        missing = world.ships_needed_to_capture(target.id, turns, planned_commitments)
         if missing <= 0:
             continue
 
