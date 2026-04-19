@@ -55,3 +55,8 @@ def load_replay(match_id: str, data_root: Path) -> Any:
         configuration=payload.get("configuration", {}),
         steps=payload.get("steps", []),
     )
+
+
+def load_kaggle_replay(episode_id: int, data_root: Path) -> Any:
+    """Load a Kaggle-sourced episode replay as an Environment."""
+    return load_replay(f"kaggle_ep_{episode_id}", data_root=data_root)

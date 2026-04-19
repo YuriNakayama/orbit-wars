@@ -83,6 +83,7 @@ artifacts/
 *.db
 
 # data
+/data
 data/
 !data/**/*.md
 

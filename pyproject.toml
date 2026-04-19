@@ -39,6 +39,7 @@ lint = [
     "ruff>=0.8.4",
     "pandas-stubs>=2.3.2.250926",
     "types-pyyaml>=6.0.12.20250915",
+    "types-requests>=2.32.0.20250913",
 ]
 env = []
 
@@ -92,6 +93,7 @@ max-complexity = 5
 "tests/pipeline/case1/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/env/cli.py" = ["B008"]  # typer の慣習
+"src/env/kaggle/cli.py" = ["B008"]  # typer の慣習
 "pipeline/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]
