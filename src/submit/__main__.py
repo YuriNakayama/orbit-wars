@@ -40,7 +40,13 @@ def _resolve_case(case: str, *, pipeline_dir: Path) -> Path:
 
 @app.command("submit")
 def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
-    case: str = typer.Argument(..., help="pipeline/<case> ディレクトリ名 (例: case0)"),
+    case: str = typer.Argument(
+        ...,
+        help=(
+            "pipeline/<category>/<case> ディレクトリ名 "
+            "(例: rulebase/case0, imitation/case1)"
+        ),
+    ),
     message: str = typer.Option(..., "-m", "--message", help="提出メッセージ"),
     dry_run_only: bool = typer.Option(
         False,

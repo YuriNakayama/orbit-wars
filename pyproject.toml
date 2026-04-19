@@ -72,7 +72,7 @@ exclude = [
     "dist",
     "site-packages",
     "venv",
-    "pipeline/case1/notebook",
+    "pipeline/rulebase/case1/notebook",
     ".claude",
 ]
 line-length = 88
@@ -89,20 +89,20 @@ unfixable = []
 max-complexity = 5
 
 [tool.ruff.lint.per-file-ignores]
-"pipeline/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
-"pipeline/case1/evaluation/**/*.py" = ["B008"]
-"pipeline/case3/policy/geometry.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
-"pipeline/case3/training/preprocess.py" = ["B008"]
-"pipeline/case3/training/train.py" = ["B008"]
-"pipeline/case3/evaluation/eval_vs_baseline.py" = ["B008"]
-"tests/pipeline/case1/snapshots/**" = ["ALL"]
-"pipeline/case2/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
-"pipeline/case2/evaluation/**/*.py" = ["B008", "E501"]
-"tests/pipeline/case2/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/rulebase/case1/evaluation/**/*.py" = ["B008"]
+"pipeline/imitation/case1/policy/geometry.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/imitation/case1/training/preprocess.py" = ["B008"]
+"pipeline/imitation/case1/training/train.py" = ["B008"]
+"pipeline/imitation/case1/evaluation/eval_vs_baseline.py" = ["B008"]
+"tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case2/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/rulebase/case2/evaluation/**/*.py" = ["B008", "E501"]
+"tests/pipeline/rulebase/case2/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/env/cli.py" = ["B008"]  # typer の慣習
 "src/env/kaggle/cli.py" = ["B008"]  # typer の慣習
-"pipeline/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
+"pipeline/rulebase/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]
 case-sensitive = true
@@ -119,8 +119,8 @@ exclude = [
     ".claude",
     "poetry.lock",
     "__pycache__",
-    "pipeline/case1/notebook",
-    "tests/pipeline/case1/snapshots",
+    "pipeline/rulebase/case1/notebook",
+    "tests/pipeline/rulebase/case1/snapshots",
 ]
 python_version = "3.13"
 strict = true
