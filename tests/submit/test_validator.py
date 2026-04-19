@@ -8,7 +8,7 @@ import pytest
 
 from submit.validator import ValidationError, dry_run
 
-CASE0 = Path(__file__).resolve().parents[2] / "pipeline" / "case0"
+CASE0 = Path(__file__).resolve().parents[2] / "pipeline" / "rulebase" / "case0"
 
 
 pytestmark = pytest.mark.slow

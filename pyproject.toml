@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/submit", "src/env", "pipeline"]
+packages = ["src/submit", "src/dataset", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -99,9 +99,11 @@ max-complexity = 5
 "pipeline/rulebase/case2/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/rulebase/case2/evaluation/**/*.py" = ["B008", "E501"]
 "tests/pipeline/rulebase/case2/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case3/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
+"pipeline/rulebase/case3/evaluation/**/*.py" = ["B008", "E501"]
+"tests/pipeline/rulebase/case3/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
-"src/env/cli.py" = ["B008"]  # typer の慣習
-"src/env/kaggle/cli.py" = ["B008"]  # typer の慣習
+"src/dataset/cli.py" = ["B008"]  # typer の慣習
 "pipeline/rulebase/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]

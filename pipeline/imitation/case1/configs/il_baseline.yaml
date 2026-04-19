@@ -4,8 +4,8 @@ seed: 0
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
   replay_dir: data/lake/kaggle_episodes/matches/replays
-  out_train: data/lake/imitation_case1/train.parquet
-  out_val: data/lake/imitation_case1/val.parquet
+  out_train: data/mart/imitation/case1/train.parquet
+  out_val: data/mart/imitation/case1/val.parquet
   rating_quantile: 0.50      # at-least-one seat in top 50% (loser side included)
   val_split: 0.10            # 10% of episodes for validation
   modes: ["1v1"]
