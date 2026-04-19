@@ -48,7 +48,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
     for mission in missions:
         target = world.planet_by_id[mission.target_id]
 
-        if mission.kind in ("single", "snipe", "reinforce", "crash_exploit"):
+        if mission.kind in ("single", "snipe", "reinforce", "crash_exploit", "harass"):
             option = mission.options[0]
 
             if mission.kind == "reinforce":
@@ -75,7 +75,7 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
             if send_limit < missing:
                 continue
 
-            if mission.kind in ("snipe", "crash_exploit"):
+            if mission.kind in ("snipe", "crash_exploit", "harass"):
                 send = missing
             elif mission.kind == "reinforce":
                 send = min(send_limit, missing + REINFORCE_SAFETY_MARGIN)

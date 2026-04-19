@@ -13,6 +13,7 @@ from ..core.types import Mission
 from ..core.world_model import WorldModel
 from .capture import build_capture_and_snipe_missions
 from .crash_exploit import build_crash_exploit_missions
+from .harass import build_harass_missions
 from .reinforcement import build_reinforcement_missions
 from .swarm import build_swarm_missions
 
@@ -49,6 +50,7 @@ def collect_missions(
     )
 
     missions.extend(build_crash_exploit_missions(world, planned_commitments, modes))
+    missions.extend(build_harass_missions(world, planned_commitments, modes))
 
     return missions
 
