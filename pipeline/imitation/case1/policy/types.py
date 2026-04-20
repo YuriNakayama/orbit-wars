@@ -14,6 +14,9 @@ class BatchFeatures:
     my_planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — owner == player
     target_mask: torch.Tensor  # (B, MAX_PLANETS) bool — valid target candidates
     global_feats: torch.Tensor  # (B, GLOBAL_FEAT_DIM)
+    template_ctx: (
+        torch.Tensor
+    )  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM) per-source template scores
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from pipeline.imitation.case1.policy.model import (
     build_model,
     count_parameters,
 )
-from pipeline.imitation.case1.policy.templates import NUM_TEMPLATES
+from pipeline.imitation.case1.policy.templates import NUM_TEMPLATES, TEMPLATE_CTX_DIM
 from pipeline.imitation.case1.policy.types import BatchFeatures
 
 
@@ -30,12 +30,14 @@ def _make_batch(b: int = 2, num_valid: int = 5) -> BatchFeatures:
     my_planet_mask[:, 0] = True  # only slot 0 is mine
     target_mask = planet_mask & ~my_planet_mask
     global_feats = torch.randn(b, GLOBAL_FEAT_DIM)
+    template_ctx = torch.zeros(b, MAX_PLANETS, TEMPLATE_CTX_DIM)
     return BatchFeatures(
         planet_feats=planet_feats,
         planet_mask=planet_mask,
         my_planet_mask=my_planet_mask,
         target_mask=target_mask,
         global_feats=global_feats,
+        template_ctx=template_ctx,
     )
 
 
@@ -66,9 +68,10 @@ def test_target_logits_finite() -> None:
     assert torch.all(torch.isfinite(out.target_logits))
 
 
-def test_param_count_under_100k() -> None:
+def test_param_count_under_kaggle_limit() -> None:
     n = count_parameters(DeepSetsPolicy())
-    assert n < 100_000, f"too many params: {n}"
+    # state_dict still fits Kaggle's 1 MB submission ceiling (verified separately).
+    assert n < 250_000, f"too many params: {n}"
 
 
 def test_state_dict_under_1mb() -> None:

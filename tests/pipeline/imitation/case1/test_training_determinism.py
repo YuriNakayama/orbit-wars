@@ -13,6 +13,7 @@ from pipeline.imitation.case1.policy.featurizer import (
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
+from pipeline.imitation.case1.policy.templates import TEMPLATE_CTX_DIM
 from pipeline.imitation.case1.training.train import train
 
 pytestmark = pytest.mark.slow
@@ -42,6 +43,9 @@ def _make_mini_parquet(path: Path, n: int, seed: int) -> None:
                 "planet_mask": [bool(j < 8) for j in range(MAX_PLANETS)],
                 "my_planet_mask": [bool(j < 4) for j in range(MAX_PLANETS)],
                 "target_mask": [bool(4 <= j < 8) for j in range(MAX_PLANETS)],
+                "template_ctx": rng.standard_normal(MAX_PLANETS * TEMPLATE_CTX_DIM)
+                .astype(np.float32)
+                .tolist(),
                 "from_multihot": from_multihot,
                 "target_per_src": target_per_src,
                 "ships_per_src": ships_per_src,

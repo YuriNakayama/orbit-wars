@@ -140,6 +140,7 @@ def _build_frame(
     planet_mask = batch.planet_mask[0].numpy().astype(np.bool_)
     my_planet_mask = batch.my_planet_mask[0].numpy().astype(np.bool_)
     target_mask = batch.target_mask[0].numpy().astype(np.bool_)
+    template_ctx = batch.template_ctx[0].numpy().astype(np.float32)
 
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
     planets = [_build_planet(row) for row in raw_planets]
@@ -186,6 +187,7 @@ def _build_frame(
         "planet_mask": planet_mask.tolist(),
         "my_planet_mask": my_planet_mask.tolist(),
         "target_mask": target_mask.tolist(),
+        "template_ctx": template_ctx.reshape(-1).tolist(),
         "from_multihot": from_multihot.tolist(),
         "target_per_src": target_per_src.tolist(),
         "ships_per_src": ships_per_src.tolist(),
@@ -265,6 +267,7 @@ def _empty_schema() -> dict[str, pl.DataType]:
         "planet_mask": pl.List(pl.Boolean),
         "my_planet_mask": pl.List(pl.Boolean),
         "target_mask": pl.List(pl.Boolean),
+        "template_ctx": pl.List(pl.Float32),
         "from_multihot": pl.List(pl.Boolean),
         "target_per_src": pl.List(pl.Int32),
         "ships_per_src": pl.List(pl.Int32),

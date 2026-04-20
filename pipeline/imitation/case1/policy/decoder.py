@@ -47,8 +47,15 @@ def decode(
     snapshot: WorldSnapshot,
     obs: dict[str, Any],
     from_threshold: float = 0.5,
+    min_fire_topk: int = 2,
 ) -> list[list[int | float]]:
-    """Greedy decode: per-source from-prob gate → template → ships."""
+    """Greedy decode: per-source from-prob gate → template → ships.
+
+    `min_fire_topk` guarantees the top-K my_planets by from_prob always pass the
+    threshold gate, so the agent never sits idle when from_prob is uniformly
+    suppressed (observed: median from_prob ≈ 0.01 makes a fixed threshold lock
+    out 80%+ of turns).
+    """
     from_prob = torch.sigmoid(output.from_logits[0])  # (P,)
     target_argmax = output.target_logits[0].argmax(dim=-1)  # (P,) template id
     ships_argmax = output.ships_logits[0].argmax(dim=-1)  # (P,)
@@ -95,15 +102,16 @@ def decode(
     committed: dict[int, int] = dict(incoming_friendly)
     actions: list[list[int | float]] = []
 
-    # Decide source order: highest from-prob first (greedy commitment).
-    src_with_prob: list[tuple[float, int]] = []
+    # Rank all my_planets by from-prob; keep those above threshold AND the top-K
+    # regardless of threshold (guarantees the agent always has fire candidates).
+    ranked: list[tuple[float, int]] = []
     for src_pid in snapshot.my_planet_ids:
         slot = snapshot.planet_ids.index(src_pid)
         prob = float(from_prob[slot].item())
-        if prob < from_threshold:
-            continue
-        src_with_prob.append((prob, src_pid))
-    src_with_prob.sort(key=lambda x: -x[0])
+        ranked.append((prob, src_pid))
+    ranked.sort(key=lambda x: -x[0])
+    keep_n = max(min_fire_topk, sum(1 for p, _ in ranked if p >= from_threshold))
+    src_with_prob = ranked[:keep_n]
 
     for _, src_pid in src_with_prob:
         slot = snapshot.planet_ids.index(src_pid)

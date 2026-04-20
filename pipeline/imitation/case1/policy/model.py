@@ -21,7 +21,7 @@ import torch
 from torch import nn
 
 from .featurizer import GLOBAL_FEAT_DIM, MAX_PLANETS, PLANET_FEAT_DIM
-from .templates import NUM_TEMPLATES
+from .templates import NUM_TEMPLATES, TEMPLATE_CTX_DIM
 from .types import BatchFeatures, PolicyOutput
 
 # featurizer column layout (PLANET_FEAT_DIM == 11)
@@ -40,7 +40,7 @@ KNN_K = 8
 class ModelConfig:
     planet_in_dim: int = PLANET_FEAT_DIM
     global_in_dim: int = GLOBAL_FEAT_DIM
-    hidden: int = 64
+    hidden: int = 128
     ships_buckets: int = 4
 
 
@@ -177,8 +177,11 @@ class GraphUNetPolicy(nn.Module):
         self.dec0 = GraphConv(h, h)
         # Heads (input: per-node h with ctx concatenated)
         self.from_head = nn.Linear(h + h, 1)
+        # target head additionally consumes per-source template context features
+        # so the network can learn "which template's resolved planet is best for
+        # this source in this state" rather than collapsing to a single argmax.
         self.target_head = nn.Sequential(
-            nn.Linear(h + h, h),
+            nn.Linear(h + h + TEMPLATE_CTX_DIM, h),
             nn.ReLU(),
             nn.Linear(h, NUM_TEMPLATES),
         )
@@ -233,7 +236,8 @@ class GraphUNetPolicy(nn.Module):
         from_logits = self.from_head(h_with_ctx).squeeze(-1)
         from_logits = from_logits.masked_fill(~batch.my_planet_mask, float("-inf"))
 
-        target_logits = self.target_head(h_with_ctx)  # (B, P, NUM_TEMPLATES)
+        target_input = torch.cat([h_with_ctx, batch.template_ctx], dim=-1)
+        target_logits = self.target_head(target_input)  # (B, P, NUM_TEMPLATES)
 
         ships_logits = self.ships_head(h_with_ctx)
 

@@ -67,7 +67,7 @@ def test_threshold_blocks_no_action() -> None:
         template_per_src=[T_NEAREST_NEUTRAL_LOW] + [0] * (MAX_PLANETS - 1),
         ships_bucket_per_src=[2] + [0] * (MAX_PLANETS - 1),
     )
-    actions = decode(out, snap, obs, from_threshold=0.5)
+    actions = decode(out, snap, obs, from_threshold=0.5, min_fire_topk=0)
     assert actions == []
 
 

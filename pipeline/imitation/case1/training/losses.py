@@ -26,6 +26,10 @@ class LossWeights:
     target_w: float = 1.0
     ships_w: float = 0.5
     from_pos_weight: float = 8.5  # neg/pos ratio in training data
+    from_focal_gamma: float = 2.0  # focal loss focusing on hard examples
+    from_focal_alpha: float = 0.75  # weight on positive class
+    target_label_smoothing: float = 0.1
+    target_entropy_bonus: float = 0.05  # weight on -H(softmax(target_logits))
 
 
 @dataclass(frozen=True)
@@ -49,19 +53,23 @@ def compute_loss(
 ) -> LossReport:
     device = from_multihot.device
 
-    # ---- from head: multi-hot BCE over my_planet_mask ----
+    # ---- from head: multi-hot focal loss over my_planet_mask ----
+    # Focal loss (Lin et al. 2017): alpha-balanced, gamma-focused BCE.
+    # Solves the problem that median(sigmoid(from_logit)) was 0.01 in iter1-3
+    # because easy negatives dominate the gradient under plain BCE+pos_weight.
     from_target = from_multihot.float()
-    # `output.from_logits` already has -inf at non-my slots (masked in model.py).
-    # Replace with 0 only for the BCE compute path; mask out non-my contributions
-    # afterwards so the gradient stays on valid sources.
     valid = my_planet_mask
     safe_logits = torch.where(valid, output.from_logits, torch.zeros_like(from_target))
-    pos_weight = torch.tensor(weights.from_pos_weight, device=device)
-    bce = nn.functional.binary_cross_entropy_with_logits(
-        safe_logits, from_target, reduction="none", pos_weight=pos_weight
+    bce_per_elem = nn.functional.binary_cross_entropy_with_logits(
+        safe_logits, from_target, reduction="none"
     )
-    bce = bce * valid.float()
-    from_loss = bce.sum() / valid.float().sum().clamp_min(1.0)
+    p = torch.sigmoid(safe_logits)
+    p_t = from_target * p + (1.0 - from_target) * (1.0 - p)
+    alpha_t = weights.from_focal_alpha * from_target + (1.0 - weights.from_focal_alpha) * (1.0 - from_target)
+    focal_factor = alpha_t * (1.0 - p_t).clamp_min(1e-6).pow(weights.from_focal_gamma)
+    focal = focal_factor * bce_per_elem
+    focal = focal * valid.float()
+    from_loss = focal.sum() / valid.float().sum().clamp_min(1.0)
 
     # ---- gather "fired" rows across the batch ----
     fired_mask = from_multihot & valid  # (B, P)
@@ -72,7 +80,17 @@ def compute_loss(
         target_labels = target_per_src[b_idx, src_idx]  # (N,)
         ships_labels = ships_per_src[b_idx, src_idx]  # (N,)
 
-        target_loss = nn.functional.cross_entropy(sel_target_logits, target_labels)
+        target_loss = nn.functional.cross_entropy(
+            sel_target_logits,
+            target_labels,
+            label_smoothing=weights.target_label_smoothing,
+        )
+        if weights.target_entropy_bonus > 0.0:
+            log_p = nn.functional.log_softmax(sel_target_logits, dim=-1)
+            p = log_p.exp()
+            entropy = -(p * log_p).sum(dim=-1).mean()
+            # subtract entropy → encourages higher entropy (anti-collapse)
+            target_loss = target_loss - weights.target_entropy_bonus * entropy
         ships_loss = nn.functional.cross_entropy(sel_ships_logits, ships_labels)
 
         target_pred = sel_target_logits.argmax(dim=-1)

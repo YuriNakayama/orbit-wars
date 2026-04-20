@@ -14,7 +14,7 @@ data:
 model:
   planet_in_dim: 11
   global_in_dim: 6
-  hidden: 64
+  hidden: 128
   ships_buckets: 4
 
 train:
@@ -27,6 +27,11 @@ train:
     from: 1.0
     target: 2.0
     ships: 0.5
+    from_pos_weight: 8.5
+    from_focal_gamma: 2.0
+    from_focal_alpha: 0.25
+    target_label_smoothing: 0.1
+    target_entropy_bonus: 0.05
   weights_out: pipeline/imitation/case1/policy/weights.pt
 
 inference:

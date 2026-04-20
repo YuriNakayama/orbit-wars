@@ -59,6 +59,7 @@ def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
         my_planet_mask=sample.my_planet_mask,
         target_mask=sample.target_mask,
         global_feats=sample.global_feats,
+        template_ctx=sample.template_ctx,
     )
 
 
@@ -159,6 +160,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         target_w=float(lw_cfg.get("target", 1.0)),
         ships_w=float(lw_cfg.get("ships", 0.5)),
         from_pos_weight=float(lw_cfg.get("from_pos_weight", 8.5)),
+        from_focal_gamma=float(lw_cfg.get("from_focal_gamma", 2.0)),
+        from_focal_alpha=float(lw_cfg.get("from_focal_alpha", 0.75)),
+        target_label_smoothing=float(lw_cfg.get("target_label_smoothing", 0.1)),
+        target_entropy_bonus=float(lw_cfg.get("target_entropy_bonus", 0.05)),
     )
 
     weights_out = Path(train_cfg["weights_out"])

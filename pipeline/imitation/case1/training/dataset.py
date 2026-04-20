@@ -15,6 +15,7 @@ from pipeline.imitation.case1.policy.featurizer import (
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
+from pipeline.imitation.case1.policy.templates import TEMPLATE_CTX_DIM
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class Sample:
     planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     my_planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     target_mask: torch.Tensor  # (MAX_PLANETS,) bool
+    template_ctx: torch.Tensor  # (MAX_PLANETS, TEMPLATE_CTX_DIM)
     from_multihot: torch.Tensor  # (MAX_PLANETS,) bool — True for fired-from sources
     target_per_src: (
         torch.Tensor
@@ -39,6 +41,7 @@ class BatchedSample:
     planet_mask: torch.Tensor  # (B, MAX_PLANETS)
     my_planet_mask: torch.Tensor  # (B, MAX_PLANETS)
     target_mask: torch.Tensor  # (B, MAX_PLANETS)
+    template_ctx: torch.Tensor  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM)
     from_multihot: torch.Tensor  # (B, MAX_PLANETS) bool
     target_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
     ships_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
@@ -65,6 +68,9 @@ class CaseThreeDataset(Dataset[Sample]):
         self._target_mask = np.array(
             self._df["target_mask"].to_list(), dtype=np.bool_
         ).reshape(-1, MAX_PLANETS)
+        self._template_ctx = np.array(
+            self._df["template_ctx"].to_list(), dtype=np.float32
+        ).reshape(-1, MAX_PLANETS, TEMPLATE_CTX_DIM)
         self._from_multihot = np.array(
             self._df["from_multihot"].to_list(), dtype=np.bool_
         ).reshape(-1, MAX_PLANETS)
@@ -86,6 +92,7 @@ class CaseThreeDataset(Dataset[Sample]):
             planet_mask=torch.from_numpy(self._planet_mask[idx]),
             my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
             target_mask=torch.from_numpy(self._target_mask[idx]),
+            template_ctx=torch.from_numpy(self._template_ctx[idx]),
             from_multihot=torch.from_numpy(self._from_multihot[idx]),
             target_per_src=torch.from_numpy(self._target_per_src[idx]),
             ships_per_src=torch.from_numpy(self._ships_per_src[idx]),
@@ -100,6 +107,7 @@ def collate(samples: list[Sample]) -> BatchedSample:
         planet_mask=torch.stack([s.planet_mask for s in samples]),
         my_planet_mask=torch.stack([s.my_planet_mask for s in samples]),
         target_mask=torch.stack([s.target_mask for s in samples]),
+        template_ctx=torch.stack([s.template_ctx for s in samples]),
         from_multihot=torch.stack([s.from_multihot for s in samples]),
         target_per_src=torch.stack([s.target_per_src for s in samples]),
         ships_per_src=torch.stack([s.ships_per_src for s in samples]),

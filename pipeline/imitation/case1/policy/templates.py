@@ -121,6 +121,60 @@ def resolve_template(
     return chosen.id if chosen is not None else None
 
 
+PER_TEMPLATE_FEATS = 5  # score, prox, ship_adv, tgt_is_enemy, tgt_is_mine
+TEMPLATE_CTX_DIM = NUM_TEMPLATES * PER_TEMPLATE_FEATS  # 8 * 5 = 40
+
+
+def template_context_features(
+    src_row: list[float],
+    planet_rows: list[list[float]],
+    player: int,
+    board_size: float = 100.0,
+) -> list[float]:
+    """Per-source per-template feature block (NUM_TEMPLATES * PER_TEMPLATE_FEATS).
+
+    For each template we resolve its target and emit PER_TEMPLATE_FEATS features:
+    [score, prox, ship_adv, tgt_is_enemy, tgt_is_mine]. This gives the model
+    *per-source* awareness of which physical target each template would fire at
+    (the geometry information missing in the original 1-scalar context — the
+    cause of target-collapse identified in 2026-04-19 diagnosis).
+    The NO_OP slot's "score" is set to 1.0 when no template has a candidate.
+    """
+    out = [0.0] * TEMPLATE_CTX_DIM
+    src = _to_p(src_row)
+    planets = [_to_p(r) for r in planet_rows]
+    planets_by_id = {p.id: p for p in planets}
+
+    diag = math.sqrt(2.0) * board_size
+    any_candidate = False
+    for tid in range(NUM_TEMPLATES - 1):
+        rid = resolve_template(tid, src_row, planet_rows, player)
+        if rid is None or rid == src.id:
+            continue
+        tgt = planets_by_id.get(rid)
+        if tgt is None:
+            continue
+        d = math.sqrt((src.x - tgt.x) ** 2 + (src.y - tgt.y) ** 2)
+        prox = max(0.0, 1.0 - d / diag)
+        ratio = (src.ships + 1.0) / (tgt.ships + 1.0)
+        ship_adv = ratio / (1.0 + ratio)
+        prod_norm = min(1.0, tgt.production / 10.0)
+        score = 0.5 * prox + 0.3 * ship_adv + 0.2 * prod_norm
+        tgt_is_enemy = 1.0 if (tgt.owner != player and tgt.owner != -1) else 0.0
+        tgt_is_mine = 1.0 if tgt.owner == player else 0.0
+        base = tid * PER_TEMPLATE_FEATS
+        out[base + 0] = float(score)
+        out[base + 1] = float(prox)
+        out[base + 2] = float(ship_adv)
+        out[base + 3] = tgt_is_enemy
+        out[base + 4] = tgt_is_mine
+        any_candidate = True
+
+    no_op_base = (NUM_TEMPLATES - 1) * PER_TEMPLATE_FEATS
+    out[no_op_base + 0] = 0.0 if any_candidate else 1.0
+    return out
+
+
 def classify_actual_target(
     src_row: list[float],
     target_row: list[float],

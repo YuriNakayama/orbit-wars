@@ -15,6 +15,7 @@ from pipeline.imitation.case1.policy.featurizer import (
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
+from pipeline.imitation.case1.policy.templates import TEMPLATE_CTX_DIM
 from pipeline.imitation.case1.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
@@ -43,6 +44,9 @@ def _make_fixture_parquet(path: Path, n: int = 10) -> None:
                 "planet_mask": [True] * MAX_PLANETS,
                 "my_planet_mask": [bool(j == 0) for j in range(MAX_PLANETS)],
                 "target_mask": [bool(j != 0) for j in range(MAX_PLANETS)],
+                "template_ctx": rng.standard_normal(MAX_PLANETS * TEMPLATE_CTX_DIM)
+                .astype(np.float32)
+                .tolist(),
                 "from_multihot": from_multihot,
                 "target_per_src": target_per_src,
                 "ships_per_src": ships_per_src,
@@ -66,6 +70,7 @@ def test_dataset_len_and_getitem(fixture_parquet: Path) -> None:
     assert isinstance(sample, Sample)
     assert sample.planet_feats.shape == (MAX_PLANETS, PLANET_FEAT_DIM)
     assert sample.global_feats.shape == (GLOBAL_FEAT_DIM,)
+    assert sample.template_ctx.shape == (MAX_PLANETS, TEMPLATE_CTX_DIM)
     assert sample.planet_mask.dtype == torch.bool
     assert sample.from_multihot.dtype == torch.bool
     assert int(sample.target_per_src[0].item()) == 4
@@ -80,6 +85,7 @@ def test_dataloader_batch_shapes(fixture_parquet: Path) -> None:
     assert batch.planet_feats.shape == (4, MAX_PLANETS, PLANET_FEAT_DIM)
     assert batch.global_feats.shape == (4, GLOBAL_FEAT_DIM)
     assert batch.planet_mask.shape == (4, MAX_PLANETS)
+    assert batch.template_ctx.shape == (4, MAX_PLANETS, TEMPLATE_CTX_DIM)
     assert batch.from_multihot.shape == (4, MAX_PLANETS)
     assert batch.target_per_src.shape == (4, MAX_PLANETS)
     assert batch.ships_per_src.shape == (4, MAX_PLANETS)
