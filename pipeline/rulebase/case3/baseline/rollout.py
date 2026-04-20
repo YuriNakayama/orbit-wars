@@ -65,9 +65,7 @@ def _mission_value(world: WorldModel, mission: Mission, horizon: int) -> float:
     owner = timeline["owner_at"].get(final_turn, target.owner)
     ships = float(timeline["ships_at"].get(final_turn, float(target.ships)))
     if owner == world.player:
-        return ships + float(target.production) * max(
-            0, horizon - int(option.turns)
-        )
+        return ships + float(target.production) * max(0, horizon - int(option.turns))
     return 0.0
 
 
@@ -229,9 +227,7 @@ def _target_delta(world: WorldModel, mission: Mission, horizon: int) -> float:
         return 0.0
 
     base_arrivals = list(world.predicted_arrivals.get(mission.target_id, []))
-    with_send = base_arrivals + [
-        (int(option.turns), world.player, int(option.needed))
-    ]
+    with_send = base_arrivals + [(int(option.turns), world.player, int(option.needed))]
 
     def evaluate(arrivals: list[tuple[int, int, int]]) -> float:
         timeline = simulate_planet_timeline(target, arrivals, world.player, horizon)
@@ -293,8 +289,9 @@ def rollout_reorder(missions: list[Mission], world: WorldModel) -> list[Mission]
         for idx, mission in enumerate(candidates):
             option = mission.options[0] if mission.options else None
             if option is None:
-                scored.append((-_baseline_net_ships(world, horizon),
-                               -mission.score, idx, mission))
+                scored.append(
+                    (-_baseline_net_ships(world, horizon), -mission.score, idx, mission)
+                )
                 continue
             src = world.planet_by_id.get(option.src_id)
             enemy_arrivals = _enemy_reaction_arrivals(
