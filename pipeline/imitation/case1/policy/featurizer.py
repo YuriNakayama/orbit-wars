@@ -11,6 +11,7 @@ from typing import Any
 
 import torch
 
+from .templates import TEMPLATE_CTX_DIM, template_context_features
 from .types import BatchFeatures, WorldSnapshot
 
 PLANET_FEAT_DIM = 11
@@ -73,6 +74,7 @@ def featurize(obs: Any) -> tuple[BatchFeatures, WorldSnapshot]:
     planet_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
     my_planet_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
     target_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
+    template_ctx = torch.zeros((MAX_PLANETS, TEMPLATE_CTX_DIM), dtype=torch.float32)
 
     planet_ids: list[int] = []
     my_planet_ids: list[int] = []
@@ -144,6 +146,11 @@ def featurize(obs: Any) -> tuple[BatchFeatures, WorldSnapshot]:
         if is_mine:
             my_planet_mask[slot] = True
             my_planet_ids.append(int(pid))
+            ctx = template_context_features(
+                list(raw_planets[slot]), raw_planets, player, BOARD_SIZE
+            )
+            for j in range(TEMPLATE_CTX_DIM):
+                template_ctx[slot, j] = ctx[j]
         if not is_mine:
             target_mask[slot] = True
         planet_ids.append(int(pid))
@@ -184,6 +191,7 @@ def featurize(obs: Any) -> tuple[BatchFeatures, WorldSnapshot]:
         my_planet_mask=my_planet_mask.unsqueeze(0),
         target_mask=target_mask.unsqueeze(0),
         global_feats=global_feats.unsqueeze(0),
+        template_ctx=template_ctx.unsqueeze(0),
     )
     snapshot = WorldSnapshot(
         planet_ids=tuple(planet_ids),

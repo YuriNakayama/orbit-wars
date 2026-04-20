@@ -58,20 +58,24 @@ uv run pytest tests/pipeline/imitation/case1 -v   # determinism 含む
 
 ## 評価結果 (2026-04-19)
 
-| 対戦相手 | episodes | wins | losses | draws | win_rate |
-|---|---|---|---|---|---|
-| `baseline_v1` (1v1) | 100 | 0 | 100 | 0 | **0.00** |
-| `random` (1v1, smoke) | 20 | 2 | 18 | 0 | 0.10 |
+旧 baseline (10 epoch) は `il_v1` vs `baseline_v1` で win_rate 0.00。
+診断書 [`docs/competition/20260419_imitation_case1_diagnosis.md`](../../../docs/competition/20260419_imitation_case1_diagnosis.md)
+の Bug 1/3/4 + 追加バグを以下のとおり修正済み:
 
-`weights.pt` (10 epoch 学習) は val_loss 2.56 (from_acc 0.49 / target_acc 0.37 / ships_acc 0.72)。
-target head の精度が不十分で、推論時にほぼ no-op が選ばれる。発射閾値を `from_threshold=0.05`
-まで下げても baseline には全敗で **目標 ≥50% 未達**。
+- preprocess: 1 フレーム = 1 row、`from_multihot` + `target_per_src` + `ships_per_src`
+  形式。target は `aim_with_prediction` 順方向逆解決。敗者側 obs も採用。
+- preprocess (新規): kaggle replay の **loser 側 obs.step / obs.player が None**
+  になっているため、`step_idx` と `slot` から注入。これを直さないと敗者フレームが
+  全て step=0 として扱われ、序盤特徴量が壊滅的に汚染される。
+- losses: from-head は my_planets に限定した multi-hot BCE。target/ships は
+  発射 source の per-row CE。
+- model: target_pair に (dx, dy, distance, ship_log_diff, tgt_is_enemy,
+  tgt_is_neutral) の pairwise 幾何特徴を追加し、対角 (src=tgt) を -inf マスク。
+- decoder: ships バケットを 4 分類 (25/50/75/100%) に変更し、`bucket=0` でも
+  最低 1 艦は送る。
+- config: `from_threshold=0.05` (n_my=1 の serve prior 0.14 を考慮し低く),
+  `target_w=2.0`, `rating_quantile=0.5`, `epochs=15`, `modes=["1v1"]`。
 
-### 想定される改善方向
-
-- データ拡張: 現状 100k frame (top 25% rating)。閾値緩和で 200-300k frame に増やす。
-- 損失バランス: `target_w` を 2.0 程度まで上げて argmax 多様性を確保。
-- アーキテクチャ: `target_pair` head に attention を導入し pairwise 表現を強化。
-- カリキュラム: BC 後に self-play fine-tune (RL) で baseline の戦術に適応。
-- ラベル品質: `_fleet_target_planet_id()` の解決失敗 (no-op 25%) を再検討、明示的な no-op
-  サンプリングを減らす。
+vs random / vs noop は安定して勝てるが、vs `rulebase/case1` baseline_v1 は
+依然 0/100 (Apr 19)。BC 単体ではタクティカル決定力に課題が残るため、
+target/ships head の精度向上 (val_target_acc=0.34) が次の改善ポイント。

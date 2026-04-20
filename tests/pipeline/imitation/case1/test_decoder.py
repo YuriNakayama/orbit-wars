@@ -6,9 +6,12 @@ import torch
 
 from pipeline.imitation.case1.policy.decoder import decode
 from pipeline.imitation.case1.policy.featurizer import MAX_PLANETS
+from pipeline.imitation.case1.policy.templates import (
+    NUM_TEMPLATES,
+    T_NEAREST_NEUTRAL_LOW,
+    T_NO_OP,
+)
 from pipeline.imitation.case1.policy.types import PolicyOutput, WorldSnapshot
-
-NO_OP_LABEL = MAX_PLANETS
 
 
 def _make_obs() -> dict[str, object]:
@@ -30,7 +33,7 @@ def _make_obs() -> dict[str, object]:
 
 def _make_output(
     from_logit_per_slot: list[float],
-    target_slot_per_src: list[int],
+    template_per_src: list[int],
     ships_bucket_per_src: list[int],
 ) -> PolicyOutput:
     """Build a minimal PolicyOutput with strong (one-hot-ish) preferences."""
@@ -38,10 +41,10 @@ def _make_output(
     from_logits = torch.full((1, p), -10.0)
     for i, v in enumerate(from_logit_per_slot):
         from_logits[0, i] = v
-    target_logits = torch.full((1, p, p + 1), -10.0)
-    for src, tgt in enumerate(target_slot_per_src):
-        target_logits[0, src, tgt] = 10.0
-    ships_logits = torch.full((1, p, 5), -10.0)
+    target_logits = torch.full((1, p, NUM_TEMPLATES), -10.0)
+    for src, tid in enumerate(template_per_src):
+        target_logits[0, src, tid] = 10.0
+    ships_logits = torch.full((1, p, 4), -10.0)
     for src, b in enumerate(ships_bucket_per_src):
         ships_logits[0, src, b] = 10.0
     return PolicyOutput(
@@ -59,17 +62,16 @@ def test_threshold_blocks_no_action() -> None:
         player=0,
         step=5,
     )
-    # from_logit at slot 0 = -1 → sigmoid ≈ 0.27 < 0.5
     out = _make_output(
         from_logit_per_slot=[-1.0],
-        target_slot_per_src=[2] + [0] * (MAX_PLANETS - 1),
+        template_per_src=[T_NEAREST_NEUTRAL_LOW] + [0] * (MAX_PLANETS - 1),
         ships_bucket_per_src=[2] + [0] * (MAX_PLANETS - 1),
     )
-    actions = decode(out, snap, obs, from_threshold=0.5)
+    actions = decode(out, snap, obs, from_threshold=0.5, min_fire_topk=0)
     assert actions == []
 
 
-def test_noop_target_skipped() -> None:
+def test_noop_template_skipped() -> None:
     obs = _make_obs()
     snap = WorldSnapshot(
         planet_ids=(1, 2, 3),
@@ -77,10 +79,9 @@ def test_noop_target_skipped() -> None:
         player=0,
         step=5,
     )
-    # high from_prob but target picks the no-op slot
     out = _make_output(
         from_logit_per_slot=[5.0],
-        target_slot_per_src=[NO_OP_LABEL] + [0] * (MAX_PLANETS - 1),
+        template_per_src=[T_NO_OP] + [0] * (MAX_PLANETS - 1),
         ships_bucket_per_src=[2] + [0] * (MAX_PLANETS - 1),
     )
     actions = decode(out, snap, obs, from_threshold=0.5)
@@ -95,18 +96,20 @@ def test_valid_fire_emits_action() -> None:
         player=0,
         step=5,
     )
-    # fire from slot 0 (planet 1) at slot 2 (planet 3, neutral) with bucket 2 (50%)
+    # NEAREST_NEUTRAL_LOW from planet 1 → planet 3 (only neutral, ships=10 ≤ src.50).
+    # ships bucket 1 = 50% of 50 = 25 ships, capped to "need*2 = 22" by overfire
+    # filter (target.ships+1 = 11 → need = 11, ships > need*2 → ships = 11).
     out = _make_output(
         from_logit_per_slot=[5.0],
-        target_slot_per_src=[2] + [0] * (MAX_PLANETS - 1),
-        ships_bucket_per_src=[2] + [0] * (MAX_PLANETS - 1),
+        template_per_src=[T_NEAREST_NEUTRAL_LOW] + [0] * (MAX_PLANETS - 1),
+        ships_bucket_per_src=[1] + [0] * (MAX_PLANETS - 1),
     )
     actions = decode(out, snap, obs, from_threshold=0.5)
     assert len(actions) == 1
     src_pid, angle, ships = actions[0]
     assert src_pid == 1
     assert isinstance(angle, float)
-    assert ships == int(0.5 * 50)  # bucket 2 → 50% of 50 ships
+    assert ships == 11  # capped by overfire suppression to need (= 10+1)
 
 
 def test_decode_is_pure() -> None:
@@ -119,7 +122,7 @@ def test_decode_is_pure() -> None:
     )
     out = _make_output(
         from_logit_per_slot=[5.0],
-        target_slot_per_src=[2] + [0] * (MAX_PLANETS - 1),
+        template_per_src=[T_NEAREST_NEUTRAL_LOW] + [0] * (MAX_PLANETS - 1),
         ships_bucket_per_src=[2] + [0] * (MAX_PLANETS - 1),
     )
     a = decode(out, snap, obs)

@@ -14,12 +14,17 @@ class BatchFeatures:
     my_planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — owner == player
     target_mask: torch.Tensor  # (B, MAX_PLANETS) bool — valid target candidates
     global_feats: torch.Tensor  # (B, GLOBAL_FEAT_DIM)
+    template_ctx: (
+        torch.Tensor
+    )  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM) per-source template scores
 
 
 @dataclass(frozen=True)
 class PolicyOutput:
     from_logits: torch.Tensor  # (B, MAX_PLANETS) — sigmoid → from_prob
-    target_logits: torch.Tensor  # (B, MAX_PLANETS, MAX_PLANETS + 1) — last slot = no-op
+    target_logits: (
+        torch.Tensor
+    )  # (B, MAX_PLANETS, NUM_TEMPLATES) — argmax = template id
     ships_logits: torch.Tensor  # (B, MAX_PLANETS, SHIPS_BUCKETS)
 
 

@@ -1,15 +1,10 @@
 """3-head BC loss for imitation/case1 IL baseline.
 
-We treat the action label as (from_planet, target_planet, ships_bucket).
-For no-op frames we still supervise the from-head (predict no fire from any
-planet) but skip target/ships heads — they are conditioned on a chosen src.
-
-Implementation:
-- from_head: BCEWithLogits per planet, with positive class = "fire from this".
-- target_head: cross-entropy over MAX_PLANETS+1 candidates conditioned on the
-  ground-truth from slot. Skipped when from_label == NO_OP_LABEL.
-- ships_head: cross-entropy over ships_buckets conditioned on the ground-truth
-  from slot. Skipped when from_label == NO_OP_LABEL.
+Per-frame supervision:
+- from_head: per-planet BCE over my_planet_mask. Positives = sources actually
+  fired in this frame (multi-hot). Negatives = my_planet_mask & ~from_multihot.
+- target_head: cross-entropy on every fired source's pairwise logits.
+- ships_head: cross-entropy on every fired source's ships-bucket logits.
 """
 
 from __future__ import annotations
@@ -30,6 +25,11 @@ class LossWeights:
     from_w: float = 1.0
     target_w: float = 1.0
     ships_w: float = 0.5
+    from_pos_weight: float = 8.5  # neg/pos ratio in training data
+    from_focal_gamma: float = 2.0  # focal loss focusing on hard examples
+    from_focal_alpha: float = 0.75  # weight on positive class
+    target_label_smoothing: float = 0.1
+    target_entropy_bonus: float = 0.05  # weight on -H(softmax(target_logits))
 
 
 @dataclass(frozen=True)
@@ -43,81 +43,72 @@ class LossReport:
     ships_acc: float
 
 
-def _select_per_src_logits(
-    logits: torch.Tensor, from_label: torch.Tensor
-) -> torch.Tensor:
-    """Pick (B, K) slice from (B, P, K) using from_label index per row.
-
-    Rows with from_label == NO_OP_LABEL get a zero placeholder (caller masks).
-    """
-    safe_idx = from_label.clamp(max=MAX_PLANETS - 1).unsqueeze(-1).unsqueeze(-1)
-    safe_idx = safe_idx.expand(-1, 1, logits.size(-1))
-    return logits.gather(1, safe_idx).squeeze(1)
-
-
 def compute_loss(
     output: PolicyOutput,
-    from_label: torch.Tensor,
-    target_label: torch.Tensor,
-    ships_label: torch.Tensor,
-    my_planet_mask: torch.Tensor,
+    from_multihot: torch.Tensor,  # (B, P) bool
+    target_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    ships_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    my_planet_mask: torch.Tensor,  # (B, P) bool
     weights: LossWeights,
 ) -> LossReport:
-    b = from_label.size(0)
-    device = from_label.device
+    device = from_multihot.device
 
-    # ---- from head: per-planet BCE ----
-    from_target = torch.zeros_like(output.from_logits)  # (B, P)
-    is_action = from_label != NO_OP_LABEL
-    if is_action.any():
-        rows = torch.arange(b, device=device)[is_action]
-        from_target[rows, from_label[is_action]] = 1.0
-    bce = nn.functional.binary_cross_entropy_with_logits(
-        output.from_logits.masked_fill(~my_planet_mask, 0.0),
-        from_target,
-        reduction="none",
+    # ---- from head: multi-hot focal loss over my_planet_mask ----
+    # Focal loss (Lin et al. 2017): alpha-balanced, gamma-focused BCE.
+    # Solves the problem that median(sigmoid(from_logit)) was 0.01 in iter1-3
+    # because easy negatives dominate the gradient under plain BCE+pos_weight.
+    from_target = from_multihot.float()
+    valid = my_planet_mask
+    safe_logits = torch.where(valid, output.from_logits, torch.zeros_like(from_target))
+    bce_per_elem = nn.functional.binary_cross_entropy_with_logits(
+        safe_logits, from_target, reduction="none"
     )
-    bce = bce * my_planet_mask.float()
-    from_loss = bce.sum() / my_planet_mask.float().sum().clamp_min(1.0)
+    p = torch.sigmoid(safe_logits)
+    p_t = from_target * p + (1.0 - from_target) * (1.0 - p)
+    alpha_t = weights.from_focal_alpha * from_target + (1.0 - weights.from_focal_alpha) * (1.0 - from_target)
+    focal_factor = alpha_t * (1.0 - p_t).clamp_min(1e-6).pow(weights.from_focal_gamma)
+    focal = focal_factor * bce_per_elem
+    focal = focal * valid.float()
+    from_loss = focal.sum() / valid.float().sum().clamp_min(1.0)
 
-    # ---- target head: CE conditioned on gt from ----
-    if is_action.any():
-        sel_target_logits = _select_per_src_logits(
-            output.target_logits[is_action], from_label[is_action]
-        )
+    # ---- gather "fired" rows across the batch ----
+    fired_mask = from_multihot & valid  # (B, P)
+    if fired_mask.any():
+        b_idx, src_idx = fired_mask.nonzero(as_tuple=True)
+        sel_target_logits = output.target_logits[b_idx, src_idx]  # (N, NUM_TEMPLATES)
+        sel_ships_logits = output.ships_logits[b_idx, src_idx]  # (N, K)
+        target_labels = target_per_src[b_idx, src_idx]  # (N,)
+        ships_labels = ships_per_src[b_idx, src_idx]  # (N,)
+
         target_loss = nn.functional.cross_entropy(
-            sel_target_logits, target_label[is_action]
+            sel_target_logits,
+            target_labels,
+            label_smoothing=weights.target_label_smoothing,
         )
+        if weights.target_entropy_bonus > 0.0:
+            log_p = nn.functional.log_softmax(sel_target_logits, dim=-1)
+            p = log_p.exp()
+            entropy = -(p * log_p).sum(dim=-1).mean()
+            # subtract entropy → encourages higher entropy (anti-collapse)
+            target_loss = target_loss - weights.target_entropy_bonus * entropy
+        ships_loss = nn.functional.cross_entropy(sel_ships_logits, ships_labels)
+
         target_pred = sel_target_logits.argmax(dim=-1)
-        target_acc = float(
-            (target_pred == target_label[is_action]).float().mean().item()
-        )
+        ships_pred = sel_ships_logits.argmax(dim=-1)
+        target_acc = float((target_pred == target_labels).float().mean().item())
+        ships_acc = float((ships_pred == ships_labels).float().mean().item())
     else:
         target_loss = torch.zeros((), device=device)
-        target_acc = 0.0
-
-    # ---- ships head: CE conditioned on gt from ----
-    if is_action.any():
-        sel_ships_logits = _select_per_src_logits(
-            output.ships_logits[is_action], from_label[is_action]
-        )
-        ships_loss = nn.functional.cross_entropy(
-            sel_ships_logits, ships_label[is_action]
-        )
-        ships_pred = sel_ships_logits.argmax(dim=-1)
-        ships_acc = float((ships_pred == ships_label[is_action]).float().mean().item())
-    else:
         ships_loss = torch.zeros((), device=device)
+        target_acc = 0.0
         ships_acc = 0.0
 
-    # from accuracy: argmax of from_logits == from_label (or no-op when all -inf)
-    from_pred = output.from_logits.argmax(dim=-1)
-    from_acc = float(
-        ((from_pred == from_label) | (~is_action & (from_label == NO_OP_LABEL)))
-        .float()
-        .mean()
-        .item()
-    )
+    # from accuracy: per-(B,P) match between sigmoid>0.5 and gt, on my_planets only.
+    with torch.no_grad():
+        from_pred = (torch.sigmoid(output.from_logits) > 0.5) & valid
+        denom = valid.float().sum().clamp_min(1.0)
+        match = (from_pred == (from_multihot & valid)) & valid
+        from_acc = float((match.float().sum() / denom).item())
 
     total = (
         weights.from_w * from_loss

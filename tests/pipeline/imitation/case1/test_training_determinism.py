@@ -13,7 +13,7 @@ from pipeline.imitation.case1.policy.featurizer import (
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case1.training.preprocess import NO_OP_LABEL
+from pipeline.imitation.case1.policy.templates import TEMPLATE_CTX_DIM
 from pipeline.imitation.case1.training.train import train
 
 pytestmark = pytest.mark.slow
@@ -24,9 +24,14 @@ def _make_mini_parquet(path: Path, n: int, seed: int) -> None:
     rows = []
     for i in range(n):
         is_noop = bool(i % 4 == 0)
-        from_label = NO_OP_LABEL if is_noop else int(rng.integers(0, 4))
-        target_label = NO_OP_LABEL if is_noop else int(rng.integers(0, 4))
-        ships_label = 0 if is_noop else int(rng.integers(0, 5))
+        from_multihot = [False] * MAX_PLANETS
+        target_per_src = [-1] * MAX_PLANETS
+        ships_per_src = [-1] * MAX_PLANETS
+        if not is_noop:
+            src = int(rng.integers(0, 4))
+            from_multihot[src] = True
+            target_per_src[src] = int(rng.integers(0, 8))
+            ships_per_src[src] = int(rng.integers(0, 4))
         rows.append(
             {
                 "planet_feats": rng.standard_normal(MAX_PLANETS * PLANET_FEAT_DIM)
@@ -38,9 +43,12 @@ def _make_mini_parquet(path: Path, n: int, seed: int) -> None:
                 "planet_mask": [bool(j < 8) for j in range(MAX_PLANETS)],
                 "my_planet_mask": [bool(j < 4) for j in range(MAX_PLANETS)],
                 "target_mask": [bool(4 <= j < 8) for j in range(MAX_PLANETS)],
-                "from_label": from_label,
-                "target_label": target_label,
-                "ships_label": ships_label,
+                "template_ctx": rng.standard_normal(MAX_PLANETS * TEMPLATE_CTX_DIM)
+                .astype(np.float32)
+                .tolist(),
+                "from_multihot": from_multihot,
+                "target_per_src": target_per_src,
+                "ships_per_src": ships_per_src,
                 "is_noop": is_noop,
             }
         )
@@ -60,7 +68,7 @@ def _build_cfg(
             "planet_in_dim": PLANET_FEAT_DIM,
             "global_in_dim": GLOBAL_FEAT_DIM,
             "hidden": 16,
-            "ships_buckets": 5,
+            "ships_buckets": 4,
         },
         "train": {
             "batch_size": 64,
