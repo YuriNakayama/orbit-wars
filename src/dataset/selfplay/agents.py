@@ -18,6 +18,7 @@ AGENT_REGISTRY: dict[str, str] = {
     "baseline_v2": "pipeline.rulebase.case2.baseline.agent:agent",
     "baseline_v3": "pipeline.rulebase.case3.baseline.agent:agent",
     "baseline_v4": "pipeline.rulebase.case4.baseline.agent:agent",
+    "baseline_v5": "pipeline.rulebase.case5.baseline.agent:agent",
     "case0": "pipeline.rulebase.case0.main:agent",
     "il_v1": "pipeline.imitation.case1.policy.agent:agent",
     "random": "random",
