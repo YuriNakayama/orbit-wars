@@ -1,15 +1,17 @@
 ---
 paths:
-  - "pipeline/**"
+  - "backend/pipeline/**"
 ---
 
-# Pipeline (pipeline/<category>/case*) Submission Rules
+# Pipeline (backend/pipeline/<category>/case*) Submission Rules
 
-Kaggle 提出用 `pipeline/<category>/case*/` ディレクトリを **ローカル実行と Kaggle 提出後実行の両方で** 動作させるための規約。`<category>` は現状 `rulebase/` (case0〜case2) と `imitation/` (case1) の 2 系統。case 番号は **category ごとに独立** に 1 から振る (rulebase/case1 と imitation/case1 は別物)。
+Kaggle 提出用 `backend/pipeline/<category>/case*/` ディレクトリを **ローカル実行と Kaggle 提出後実行の両方で** 動作させるための規約。`<category>` は現状 `rulebase/` (case0〜case2) と `imitation/` (case1) の 2 系統。case 番号は **category ごとに独立** に 1 から振る (rulebase/case1 と imitation/case1 は別物)。
+
+以下、パス表記は `backend/` を起点とした相対パス（`pipeline/<category>/case<N>/...`）で統一する。`uv run ...` / `dev/submit ...` の実行ディレクトリは `backend/` であることが前提。
 
 ## 前提: submit 基盤の仕様
 
-`src/submit/validator.py` と `src/submit/packager.py` が課す制約:
+`backend/src/submit/validator.py` と `backend/src/submit/packager.py` が課す制約:
 
 1. `pipeline/<category>/<case>/main.py` が **必ず case ディレクトリ直下に存在** し、トップレベルで `agent(obs)` を公開すること (`importlib.util.spec_from_file_location` で直接ロードされる)。
 2. packager は `case_dir` 配下の `*.py`, `*.json`, `*.yaml`, `*.pkl`, `*.pt` 等を **case_dir 起点の相対パス構造のまま** tar.gz 化する。
@@ -49,7 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 **代わりに `Path.cwd()` を使う**。Kaggle は tar.gz を展開したディレクトリが cwd になる前提で実装されているため、`Path.cwd()` なら確実に展開先を指す。
 
-この挙動差により **ローカル validator (`src/submit/validator.py`) は cwd を移動しないため `Path.cwd()` 方式の main.py は dry-run で `ModuleNotFoundError` になる**。ローカルで `--dry-run` を通したい場合は `--skip-validation` を併用するか、自前で `cd pipeline/<category>/case<N>` してから exec する。ローカルの他経路 (`src/dataset/selfplay/agents.py` 経由の `pipeline.<category>.case<N>.baseline.agent:agent` import) は main.py を経由しないので影響を受けない。
+この挙動差により **ローカル validator (`backend/src/submit/validator.py`) は cwd を移動しないため `Path.cwd()` 方式の main.py は dry-run で `ModuleNotFoundError` になる**。ローカルで `--dry-run` を通したい場合は `--skip-validation` を併用するか、自前で `cd backend/pipeline/<category>/case<N>` してから exec する。ローカルの他経路 (`backend/src/dataset/selfplay/agents.py` 経由の `pipeline.<category>.case<N>.baseline.agent:agent` import) は main.py を経由しないので影響を受けない。
 
 ### 2) サブパッケージ内部は相対 import に統一する
 
@@ -85,7 +87,7 @@ __all__ = ["agent", "build_world"]
 
 ## ローカル側の import 経路 (不変)
 
-以下はローカルで使い続けて良い (相対 import 化後も解決可能):
+以下はローカルで使い続けて良い (相対 import 化後も解決可能)。パスは `backend/` からの相対:
 
 - `src/dataset/selfplay/agents.py` — `"baseline_v1": "pipeline.rulebase.case1.baseline.agent:agent"`
 - `pipeline/<category>/case<N>/evaluation/*.py` — `from pipeline.<category>.case<N>.baseline import agent as baseline_agent`
@@ -102,18 +104,18 @@ __all__ = ["agent", "build_world"]
 5. `dev/submit <category>/case<N> --dry-run -m "..."` を実行し、validator が `main.py` をロードして `env.run([agent, "random"])` が通ることを確認。
 6. `pytest tests/pipeline/<category>/case<N>` が通ることを確認してから本番提出。
 
-## 提出アーカイブの除外 (`pipeline/.submitignore`)
+## 提出アーカイブの除外 (`backend/pipeline/.submitignore`)
 
-packager は `pipeline/.submitignore` を読んで tar.gz から除外するパスを決定する。**全 category / 全 case 共通** で効く (pipeline ルート直下に 1 ファイルのみ)。
+packager は `backend/pipeline/.submitignore` を読んで tar.gz から除外するパスを決定する。**全 category / 全 case 共通** で効く (pipeline ルート直下に 1 ファイルのみ)。
 
 ### 配置と書式
 
-- 配置: `pipeline/.submitignore` (pipeline ルート直下、1 ファイルのみ)
+- 配置: `backend/pipeline/.submitignore` (pipeline ルート直下、1 ファイルのみ)
 - 書式: gitignore 互換サブセット
   - 行頭 `#` はコメント、空行は無視
   - 末尾 `/` はディレクトリ指定 (配下全ファイルを除外)
   - それ以外は `fnmatch` でパス / ファイル名にマッチ
-- パスは **case_dir 相対** で評価される (例: `eda/` は `pipeline/rulebase/case1/eda/` に効く)
+- パスは **case_dir 相対** で評価される (例: `eda/` は `backend/pipeline/rulebase/case1/eda/` に効く)
 
 ### 標準除外リスト (本リポジトリ)
 
@@ -150,17 +152,21 @@ configs/
 
 Kaggle Orbit Wars は 1 日 5 提出制限だが、`SubmissionStatus.ERROR` (validation 失敗) はクォータに含まれない。つまり **validation が通らない提出は再挑戦可能** なので、エラー時は Kaggle Web UI のログを確認して原因を特定し、即座に再提出してよい。
 
-`src/submit/` はクォータのローカルチェックを行わない (Kaggle 側が消費上限に達していれば submit が失敗するだけで、ローカル側の集計タイミングズレによる誤判定を避けるため)。現在の提出数は `uv run python -m submit submissions` で確認する。
+`backend/src/submit/` はクォータのローカルチェックを行わない (Kaggle 側が消費上限に達していれば submit が失敗するだけで、ローカル側の集計タイミングズレによる誤判定を避けるため)。現在の提出数は `backend/` で `uv run python -m submit submissions` で確認する。
 
 ## 検証コマンド
 
+以下は `backend/` で実行する (ルートから実行する場合は `dev/submit` / `dev/test-backend` を使う):
+
 ```bash
+cd backend
+
 # ローカル import 経路確認
 uv run python -c "from pipeline.rulebase.case1.baseline.agent import agent; print(agent)"
 
 # Kaggle 側 import 経路シミュレーション (main.py を直接ロードする validator と同等)
 uv run python -m submit submit rulebase/case1 --dry-run -m "dry-run verification"
 
-# 提出前チェックスイート
-dev/test-backend
+# 提出前チェックスイート (リポジトリルートから)
+cd .. && dev/test-backend
 ```

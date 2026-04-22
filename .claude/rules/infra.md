@@ -15,33 +15,36 @@ paths:
 
 ## Scope
 
-Orbit Wars 本体の提出物は Kaggle 側で実行されるため、`infra/` は **学習基盤（GPU / 大規模自己対戦クラスタ等）を必要とする場合にのみ** 利用する。現時点では未使用でも、将来のクラウド学習環境を想定した共通ルールをここに残す。
+Orbit Wars 本体の提出物は Kaggle 側で実行されるため、`infra/` は **AWS 等のクラウドリソース（学習基盤・データストレージ・CI 実行環境など）を Terraform で管理する場合にのみ** 利用する。
 
 ## Module Structure
 
-レイヤ化したモジュール構成を推奨:
+このリポジトリでは以下のレイヤ構成を採用している（単数形に統一）:
 
 ```
 infra/
-  environments/          Environment configs (dev, staging, prod, state)
+  environment/           Environment configs (dev, staging, prod)
     dev/
       main.tf
       variables.tf
       outputs.tf
       terraform.tfvars   (gitignored)
-    staging/
-    prod/
-  modules/
+    staging/             (必要になったら追加)
+    prod/                (必要になったら追加)
+  module/                再利用可能な共有モジュール
     foundation/          Core infrastructure (networking, IAM)
     platform/            Platform services (compute, storage, monitoring)
-    applications/        Application-specific stacks (training jobs, replay store)
+    application/         Application-specific stacks (training jobs, replay store)
 ```
+
+- `environment/<env>/` が Terraform の root module。`terraform init / plan / apply` はこのディレクトリで実行する。
+- `module/` 配下は環境から参照される再利用モジュール。単独では apply しない。
 
 ### Module Design Principles
 
-- Clearly separate responsibilities (foundation, platform, applications)
+- Clearly separate responsibilities (foundation, platform, application)
 - Do not define `provider` blocks in shared modules
-- Define `required_providers` in root modules
+- Define `required_providers` in root modules (`environment/<env>/`)
 - Manage inter-module dependencies using `outputs`
 
 ## Resource Naming

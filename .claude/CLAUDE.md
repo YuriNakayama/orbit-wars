@@ -28,25 +28,31 @@ kaggle_environments   env.step()
 ## Folder Structure
 
 ```
-src/
-  dataset/              対戦ログ管理 (schema / storage / selfplay / kaggle)
-  submit/               Kaggle 提出 (archive / validator / uploader)
-pipeline/
-  rulebase/             ルールベース戦略パイプライン
-    case0/              単純スナイパー (参考実装)
-    case1/              baseline_v1
-      eda/              観測データの探索的分析
-    case2/              baseline_v2
-  imitation/            模倣学習パイプライン
-    case1/              DeepSets BC
-tests/                  Pytest unit tests
-data/                   3 層構造 (lake / processed / mart) + submissions (gitignore)
-dev/                    Development scripts
+backend/                Python 実装一式 (pyproject.toml / uv.lock はここ)
+  src/
+    dataset/            対戦ログ管理 (schema / storage / selfplay / kaggle)
+    submit/             Kaggle 提出 (archive / validator / uploader)
+  pipeline/
+    rulebase/           ルールベース戦略パイプライン
+      case0/            単純スナイパー (参考実装)
+      case1/            baseline_v1
+        eda/            観測データの探索的分析
+      case2/            baseline_v2
+    imitation/          模倣学習パイプライン
+      case1/            DeepSets BC
+  tests/                Pytest unit tests
+infra/                  Terraform によるインフラ管理 (AWS 等)
+  environment/          環境別 root module (dev / staging / prod)
+  module/               再利用可能な共有モジュール
+data/                   3 層構造 (lake / processed / mart) + submissions (gitignore, メインリポジトリへの symlink)
+dev/                    Development scripts (内部で cd backend して uv を起動)
 docs/
   competition/          コンペ仕様まとめ（abstract.md 等）
   plans/                Feature plans
   research/             Research prompts and outputs
 ```
+
+Python の `uv run ...` は `backend/` 配下で実行する前提です。ルートから直接実行する場合は `dev/*` を使うか `cd backend` してください。
 
 ## Commands
 
@@ -78,9 +84,9 @@ Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kag
 
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
-| `.claude/rules/backend.md` | `src/**`, `tests/**` | Python実装、pytest、ruff/mypy設定 |
-| `.claude/rules/pipeline.md` | `pipeline/**` | case ディレクトリの submit 構造 (main.py + 相対import + sys.path) |
-| `.claude/rules/infra.md` | `infra/**` | Terraform / クラウド学習基盤（使用時のみ） |
+| `.claude/rules/backend.md` | `backend/src/**`, `backend/tests/**` | Python実装、pytest、ruff/mypy設定 |
+| `.claude/rules/pipeline.md` | `backend/pipeline/**` | case ディレクトリの submit 構造 (main.py + 相対import + sys.path) |
+| `.claude/rules/infra.md` | `infra/**` | Terraform / クラウド基盤（AWS 等） |
 | `.claude/rules/security.md` | Always loaded | コミット、シークレット、CI/CD |
 
 ## Response Language

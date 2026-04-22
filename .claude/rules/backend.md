@@ -1,10 +1,12 @@
 ---
 paths:
-  - "src/**"
-  - "tests/**"
+  - "backend/src/**"
+  - "backend/tests/**"
 ---
 
 # Backend Rules
+
+Python の実装は `backend/` 配下に集約されています。`pyproject.toml` / `uv.lock` / `.python-version` は `backend/` 直下にあり、`uv run ...` 系のコマンドは `backend/` で実行することを前提にします。
 
 ## General Principles
 
@@ -26,7 +28,7 @@ paths:
 Orbit Wars エージェントの共通ライブラリとして以下のモジュール構成を想定:
 
 ```
-src/
+backend/src/
   agents/          提出用エージェント（Kaggle Submission entrypoint）
   env/             kaggle-environments ラッパー、自己対戦ユーティリティ
   features/        観測→特徴量、軌道予測、脅威評価
@@ -116,6 +118,7 @@ uv run mypy .
 - Use Fixtures for common setup
 - Minimize use of mock and patch — keep close to actual behavior
 - Each test should be executable independently
+- テストは `backend/tests/` に `backend/src/` の構造をミラーして配置
 - エージェントのテストでは `kaggle_environments.make("orbit_wars")` を使ってシナリオを構築
 
 ```python

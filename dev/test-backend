@@ -3,7 +3,7 @@
 # format check → lint → type check → pytest
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../backend"
 
 if [ "${CI:-}" = "true" ]; then
   RUFF_FORMAT="--output-format=github"
