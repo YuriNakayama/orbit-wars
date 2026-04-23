@@ -87,6 +87,17 @@ artifacts/
 data/
 !data/**/*.md
 
+# DVC
+/.dvc/tmp
+/.dvc/config.local
+/.dvc/cache
+
+# DVC-managed weights (formerly git-tracked)
+backend/pipeline/imitation/case1/policy/weights.pt
+
+# Terraform vars (contain secrets)
+infra/**/terraform.tfvars
+
 # kaggle credentials
 .kaggle/
 kaggle.json
