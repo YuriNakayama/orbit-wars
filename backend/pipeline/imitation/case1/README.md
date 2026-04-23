@@ -16,30 +16,49 @@ pipeline/imitation/case1/
 │   ├── model.py             # DeepSets policy
 │   ├── decoder.py           # PolicyOutput → action list
 │   ├── geometry.py          # aim_with_prediction (独立コピー)
-│   └── weights.pt           # 学習済み重み
+│   └── weights.pt           # 学習済み重み (DVC 管理、git untracked)
 ├── training/                # 開発用 (.submitignore)
 │   ├── preprocess.py        # replay → parquet
 │   ├── dataset.py           # torch Dataset
 │   ├── train.py             # BC 学習ループ
 │   └── losses.py            # 3-head CE loss
-├── evaluation/              # 開発用 (.submitignore)
-│   └── eval_vs_baseline.py
-└── configs/                 # 開発用 (.submitignore)
-    └── il_baseline.yaml
+└── evaluation/              # 開発用 (.submitignore)
+    └── eval_vs_baseline.py
 ```
+
+ハイパーパラメータはリポジトリルートの `params.yaml` に集約されており、
+CLI は `--config` 引数を持たず常に `params.yaml` を読みます。
 
 ## 手順
 
-```bash
-# 1) データ前処理 (replay → parquet)
-uv run python -m pipeline.imitation.case1.training.preprocess --config pipeline/imitation/case1/configs/il_baseline.yaml
+### DVC 経由 (推奨)
 
-# 2) 学習 (BC)
-uv run python -m pipeline.imitation.case1.training.train --config pipeline/imitation/case1/configs/il_baseline.yaml
+```bash
+# 全 pipeline を依存グラフで再実行（data/weights が最新なら skip）
+uv run --directory backend dvc repro
+
+# 単一 stage のみ
+uv run --directory backend dvc repro preprocess_imitation_case1
+uv run --directory backend dvc repro train_imitation_case1
+uv run --directory backend dvc repro eval_imitation_case1
+```
+
+### 直接実行
+
+```bash
+cd backend
+
+# 1) データ前処理 (replay → parquet)
+uv run python -m pipeline.imitation.case1.training.preprocess
+
+# 2) 学習 (BC) — weights.pt を上書き
+uv run python -m pipeline.imitation.case1.training.train
 
 # 3) ローカル評価 (vs rulebase/case1 baseline_v1, 100 戦)
 uv run python -m pipeline.imitation.case1.evaluation.eval_vs_baseline --episodes 100 --seed 0
 ```
+
+パラメータを変更したい場合はリポジトリルートの `params.yaml` を編集します。
 
 ## テスト
 

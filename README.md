@@ -108,7 +108,47 @@ dev/format           # Code formatting (ruff)
 dev/lint             # Static analysis (ruff + mypy)
 dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
+dev/dvc-setup        # Configure local DVC (cache dir + AWS profile)
 ```
+
+## Data / Model Management (DVC)
+
+学習データ・前処理済み parquet・モデル重み・評価メトリクスは **DVC + S3** で版管理します。
+Git はコードと `dvc.yaml` / `dvc.lock` / `params.yaml` を追跡し、実データ本体は S3 に push/pull します。
+
+### 初回セットアップ
+
+```bash
+# 1) AWS CLI に orbit-wars プロファイルを用意しておく (infra/environment/dev で作成した IAM user の key)
+# 2) リポジトリ側のローカル設定 (cache 共有 + profile)
+dev/dvc-setup
+
+# 3) データ取得 (S3 remote から)
+uv run --directory backend dvc pull
+```
+
+### Pipeline 再実行 (`dvc repro`)
+
+```bash
+uv run --directory backend dvc repro                            # 全 stage 依存グラフで差分再実行
+uv run --directory backend dvc repro preprocess_imitation_case1 # 単 stage
+uv run --directory backend dvc dag                              # DAG 描画
+uv run --directory backend dvc status                           # 差分一覧
+```
+
+変更した成果物を S3 に共有:
+
+```bash
+uv run --directory backend dvc push
+git add dvc.lock params.yaml data/mart/imitation/case1/eval_metrics.json
+git commit -m "..."
+```
+
+Stage 定義は `dvc.yaml`、パラメータは `params.yaml`（Python CLI は `--config` を持たず params.yaml を固定読み）。
+
+### インフラ (S3 bucket + IAM)
+
+Terraform 管理。詳細は [`infra/environment/dev/README.md`](infra/environment/dev/README.md) を参照。
 
 ## Evaluation Framework (`backend/src/dataset/`)
 
