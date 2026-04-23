@@ -282,15 +282,29 @@ def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
     return 2
 
 
+def _repo_root() -> Path:
+    """Locate the repository root (parent of `backend/`)."""
+    here = Path(__file__).resolve()
+    for p in here.parents:
+        if (p / "backend").is_dir() and (p / ".git").exists():
+            return p
+    raise RuntimeError("repo root not found from " + str(here))
+
+
+def _abspath(rel: str | Path) -> Path:
+    p = Path(rel)
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
 def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     data_cfg = cfg["data"]
     modes = list(data_cfg.get("modes", ["1v1"]))
     rating_quantile = float(data_cfg.get("rating_quantile", 0.75))
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
-    out_train = Path(data_cfg["out_train"])
-    out_val = Path(data_cfg["out_val"])
-    index_path = Path(data_cfg["kaggle_index_root"])
+    out_train = _abspath(data_cfg["out_train"])
+    out_val = _abspath(data_cfg["out_val"])
+    index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
 
     index = pl.read_parquet(index_path)
@@ -348,21 +362,21 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 app = typer.Typer(add_completion=False)
 
 
+def _load_params() -> dict[str, Any]:
+    path = _repo_root() / "params.yaml"
+    with path.open() as f:
+        loaded = yaml.safe_load(f)
+    assert isinstance(loaded, dict), "params.yaml must be a mapping"
+    return loaded
+
+
 @app.command()
-def main(
-    config: Path = typer.Option(  # noqa: B008
-        Path("pipeline/imitation/case1/configs/il_baseline.yaml"),
-        "--config",
-        "-c",
-        help="YAML config path",
-    ),
-) -> None:
-    """CLI: run preprocess with the given config."""
+def main() -> None:
+    """CLI: run preprocess using repo-root params.yaml."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    with config.open() as f:
-        cfg = yaml.safe_load(f)
+    cfg = _load_params()
     report = preprocess(cfg)
     typer.echo(
         f"rating_cutoff={report.rating_cutoff:.2f} "

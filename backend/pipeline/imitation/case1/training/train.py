@@ -119,8 +119,8 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     train_cfg = cfg["train"]
     model_cfg = cfg.get("model", {})
 
-    train_ds = CaseThreeDataset(Path(data_cfg["out_train"]))
-    val_ds = CaseThreeDataset(Path(data_cfg["out_val"]))
+    train_ds = CaseThreeDataset(_abspath(data_cfg["out_train"]))
+    val_ds = CaseThreeDataset(_abspath(data_cfg["out_val"]))
 
     g = torch.Generator()
     g.manual_seed(seed)
@@ -166,7 +166,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         target_entropy_bonus=float(lw_cfg.get("target_entropy_bonus", 0.05)),
     )
 
-    weights_out = Path(train_cfg["weights_out"])
+    weights_out = _abspath(train_cfg["weights_out"])
     weights_out.parent.mkdir(parents=True, exist_ok=True)
 
     best_val = float("inf")
@@ -200,21 +200,35 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    """Locate the repository root (parent of `backend/`)."""
+    here = Path(__file__).resolve()
+    for p in here.parents:
+        if (p / "backend").is_dir() and (p / ".git").exists():
+            return p
+    raise RuntimeError("repo root not found from " + str(here))
+
+
+def _abspath(rel: str | Path) -> Path:
+    p = Path(rel)
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
+def _load_params() -> dict[str, Any]:
+    path = _repo_root() / "params.yaml"
+    with path.open() as f:
+        loaded = yaml.safe_load(f)
+    assert isinstance(loaded, dict), "params.yaml must be a mapping"
+    return loaded
+
+
 @app.command()
-def main(
-    config: Path = typer.Option(  # noqa: B008
-        Path("pipeline/imitation/case1/configs/il_baseline.yaml"),
-        "--config",
-        "-c",
-        help="YAML config path",
-    ),
-) -> None:
-    """CLI: run training with the given config."""
+def main() -> None:
+    """CLI: run training using repo-root params.yaml."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    with config.open() as f:
-        cfg = yaml.safe_load(f)
+    cfg = _load_params()
     report = train(cfg)
     typer.echo(
         f"best_val_loss={report.best_val_loss:.4f} "
