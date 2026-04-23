@@ -8,9 +8,13 @@ Kaggle の simulation runtime は `main.py` の実行に特化しており、非
 from __future__ import annotations
 
 import fnmatch
+import logging
+import subprocess
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_INCLUDE_PATTERNS: tuple[str, ...] = (
     "*.py",
@@ -41,6 +45,64 @@ SUBMITIGNORE_FILENAME = ".submitignore"
 
 class PackagingError(RuntimeError):
     """パッケージング中に発生するエラー。"""
+
+
+def _find_repo_root(case_dir: Path) -> Path | None:
+    for p in case_dir.resolve().parents:
+        if (
+            (p / ".git").exists()
+            and (p / "backend").is_dir()
+            and (p / "dvc.yaml").exists()
+        ):
+            return p
+    return None
+
+
+def _dvc_managed_outs(repo_root: Path) -> set[Path]:
+    """`dvc.yaml` の outs に宣言された絶対パスを集める。"""
+    dvc_yaml = repo_root / "dvc.yaml"
+    if not dvc_yaml.is_file():
+        return set()
+    try:
+        import yaml  # local import to keep non-DVC flows independent
+    except ImportError:  # pragma: no cover
+        return set()
+    data = yaml.safe_load(dvc_yaml.read_text(encoding="utf-8")) or {}
+    stages = data.get("stages") or {}
+    outs: set[Path] = set()
+    for stage in stages.values():
+        for item in stage.get("outs") or []:
+            raw = item if isinstance(item, str) else next(iter(item.keys()))
+            outs.add((repo_root / raw).resolve())
+    return outs
+
+
+def ensure_dvc_artifacts(case_dir: Path) -> list[Path]:
+    """`dvc.yaml` outs のうち case_dir 配下にある **欠損ファイル** を dvc pull する。
+
+    存在するファイルには touch しない
+    （cache.type=symlink の read-only 保護を壊さない）。
+    """
+    repo_root = _find_repo_root(case_dir)
+    if repo_root is None:
+        return []
+    managed = _dvc_managed_outs(repo_root)
+    if not managed:
+        return []
+    case_dir_resolved = case_dir.resolve()
+    relevant = [p for p in managed if case_dir_resolved in p.parents]
+    missing = [p for p in relevant if not p.exists()]
+    if not missing:
+        return relevant
+
+    rels = [str(p.relative_to(repo_root)) for p in missing]
+    logger.info("dvc pull for submission artifacts: %s", rels)
+    subprocess.run(
+        ["uv", "run", "--directory", "backend", "dvc", "pull", *rels],
+        cwd=repo_root,
+        check=True,
+    )
+    return relevant
 
 
 def _timestamp() -> str:
@@ -137,6 +199,8 @@ def build_archive(
     main_py = case_dir / "main.py"
     if not main_py.is_file():
         raise PackagingError(f"main.py が見つかりません: {main_py}")
+
+    ensure_dvc_artifacts(case_dir)
 
     if single_file:
         return main_py

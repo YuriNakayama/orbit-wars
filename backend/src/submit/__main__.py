@@ -14,6 +14,7 @@ from submit import (
     confirm_submission,
     dry_run,
     ensure_credentials,
+    ensure_dvc_artifacts,
     kaggle_submit,
     poll,
     record,
@@ -86,6 +87,10 @@ def submit_cmd(  # noqa: PLR0913 — CLI オプションは並列
     console.print(f"case dir : {case_dir}")
     console.print(f"dry-run  : {dry_run_only}")
     console.print(f"mode     : {'single-file' if single_file else 'tar.gz'}")
+
+    console.print("\n[bold]0) DVC アーティファクト取得[/]")
+    pulled = ensure_dvc_artifacts(case_dir)
+    console.print(f"  対象: {len(pulled)} files")
 
     if not skip_validation:
         console.print("\n[bold]1) ローカルドライラン[/]")
