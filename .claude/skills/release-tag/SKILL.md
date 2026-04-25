@@ -1,5 +1,5 @@
 ---
-description: Create a release tag following git flow conventions
+description: Create a release tag on `main` following GitHub flow conventions (no release/* branch — tag the relevant `main` commit directly).
 ---
 
 # Release Tag Creation Instructions
@@ -104,13 +104,14 @@ Assuming the release preparation is complete and the `main` branch is up to date
 ### Release Flow
 
 ```
-develop → release/v*.*.* → main → create tag
+feature/* or fix/*  →  PR → merge to main  →  tag the main commit
 ```
 
-1. Create `release/v*.*.*` branch from `develop`
-2. Create PR targeting `main`, then merge
-3. Create tag from `main`
-4. For hotfixes: `main` → `hotfix/*` → merge to `main`, then back-merge to `develop`
+GitHub flow なので `develop` / `release/*` といった長命ブランチは存在しない。
+リリース対象の変更が `main` にマージされたら、その `main` のコミットに直接 semver タグを打つ。
+通常は HEAD だが、過去のコミットを指定したい場合は `git tag v<VERSION> <SHA>` で固定する。
+
+緊急修正も区別なし: `fix/*` ブランチからの PR を `main` にマージし、必要なら直後に新しいタグを打つ。
 
 ### Versioning Rules
 
