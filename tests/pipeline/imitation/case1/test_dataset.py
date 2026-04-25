@@ -77,6 +77,26 @@ def test_dataset_len_and_getitem(fixture_parquet: Path) -> None:
     assert int(sample.ships_per_src[0].item()) == 3 % 4
 
 
+def test_sample_weights_from_target_lifts_minority(fixture_parquet: Path) -> None:
+    ds = CaseThreeDataset(fixture_parquet)
+    # target_per_src[0] in the fixture = (i+1) % MAX_PLANETS — uniform over
+    # positions 1..MAX_PLANETS-1 except 0. Use a small num_classes so counts
+    # differ enough to test the inverse-frequency direction.
+    w = ds.sample_weights_from_target(num_classes=MAX_PLANETS, power=0.5)
+    assert w.shape == (len(ds),)
+    # Mean normalised to 1.0
+    assert abs(w.mean() - 1.0) < 1e-6
+    # All positive
+    assert (w > 0).all()
+
+
+def test_sample_weights_power_zero_is_uniform(fixture_parquet: Path) -> None:
+    ds = CaseThreeDataset(fixture_parquet)
+    w = ds.sample_weights_from_target(num_classes=MAX_PLANETS, power=0.0)
+    # With power=0, every fired-frame weight equals 1, so normalised mean=1.
+    assert np.allclose(w, 1.0)
+
+
 def test_dataloader_batch_shapes(fixture_parquet: Path) -> None:
     ds = CaseThreeDataset(fixture_parquet)
     loader = DataLoader(ds, batch_size=4, collate_fn=collate, shuffle=False)

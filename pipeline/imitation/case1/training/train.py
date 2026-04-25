@@ -23,16 +23,21 @@ import torch
 import typer
 import yaml
 from torch import optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from pipeline.imitation.case1.policy.model import DeepSetsPolicy, ModelConfig
+from pipeline.imitation.case1.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case1.policy.types import BatchFeatures
 from pipeline.imitation.case1.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     collate,
 )
-from pipeline.imitation.case1.training.losses import LossWeights, compute_loss
+from pipeline.imitation.case1.training.losses import (
+    LossWeights,
+    compute_class_weights,
+    compute_loss,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +129,38 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
     g = torch.Generator()
     g.manual_seed(seed)
+    # Optional minority-target oversampling (Phase 3-A1). When enabled we
+    # replace shuffling with WeightedRandomSampler so rare target templates
+    # (NEAREST_NEUTRAL, HIGHEST_PROD_NEUTRAL, ...) appear more often per epoch.
+    oversample_cfg = train_cfg.get("target_oversample", {}) or {}
+    use_target_oversample = bool(oversample_cfg.get("enabled", False))
+    target_sampler: WeightedRandomSampler | None = None
+    if use_target_oversample:
+        sample_w = train_ds.sample_weights_from_target(
+            num_classes=NUM_TEMPLATES,
+            power=float(oversample_cfg.get("power", 0.5)),
+            ignore_index=-1,
+            aggregate=str(oversample_cfg.get("aggregate", "mean")),
+        )
+        target_sampler = WeightedRandomSampler(
+            weights=sample_w.tolist(),
+            num_samples=len(train_ds),
+            replacement=True,
+            generator=g,
+        )
+        logger.info(json.dumps({
+            "target_oversample": {
+                "power": float(oversample_cfg.get("power", 0.5)),
+                "min_weight": round(float(sample_w.min()), 4),
+                "max_weight": round(float(sample_w.max()), 4),
+                "ratio_max_min": round(float(sample_w.max() / max(sample_w.min(), 1e-12)), 2),
+            }
+        }))
     train_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         train_ds,
         batch_size=int(train_cfg["batch_size"]),
-        shuffle=True,
+        shuffle=target_sampler is None,
+        sampler=target_sampler,
         collate_fn=collate,
         num_workers=int(train_cfg.get("num_workers", 0)),
         generator=g,
@@ -155,6 +188,39 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     )
 
     lw_cfg = train_cfg.get("loss_weights", {})
+
+    # Phase 2: compute per-class weights from train labels. Only "fired" rows
+    # (target/ships_per_src != -1) contribute. This is an O(N*P) scan done once
+    # at startup — cheaper than re-counting inside each epoch.
+    target_cw: torch.Tensor | None = None
+    ships_cw: torch.Tensor | None = None
+    if bool(lw_cfg.get("use_target_class_weights", False)):
+        tgt_all = torch.from_numpy(train_ds._target_per_src).flatten()  # type: ignore[attr-defined]
+        target_cw = compute_class_weights(
+            tgt_all,
+            num_classes=NUM_TEMPLATES,
+            beta=float(lw_cfg.get("target_class_weight_beta", 0.9999)),
+            ignore_index=-1,
+        )
+        logger.info(json.dumps({"target_class_weights": [round(float(x), 4) for x in target_cw.tolist()]}))
+    if bool(lw_cfg.get("use_ships_class_weights", False)):
+        ships_all = torch.from_numpy(train_ds._ships_per_src).flatten()  # type: ignore[attr-defined]
+        num_ships_buckets = int(model_cfg.get("ships_buckets", 4))
+        ships_cw = compute_class_weights(
+            ships_all,
+            num_classes=num_ships_buckets,
+            beta=float(lw_cfg.get("ships_class_weight_beta", 0.9999)),
+            ignore_index=-1,
+        )
+        logger.info(json.dumps({"ships_class_weights": [round(float(x), 4) for x in ships_cw.tolist()]}))
+
+    ships_focal_alpha_cfg = lw_cfg.get("ships_focal_alpha")
+    ships_focal_alpha: torch.Tensor | None = None
+    if ships_focal_alpha_cfg is not None:
+        ships_focal_alpha = torch.tensor(
+            [float(v) for v in ships_focal_alpha_cfg], dtype=torch.float32
+        )
+
     weights = LossWeights(
         from_w=float(lw_cfg.get("from", 1.0)),
         target_w=float(lw_cfg.get("target", 1.0)),
@@ -164,6 +230,11 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         from_focal_alpha=float(lw_cfg.get("from_focal_alpha", 0.75)),
         target_label_smoothing=float(lw_cfg.get("target_label_smoothing", 0.1)),
         target_entropy_bonus=float(lw_cfg.get("target_entropy_bonus", 0.05)),
+        target_class_weights=target_cw,
+        ships_class_weights=ships_cw,
+        ships_ordinal_smoothing=float(lw_cfg.get("ships_ordinal_smoothing", 0.0)),
+        ships_focal_gamma=float(lw_cfg.get("ships_focal_gamma", 0.0)),
+        ships_focal_alpha=ships_focal_alpha,
     )
 
     weights_out = Path(train_cfg["weights_out"])

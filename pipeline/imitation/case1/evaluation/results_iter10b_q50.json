@@ -1,0 +1,16 @@
+{
+  "episodes": 50.0,
+  "wins": 0.0,
+  "losses": 50.0,
+  "draws": 0.0,
+  "win_rate": 0.0,
+  "non_draw_win_rate": 0.0,
+  "win_rate_ci95_lo": 0.0,
+  "win_rate_ci95_hi": 0.07135003417431873,
+  "challenger": "il_v1",
+  "baseline": "baseline_v1",
+  "mode": "1v1",
+  "seed_start": 0.0,
+  "seed_end_exclusive": 50.0,
+  "label": "iter10b_q50"
+}
