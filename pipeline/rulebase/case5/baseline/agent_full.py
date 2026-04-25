@@ -137,6 +137,7 @@ from .core.config import (
     STATIC_NEUTRAL_VALUE_MULT,
     STATIC_TARGET_MARGIN,
     STATIC_TARGET_SCORE_MULT,
+    SWARM_MIN_PARTICIPANT_SHIPS,
     SWARM_SCORE_MULT,
     SWARM_VALUE_MULT,
     THREE_SOURCE_ETA_TOLERANCE,
@@ -1731,7 +1732,7 @@ def plan_moves(world, deadline=None):
                     target, global_needed, rough_turns, sa, world, modes, policy
                 ),
             )
-            if partial_cap >= PARTIAL_SOURCE_MIN_SHIPS:
+            if partial_cap >= SWARM_MIN_PARTICIPANT_SHIPS:
                 ps = world.best_probe_aim(
                     src.id,
                     target.id,
@@ -1836,6 +1837,11 @@ def plan_moves(world, deadline=None):
                 a, b = top[i], top[j]
                 if a.src_id == b.src_id:
                     continue
+                if (
+                    a.send_cap < SWARM_MIN_PARTICIPANT_SHIPS
+                    or b.send_cap < SWARM_MIN_PARTICIPANT_SHIPS
+                ):
+                    continue
                 tol = swarm_eta_tolerance((a, b), target, world)
                 if abs(a.turns - b.turns) > tol:
                     continue
@@ -1886,6 +1892,8 @@ def plan_moves(world, deadline=None):
                             return finalize()
                         trio = [top[i], top[j], top[k]]
                         if len({o.src_id for o in trio}) < 3:
+                            continue
+                        if any(o.send_cap < SWARM_MIN_PARTICIPANT_SHIPS for o in trio):
                             continue
                         ts = [o.turns for o in trio]
                         if max(ts) - min(ts) > THREE_SOURCE_ETA_TOLERANCE:
@@ -2119,6 +2127,8 @@ def plan_moves(world, deadline=None):
                     target.id in world.comet_ids
                     and target.production <= LOW_VALUE_COMET_PRODUCTION
                 ):
+                    continue
+                if not world.is_total_war and planned_commitments.get(target.id):
                     continue
                 seed = world.best_probe_aim(
                     src.id, target.id, sl, hints=(int(target.ships) + 1,)

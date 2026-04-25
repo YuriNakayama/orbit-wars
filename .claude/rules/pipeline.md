@@ -5,19 +5,19 @@ paths:
 
 # Pipeline (pipeline/<category>/case*) Submission Rules
 
-Kaggle 提出用 `pipeline/<category>/case*/` ディレクトリを **ローカル実行と Kaggle 提出後実行の両方で** 動作させるための規約。`<category>` は現状 `rulebase/` (case0〜case2) と `imitation/` (case1) の 2 系統。case 番号は **category ごとに独立** に 1 から振る (rulebase/case1 と imitation/case1 は別物)。
+Conventions for keeping `pipeline/<category>/case*/` directories runnable **both locally and on Kaggle after submission**. `<category>` currently has two families: `rulebase/` (case0–case2) and `imitation/` (case1). Case numbers are assigned **independently per category** starting from 1 (rulebase/case1 and imitation/case1 are unrelated).
 
-## 前提: submit 基盤の仕様
+## Premise: submit infrastructure constraints
 
-`src/submit/validator.py` と `src/submit/packager.py` が課す制約:
+Constraints imposed by `src/submit/validator.py` and `src/submit/packager.py`:
 
-1. `pipeline/<category>/<case>/main.py` が **必ず case ディレクトリ直下に存在** し、トップレベルで `agent(obs)` を公開すること (`importlib.util.spec_from_file_location` で直接ロードされる)。
-2. packager は `case_dir` 配下の `*.py`, `*.json`, `*.yaml`, `*.pkl`, `*.pt` 等を **case_dir 起点の相対パス構造のまま** tar.gz 化する。
-3. Kaggle 実行環境では tar.gz が展開された後、`main.py` が直接実行される。**`pipeline.<category>.<case>` という上位パッケージは展開先に存在しない** ため、`from pipeline.rulebase.case1.xxx import ...` のような絶対 import は ImportError になる。
+1. `pipeline/<category>/<case>/main.py` **must exist directly under the case directory** and expose `agent(obs)` at the top level (it is loaded directly via `importlib.util.spec_from_file_location`).
+2. The packager bundles `*.py`, `*.json`, `*.yaml`, `*.pkl`, `*.pt`, etc. under `case_dir` into a tar.gz **preserving the relative path structure rooted at `case_dir`**.
+3. On the Kaggle runtime, `main.py` is executed directly after the tar.gz is extracted. **The parent package `pipeline.<category>.<case>` does not exist** in the extracted directory, so absolute imports such as `from pipeline.rulebase.case1.xxx import ...` raise `ImportError`.
 
-## 必須パターン (案B: 相対 import + sys.path 注入)
+## Required pattern (Plan B: relative imports + sys.path injection)
 
-### 1) `pipeline/<category>/<case>/main.py` はエントリポイント専用に置く
+### 1) `pipeline/<category>/<case>/main.py` is an entrypoint only
 
 ```python
 # pipeline/<category>/caseN/main.py
@@ -32,42 +32,42 @@ from baseline.agent import agent  # noqa: E402
 __all__ = ["agent"]
 ```
 
-- `sys.path.insert(0, str(Path.cwd()))` で **実行時 cwd** をトップに追加 → Kaggle ランタイムが tar.gz を展開した作業ディレクトリから `baseline/` をトップレベル名で import できる。
-- `from baseline.agent import agent` は **ローカルでは使わない経路** (ローカルは `pipeline.rulebase.case1.baseline.agent` 等)。両方の import 解決を一つのコードで成立させる鍵。
+- `sys.path.insert(0, str(Path.cwd()))` adds the **runtime cwd** to the top, so `baseline/` becomes importable as a top-level name from the directory where Kaggle extracted the tar.gz.
+- `from baseline.agent import agent` is **a path that is not used locally** (locally we use e.g. `pipeline.rulebase.case1.baseline.agent`). This is the key trick that makes both import resolutions succeed from a single source.
 
-### `__file__` を使ってはいけない (2026-04-18 判明)
+### Do not use `__file__` (discovered 2026-04-18)
 
-Kaggle サンドボックスでは `__file__` / `Path(__file__).resolve().parent` に依存した sys.path 注入は **Validation Episode failed (`SubmissionStatus.ERROR`)** を引き起こす。以下の書き方は **禁止**:
+In the Kaggle sandbox, sys.path injection that depends on `__file__` / `Path(__file__).resolve().parent` causes **Validation Episode failed (`SubmissionStatus.ERROR`)**. The following patterns are **forbidden**:
 
 ```python
-# NG: Kaggle で Validation failed になる
+# NG: causes Validation failed on Kaggle
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ```
 
-理由 (推定): Kaggle の agent loader は展開ディレクトリを cwd にして main.py を起動するが、`__file__` は相対パス / symlink / `exec()` 経由など環境依存で化け、`.resolve()` 後のパスに `baseline/` が存在しないケースがある。
+Probable reason: Kaggle's agent loader sets cwd to the extracted directory before launching `main.py`, but `__file__` is environment-dependent (relative paths, symlinks, paths reached via `exec()`, etc.). After `.resolve()` the path may not contain `baseline/`.
 
-**代わりに `Path.cwd()` を使う**。Kaggle は tar.gz を展開したディレクトリが cwd になる前提で実装されているため、`Path.cwd()` なら確実に展開先を指す。
+**Use `Path.cwd()` instead.** Kaggle is implemented under the assumption that the extracted tar.gz directory is cwd, so `Path.cwd()` reliably points at the extraction directory.
 
-この挙動差により **ローカル validator (`src/submit/validator.py`) は cwd を移動しないため `Path.cwd()` 方式の main.py は dry-run で `ModuleNotFoundError` になる**。ローカルで `--dry-run` を通したい場合は `--skip-validation` を併用するか、自前で `cd pipeline/<category>/case<N>` してから exec する。ローカルの他経路 (`src/dataset/selfplay/agents.py` 経由の `pipeline.<category>.case<N>.baseline.agent:agent` import) は main.py を経由しないので影響を受けない。
+Because of this behavior gap, **the local validator (`src/submit/validator.py`) does not change cwd, so `main.py` written with the `Path.cwd()` pattern fails dry-run with `ModuleNotFoundError`**. To pass `--dry-run` locally, combine it with `--skip-validation`, or `cd pipeline/<category>/case<N>` manually before exec. Other local paths (such as `pipeline.<category>.case<N>.baseline.agent:agent` imported via `src/dataset/selfplay/agents.py`) bypass `main.py` and are therefore unaffected.
 
-### 2) サブパッケージ内部は相対 import に統一する
+### 2) Use relative imports inside subpackages
 
 ```python
 # pipeline/<category>/caseN/baseline/agent.py
 from .core.types import Fleet, Planet           # OK
 from .strategy import plan_moves                # OK
-from pipeline.rulebase.caseN.baseline.core.types import Fleet, Planet  # NG (Kaggle で解決不能)
+from pipeline.rulebase.caseN.baseline.core.types import Fleet, Planet  # NG (unresolvable on Kaggle)
 
 # pipeline/<category>/caseN/baseline/missions/snipe.py
-from ..core.config import SNIPE_COST_TURN_WEIGHT  # OK (パッケージ 2 階層上)
+from ..core.config import SNIPE_COST_TURN_WEIGHT  # OK (two package levels up)
 from ..strategy_helpers import target_value       # OK
 ```
 
-- 相対 import は **親パッケージ名に依存しない** ため、ローカルでは `pipeline.rulebase.caseN.baseline` 経由、Kaggle では `baseline` 経由、どちらでも同一コードで解決する。
-- `pipeline.<category>.caseN.baseline.*` の絶対 import は **絶対に書かない**。
+- Relative imports **do not depend on the parent package name**, so the same code resolves both locally (via `pipeline.rulebase.caseN.baseline`) and on Kaggle (via `baseline`).
+- **Never** write absolute imports of the form `pipeline.<category>.caseN.baseline.*` inside subpackages.
 
-### 3) サブパッケージの `__init__.py` も相対 import で公開する
+### 3) Subpackage `__init__.py` files also use relative imports
 
 ```python
 # pipeline/<category>/caseN/baseline/__init__.py
@@ -76,49 +76,49 @@ from .agent import agent, build_world
 __all__ = ["agent", "build_world"]
 ```
 
-## ディレクトリレイアウトの原則
+## Directory layout principles
 
-- `pipeline/<category>/` はエージェントの大分類 (`rulebase/`, `imitation/` など)。新カテゴリを追加する場合は空の `__init__.py` を置くのみで、ロジックは置かない。
-- `pipeline/<category>/case<N>/main.py` は常にエントリポイントで、20 行程度の薄い wrapper に保つ。ビジネスロジックは置かない。
-- 実装本体は `pipeline/<category>/case<N>/<package>/` のサブパッケージ (例: `baseline/`, `policy/`) として階層化する。階層は可読性・メンテナンス性のため維持する。
-- `pipeline/<category>/case<N>/` に `evaluation/`, `configs/`, `eda/`, `notebook/` など補助ディレクトリを置いてよい。これらは `main.py` から import されない限り Kaggle に同梱されても害はないが、tar.gz サイズは抑えたい。
+- `pipeline/<category>/` groups agent families (`rulebase/`, `imitation/`, etc.). When adding a new category, only place an empty `__init__.py`; do not put logic there.
+- `pipeline/<category>/case<N>/main.py` is always an entrypoint. Keep it as a thin wrapper of roughly 20 lines. Do not put business logic in it.
+- The implementation lives in subpackages under `pipeline/<category>/case<N>/<package>/` (e.g. `baseline/`, `policy/`). Maintain the hierarchy for readability and maintainability.
+- Auxiliary directories such as `evaluation/`, `configs/`, `eda/`, `notebook/` may sit under `pipeline/<category>/case<N>/`. They are harmless on Kaggle as long as they are not imported from `main.py`, but the tar.gz size should still be kept small.
 
-## ローカル側の import 経路 (不変)
+## Local-side import paths (unchanged)
 
-以下はローカルで使い続けて良い (相対 import 化後も解決可能):
+The following may continue to be used locally (they remain resolvable after the relative-import refactor):
 
 - `src/dataset/selfplay/agents.py` — `"baseline_v1": "pipeline.rulebase.case1.baseline.agent:agent"`
 - `pipeline/<category>/case<N>/evaluation/*.py` — `from pipeline.<category>.case<N>.baseline import agent as baseline_agent`
 - `tests/pipeline/<category>/case<N>/*.py` — `from pipeline.<category>.case<N>.baseline.xxx import ...`
 
-これらは Kaggle に同梱されないので、ローカル専用の絶対 import で OK。
+These are not bundled into the Kaggle archive, so absolute imports for local-only use are fine.
 
-## 新規 case を追加する手順
+## Steps to add a new case
 
-1. 既存カテゴリ (`rulebase/`, `imitation/`) のいずれか、または新カテゴリ配下に `pipeline/<category>/case<N>/baseline/` (または戦略名ディレクトリ) を作成し、内部 import をすべて相対 import で書く。
-2. `pipeline/<category>/case<N>/main.py` を上記テンプレで作成。
-3. `pipeline/<category>/case<N>/baseline/__init__.py` も相対 import。
-4. `src/dataset/selfplay/agents.py` の `AGENT_REGISTRY` に `"<name>": "pipeline.<category>.case<N>.baseline.agent:agent"` を追加。
-5. `dev/submit <category>/case<N> --dry-run -m "..."` を実行し、validator が `main.py` をロードして `env.run([agent, "random"])` が通ることを確認。
-6. `pytest tests/pipeline/<category>/case<N>` が通ることを確認してから本番提出。
+1. Create `pipeline/<category>/case<N>/baseline/` (or a strategy-named directory) under an existing category (`rulebase/`, `imitation/`) or a new category, and write all internal imports as relative imports.
+2. Create `pipeline/<category>/case<N>/main.py` from the template above.
+3. Use relative imports in `pipeline/<category>/case<N>/baseline/__init__.py` as well.
+4. Add `"<name>": "pipeline.<category>.case<N>.baseline.agent:agent"` to `AGENT_REGISTRY` in `src/dataset/selfplay/agents.py`.
+5. Run `dev/submit <category>/case<N> --dry-run -m "..."` and confirm that the validator loads `main.py` and `env.run([agent, "random"])` succeeds.
+6. Confirm `pytest tests/pipeline/<category>/case<N>` passes before submitting to production.
 
-## 提出アーカイブの除外 (`pipeline/.submitignore`)
+## Submission archive exclusions (`pipeline/.submitignore`)
 
-packager は `pipeline/.submitignore` を読んで tar.gz から除外するパスを決定する。**全 category / 全 case 共通** で効く (pipeline ルート直下に 1 ファイルのみ)。
+The packager reads `pipeline/.submitignore` to decide which paths to exclude from the tar.gz. **It applies across all categories and cases** (a single file directly under the pipeline root).
 
-### 配置と書式
+### Location and syntax
 
-- 配置: `pipeline/.submitignore` (pipeline ルート直下、1 ファイルのみ)
-- 書式: gitignore 互換サブセット
-  - 行頭 `#` はコメント、空行は無視
-  - 末尾 `/` はディレクトリ指定 (配下全ファイルを除外)
-  - それ以外は `fnmatch` でパス / ファイル名にマッチ
-- パスは **case_dir 相対** で評価される (例: `eda/` は `pipeline/rulebase/case1/eda/` に効く)
+- Location: `pipeline/.submitignore` (a single file directly under the pipeline root)
+- Syntax: gitignore-compatible subset
+  - Lines starting with `#` are comments; blank lines are ignored
+  - A trailing `/` denotes a directory (excludes everything beneath it)
+  - Otherwise the pattern is matched against paths/filenames via `fnmatch`
+- Paths are evaluated **relative to `case_dir`** (e.g. `eda/` matches `pipeline/rulebase/case1/eda/`)
 
-### 標準除外リスト (本リポジトリ)
+### Standard exclusion list (this repo)
 
 ```
-# 開発ツール (本番提出に不要)
+# Development tooling (not needed in the production submission)
 eda/
 notebook/
 evaluation/
@@ -126,41 +126,49 @@ training/
 configs/
 ```
 
-`evaluation/snapshot_update.py` のようにローカル開発専用のスクリプトが絶対 import を含むことがあり、Kaggle 側のファイル走査で ImportError を起こして Validation Episode failed の原因になる。case ディレクトリに開発用サブディレクトリを追加したら `.submitignore` にも追記する。
+Local-only development scripts such as `evaluation/snapshot_update.py` may contain absolute imports, which can cause `ImportError` during Kaggle's file walk and trigger Validation Episode failed. When you add a development subdirectory to a case directory, also add it to `.submitignore`.
 
-### 新規開発ディレクトリを追加するときの判断基準
+### Decision criteria for new development directories
 
-| ディレクトリ名 | 提出物? | `.submitignore`に入れる? |
+| Directory | Submission artifact? | Add to `.submitignore`? |
 |---|---|---|
-| `baseline/`, `policy_v2/` 等 (エージェント本体) | ○ | × |
-| `eda/`, `notebook/` (探索用) | × | ○ |
-| `evaluation/`, `training/` (開発スクリプト) | × | ○ |
-| `configs/` (ローカル参照の設定) | × (定数は`core/config.py`へ) | ○ |
-| モデル重み `.pt` / `.pkl` | ○ | × |
+| `baseline/`, `policy_v2/`, etc. (agent body) | Yes | No |
+| `eda/`, `notebook/` (exploration) | No | Yes |
+| `evaluation/`, `training/` (development scripts) | No | Yes |
+| `configs/` (locally referenced settings) | No (move constants into `core/config.py`) | Yes |
+| Model weights `.pt` / `.pkl` | Yes | No |
 
-## アンチパターン
+## Anti-patterns
 
-- `main.py` 内にロジックをベタ書きする → 複数戦略の共存・単体テストが困難。
-- `from pipeline.<category>.caseN.xxx import ...` をサブパッケージ内部で使う → Kaggle で ImportError。
-- `sys.path.insert` を main.py 以外の箇所に書く → global 副作用が散らばり追えなくなる。
-- `__init__.py` に絶対 import を書く → 相対 import 化の効果を打ち消す。
-- **`__file__` を使って sys.path に注入する → Kaggle で Validation Episode failed**。必ず `Path.cwd()` を使う (上記「`__file__` を使ってはいけない」節を参照)。
+- Inlining logic in `main.py` — makes it hard to host multiple strategies and to unit-test.
+- Using `from pipeline.<category>.caseN.xxx import ...` inside subpackages — `ImportError` on Kaggle.
+- Placing `sys.path.insert` outside `main.py` — scatters global side effects and makes them untraceable.
+- Writing absolute imports in `__init__.py` — defeats the relative-import refactor.
+- **Injecting into sys.path via `__file__` — causes Validation Episode failed on Kaggle**. Always use `Path.cwd()` (see the "Do not use `__file__`" section above).
 
-## 提出クォータの挙動 (2026-04-18 判明)
+## Submission quota behavior (discovered 2026-04-18)
 
-Kaggle Orbit Wars は 1 日 5 提出制限だが、`SubmissionStatus.ERROR` (validation 失敗) はクォータに含まれない。つまり **validation が通らない提出は再挑戦可能** なので、エラー時は Kaggle Web UI のログを確認して原因を特定し、即座に再提出してよい。
+Kaggle Orbit Wars allows up to 5 submissions per day, but `SubmissionStatus.ERROR` (validation failures) are **not** counted against the quota. In other words, **submissions that fail validation can be retried immediately**: when an error occurs, inspect the Kaggle Web UI logs, identify the cause, and resubmit right away.
 
-`src/submit/` はクォータのローカルチェックを行わない (Kaggle 側が消費上限に達していれば submit が失敗するだけで、ローカル側の集計タイミングズレによる誤判定を避けるため)。現在の提出数は `uv run python -m submit submissions` で確認する。
+`src/submit/` does not perform a local quota check (if the Kaggle side is over the limit, the submit simply fails — the local-side aggregation can have timing skew, so we avoid spurious local rejections). Check the current submission count with `uv run python -m submit submissions`.
 
-## 検証コマンド
+## Evaluation metric interpretation (local match results only)
+
+Kaggle Orbit Wars publicScore and skill rating are **relative metrics** computed against other participants' submissions, and the opponent pool drifts over time, so **the same agent can produce very different publicScores depending on submission timing**. Treat Kaggle-side numbers as unreliable for judging the merit of a change. **Evaluate agents exclusively on local match results.** Concretely:
+
+- **Use only local match outcomes** (self-play and head-to-head between local agents) when comparing strategies. Run scripts such as `pipeline/<category>/case<N>/evaluation/compare_*.py` and judge based on win rate over a sufficient number of episodes.
+- **Do not use Kaggle publicScore / skill rating as an evaluation signal.** Even when comparing submissions made around the same time, do not infer ranking from publicScore.
+- When publicScore happens to be observed (e.g. for monitoring purposes), it is acceptable to record it together with the submission datetime, but it must not be quoted as evidence for or against any change.
+
+## Verification commands
 
 ```bash
-# ローカル import 経路確認
+# Verify the local import path
 uv run python -c "from pipeline.rulebase.case1.baseline.agent import agent; print(agent)"
 
-# Kaggle 側 import 経路シミュレーション (main.py を直接ロードする validator と同等)
+# Simulate the Kaggle-side import path (equivalent to the validator that loads main.py directly)
 uv run python -m submit submit rulebase/case1 --dry-run -m "dry-run verification"
 
-# 提出前チェックスイート
+# Pre-submission check suite
 dev/test-backend
 ```

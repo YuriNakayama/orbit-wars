@@ -65,7 +65,9 @@ def compute_loss(
     )
     p = torch.sigmoid(safe_logits)
     p_t = from_target * p + (1.0 - from_target) * (1.0 - p)
-    alpha_t = weights.from_focal_alpha * from_target + (1.0 - weights.from_focal_alpha) * (1.0 - from_target)
+    alpha_t = weights.from_focal_alpha * from_target + (
+        1.0 - weights.from_focal_alpha
+    ) * (1.0 - from_target)
     focal_factor = alpha_t * (1.0 - p_t).clamp_min(1e-6).pow(weights.from_focal_gamma)
     focal = focal_factor * bce_per_elem
     focal = focal * valid.float()
