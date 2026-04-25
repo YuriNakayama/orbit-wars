@@ -82,6 +82,39 @@ class CaseThreeDataset(Dataset[Sample]):
         ).reshape(-1, MAX_PLANETS)
         self._is_noop = self._df["is_noop"].to_numpy().astype(np.bool_)
 
+    def sample_weights_from_target(
+        self,
+        num_classes: int,
+        power: float = 0.5,
+        ignore_index: int = -1,
+        aggregate: str = "mean",
+    ) -> np.ndarray:
+        """Per-sample weight ∝ mean (1 / class_freq)^power across fired target labels.
+
+        A frame may fire multiple sources with different target templates. We
+        aggregate per-source class_weight via `aggregate` (`mean` or `max`).
+        `mean` is the default — it lifts minority frames proportionally to
+        their minority content rather than letting a single rare label in a
+        mostly-majority frame dominate. `power=0.5` is half-strength 1/freq.
+        """
+        flat = self._target_per_src.reshape(-1)
+        valid = flat[flat != ignore_index]
+        counts = np.bincount(valid, minlength=num_classes).astype(np.float64)
+        freq = np.where(counts > 0, counts / counts.sum(), 1.0)
+        class_weight = np.power(1.0 / np.clip(freq, 1e-12, None), power)
+        weights = np.zeros(self._target_per_src.shape[0], dtype=np.float64)
+        for i in range(self._target_per_src.shape[0]):
+            row = self._target_per_src[i]
+            fired = row[row != ignore_index]
+            if fired.size == 0:
+                weights[i] = 1.0
+            elif aggregate == "max":
+                weights[i] = float(class_weight[fired].max())
+            else:
+                weights[i] = float(class_weight[fired].mean())
+        weights *= len(weights) / weights.sum()
+        return weights
+
     def __len__(self) -> int:
         return int(self._planet_feats.shape[0])
 

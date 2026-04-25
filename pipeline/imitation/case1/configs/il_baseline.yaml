@@ -28,11 +28,33 @@ train:
     target: 2.0
     ships: 0.5
     from_pos_weight: 8.5
-    from_focal_gamma: 2.0
-    from_focal_alpha: 0.25
-    target_label_smoothing: 0.1
+    # Phase 2 / iter9 canonical: flipped α (0.25 → 0.75) and raised γ (2.0 → 3.0)
+    # fixed the from-head sigmoid calibration; lifted val F1@0.5 0.20→0.47 and
+    # was the first iter to achieve non-zero win rate (5/100 vs baseline_v1).
+    from_focal_gamma: 3.0
+    from_focal_alpha: 0.75
+    # Phase 2 / iter7 target-head class weighting (β=0.9999) + LS=0.15.
+    # Retained in iter9 — lifts NO_OP F1 5x and reduces WEAKEST_ENEMY over-pred.
+    target_label_smoothing: 0.15
     target_entropy_bonus: 0.05
+    use_target_class_weights: true
+    target_class_weight_beta: 0.9999
+    # iter8 ships ordinal smoothing was rejected (regressed bucket 2 F1).
+    # Kept disabled by default. See docs/experiment/imitation_case1_iter8_summary.json.
+    use_ships_class_weights: false
+    ships_class_weight_beta: 0.9999
+    ships_ordinal_smoothing: 0.0
   weights_out: pipeline/imitation/case1/policy/weights.pt
 
 inference:
-  from_threshold: 0.05
+  # Phase 1 tuning: values reflected as constants in policy/agent.py
+  # (configs/ is stripped by .submitignore for Kaggle submission, so agent.py
+  # cannot read this file at runtime — keep the two in sync manually).
+  from_threshold: 0.31        # F1-optimal on val.parquet (sweep: 0.05→0.23, 0.5→0.20, 0.31→0.47)
+  min_fire_topk: 1            # fallback only when no source clears threshold
+  # Phase 3-D sweep: cap=4/8/12 all → 0/300 wins; cap=None → 3/300 (CI [0.34%, 2.90%]).
+  # Unbounded is canonical — il_v1's win paths require large-batch sorties that
+  # the 4-fire cap was clipping. Kaggle submit reads this constant via agent.py.
+  max_fire_count: null
+  target_temperature: 0.8     # val NLL / ECE optimum (ECE 0.047 → 0.014)
+  ships_temperature: 1.1      # val NLL / ECE optimum (ECE 0.023 → 0.011)

@@ -7,6 +7,7 @@ eda/
 notebook/
 evaluation/
 training/
+scripts/
 
 # ローカル参照用の config (baseline は定数として core/config.py に持つ)
 configs/
