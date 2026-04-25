@@ -1,0 +1,111 @@
+schema: '2.0'
+stages:
+  preprocess_imitation_case1:
+    cmd: uv run --directory backend python -m 
+      pipeline.imitation.case1.training.preprocess
+    deps:
+    - path: backend/pipeline/imitation/case1/policy/featurizer.py
+      hash: md5
+      md5: bdb755416ce0e75b38e5c2d1c4b52ec8
+      size: 6689
+    - path: backend/pipeline/imitation/case1/policy/geometry.py
+      hash: md5
+      md5: d4df0efcaa6608feaf4eae40aff800ea
+      size: 8474
+    - path: backend/pipeline/imitation/case1/policy/templates.py
+      hash: md5
+      md5: 1c526f9e14861b3c06bc11f960db1b57
+      size: 7490
+    - path: backend/pipeline/imitation/case1/training/preprocess.py
+      hash: md5
+      md5: 61beab1e7646eddf1beb3054f425f728
+      size: 12436
+    - path: data/lake/kaggle_episodes/matches
+      hash: md5
+      md5: 236eecee60592df2728395a16417fc8a.dir
+      size: 370708589
+      nfiles: 1364
+    params:
+      params.yaml:
+        data:
+          kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+          replay_dir: data/lake/kaggle_episodes/matches/replays
+          out_train: data/mart/imitation/case1/train.parquet
+          out_val: data/mart/imitation/case1/val.parquet
+          rating_quantile: 0.5
+          val_split: 0.1
+          modes:
+          - 1v1
+          max_episodes:
+        seed: 0
+    outs:
+    - path: data/mart/imitation/case1/train.parquet
+      hash: md5
+      md5: b7c234e09f0375d1ee4748a76e349c83
+      size: 184277791
+    - path: data/mart/imitation/case1/val.parquet
+      hash: md5
+      md5: 57c2622113bfa081eac1f01251be471a
+      size: 21907954
+  train_imitation_case1:
+    cmd: uv run --directory backend python -m 
+      pipeline.imitation.case1.training.train
+    deps:
+    - path: backend/pipeline/imitation/case1/policy/model.py
+      hash: md5
+      md5: 1c9b9638c4d712fa897817318ed9a6fc
+      size: 10063
+    - path: backend/pipeline/imitation/case1/training/dataset.py
+      hash: md5
+      md5: 440fd02dfdd703b90c142f7d3cbcda47
+      size: 6466
+    - path: backend/pipeline/imitation/case1/training/losses.py
+      hash: md5
+      md5: 35e69b556ca4d33544c46732341a8097
+      size: 10685
+    - path: backend/pipeline/imitation/case1/training/train.py
+      hash: md5
+      md5: 47205124096db0852bf91793697bd7e8
+      size: 11290
+    - path: data/mart/imitation/case1/train.parquet
+      hash: md5
+      md5: b7c234e09f0375d1ee4748a76e349c83
+      size: 184277791
+    - path: data/mart/imitation/case1/val.parquet
+      hash: md5
+      md5: 57c2622113bfa081eac1f01251be471a
+      size: 21907954
+    params:
+      params.yaml:
+        model:
+          planet_in_dim: 11
+          global_in_dim: 6
+          hidden: 128
+          ships_buckets: 4
+        seed: 0
+        train:
+          batch_size: 256
+          epochs: 15
+          lr: 0.001
+          weight_decay: 0.0001
+          num_workers: 0
+          loss_weights:
+            from: 1.0
+            target: 2.0
+            ships: 0.5
+            from_pos_weight: 8.5
+            from_focal_gamma: 3.0
+            from_focal_alpha: 0.75
+            target_label_smoothing: 0.15
+            target_entropy_bonus: 0.05
+            use_target_class_weights: true
+            target_class_weight_beta: 0.9999
+            use_ships_class_weights: false
+            ships_class_weight_beta: 0.9999
+            ships_ordinal_smoothing: 0.0
+          weights_out: backend/pipeline/imitation/case1/policy/weights.pt
+    outs:
+    - path: backend/pipeline/imitation/case1/policy/weights.pt
+      hash: md5
+      md5: 6e33b5e92f490ad1a06d95d8ca8b3036
+      size: 977061

@@ -1,0 +1,25 @@
+#!/bin/bash
+# DVC のローカル設定 (.dvc/config.local) を冪等にセットアップする。
+#
+# - cache.dir をメインリポ側の共有ディレクトリに指定
+# - S3 remote の AWS profile を指定
+#
+# .dvc/config.local は gitignore 対象。開発者ごとに実行する。
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+CACHE_DIR="${DVC_CACHE_DIR:-/Users/user/project/orbit-wars/.dvc/cache}"
+AWS_PROFILE="${ORBIT_WARS_AWS_PROFILE:-orbit-wars}"
+
+mkdir -p "$CACHE_DIR"
+
+echo "== DVC: setting shared cache dir =="
+uv run --directory backend dvc cache dir --local "$CACHE_DIR"
+
+echo "== DVC: setting AWS profile for remote 's3' =="
+uv run --directory backend dvc remote modify --local s3 profile "$AWS_PROFILE"
+
+echo
+echo "Local DVC config written to .dvc/config.local (gitignored):"
+cat .dvc/config.local 2>/dev/null || true

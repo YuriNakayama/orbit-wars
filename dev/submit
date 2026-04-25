@@ -7,7 +7,7 @@
 #   dev/submit rulebase/case0 -m "wait" --wait
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../backend"
 
 if [ $# -lt 1 ]; then
   cat <<'EOS'
