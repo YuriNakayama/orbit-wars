@@ -25,23 +25,23 @@ Python の実装は `backend/` 配下に集約されています。`pyproject.to
 
 ## Module Architecture
 
-Orbit Wars エージェントの共通ライブラリとして以下のモジュール構成を想定:
+The shared library for Orbit Wars agents follows the module layout below:
 
 ```
 backend/src/
-  agents/          提出用エージェント（Kaggle Submission entrypoint）
-  env/             kaggle-environments ラッパー、自己対戦ユーティリティ
-  features/        観測→特徴量、軌道予測、脅威評価
-  policies/        ルールベース / 学習済みポリシー
-  utils/           共通ユーティリティ（数学・可視化・ロギング）
+  agents/          Submission agents (Kaggle Submission entrypoint)
+  env/             kaggle-environments wrappers and self-play utilities
+  features/        Observation -> features, orbit prediction, threat evaluation
+  policies/        Rulebase / trained policies
+  utils/           Shared utilities (math, visualization, logging)
 ```
 
-### モジュール設計原則
+### Module Design Principles
 
-- 各モジュールは単一責任を持つ
-- モジュール間の依存は明示的にインポートで表現
-- 特徴量抽出とポリシーは疎結合に保ち、差し替え可能に設計
-- Submission (`src/agents/main.py`) は依存を最小化（Kaggle環境にない重い依存は避ける）
+- Each module owns a single responsibility
+- Express inter-module dependencies via explicit imports
+- Keep feature extraction and policies loosely coupled so they can be swapped
+- Minimize dependencies in the submission entrypoint (`src/agents/main.py`); avoid heavy imports unavailable in the Kaggle runtime
 
 ## Type Hints & Naming
 
@@ -62,14 +62,14 @@ def select_action(obs) -> Any:
 
 ## Numerics & Performance Conventions
 
-- 盤面計算はベクトル化する（NumPyで艦・惑星の相対位置を一括計算）
-- 1ターン 1秒（`actTimeout=1`）のため、ホットパスでの Python ループ・動的確保を避ける
-- 軌道惑星・コメットの未来位置は初期化時にキャッシュ
-- マジックナンバー（`boardSize=100.0`, `sunRadius=10.0` 等）は定数として宣言
-- ファイルパスは `pathlib.Path` を使用
+- Vectorize board computations (compute relative positions of fleets/planets in bulk via NumPy)
+- The per-turn budget is 1 second (`actTimeout=1`); avoid Python loops and dynamic allocation on hot paths
+- Cache future positions of orbital planets and comets at initialization time
+- Declare magic numbers (`boardSize=100.0`, `sunRadius=10.0`, etc.) as constants
+- Use `pathlib.Path` for file paths
 
 ```python
-# GOOD: ベクトル化
+# GOOD: vectorized
 import numpy as np
 
 def distances(fleets_xy: np.ndarray, planet_xy: np.ndarray) -> np.ndarray:
@@ -78,7 +78,7 @@ def distances(fleets_xy: np.ndarray, planet_xy: np.ndarray) -> np.ndarray:
 
 ## Async & Error Handling
 
-- I/O bound operations (リプレイ保存・APIアクセス): use `async`/`await`
+- I/O bound operations (replay persistence, API access): use `async`/`await`
 - Parallel self-play: `asyncio.gather` or `multiprocessing.Pool`
 - Define appropriate exception classes
 - Output structured logs
@@ -95,7 +95,7 @@ class ObservationParseError(Exception):
 - Use structured logging with JSON format
 - Exclude sensitive information (API tokens)
 - Use `logging.getLogger(__name__)`
-- NEVER use `print()` for logging（Submission でも stdout を汚さない）
+- NEVER use `print()` for logging (do not pollute stdout, even from the submission entrypoint)
 
 ## Lint/Formatting
 
@@ -118,8 +118,8 @@ uv run mypy .
 - Use Fixtures for common setup
 - Minimize use of mock and patch — keep close to actual behavior
 - Each test should be executable independently
-- テストは `backend/tests/` に `backend/src/` の構造をミラーして配置
-- エージェントのテストでは `kaggle_environments.make("orbit_wars")` を使ってシナリオを構築
+- Tests live under `backend/tests/`, mirroring the `backend/src/` layout
+- For agent tests, build scenarios with `kaggle_environments.make("orbit_wars")`
 
 ```python
 import pytest

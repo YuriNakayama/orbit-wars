@@ -15,11 +15,11 @@ paths:
 
 ## Scope
 
-Orbit Wars 本体の提出物は Kaggle 側で実行されるため、`infra/` は **AWS 等のクラウドリソース（学習基盤・データストレージ・CI 実行環境など）を Terraform で管理する場合にのみ** 利用する。
+Orbit Wars submission artifacts run on Kaggle, so `infra/` is used **only when managing AWS-style cloud resources with Terraform** (training infrastructure, data storage like the DVC remote, CI execution environments, etc.).
 
 ## Module Structure
 
-このリポジトリでは以下のレイヤ構成を採用している（単数形に統一）:
+The repository uses the following layered structure (singular form):
 
 ```
 infra/
@@ -29,16 +29,16 @@ infra/
       variables.tf
       outputs.tf
       terraform.tfvars   (gitignored)
-    staging/             (必要になったら追加)
-    prod/                (必要になったら追加)
-  module/                再利用可能な共有モジュール
+    staging/             (add when needed)
+    prod/                (add when needed)
+  module/                Reusable shared modules
     foundation/          Core infrastructure (networking, IAM)
     platform/            Platform services (compute, storage, monitoring)
     application/         Application-specific stacks (training jobs, replay store)
 ```
 
-- `environment/<env>/` が Terraform の root module。`terraform init / plan / apply` はこのディレクトリで実行する。
-- `module/` 配下は環境から参照される再利用モジュール。単独では apply しない。
+- `environment/<env>/` is the Terraform root module — run `terraform init / plan / apply` here.
+- Modules under `module/` are reusable building blocks consumed by environments; never apply them on their own.
 
 ### Module Design Principles
 

@@ -47,18 +47,33 @@ def decode(
     snapshot: WorldSnapshot,
     obs: dict[str, Any],
     from_threshold: float = 0.5,
-    min_fire_topk: int = 2,
+    min_fire_topk: int = 1,
+    max_fire_count: int | None = None,
+    target_temperature: float = 1.0,
+    ships_temperature: float = 1.0,
 ) -> list[list[int | float]]:
     """Greedy decode: per-source from-prob gate → template → ships.
 
-    `min_fire_topk` guarantees the top-K my_planets by from_prob always pass the
-    threshold gate, so the agent never sits idle when from_prob is uniformly
-    suppressed (observed: median from_prob ≈ 0.01 makes a fixed threshold lock
-    out 80%+ of turns).
+    `min_fire_topk` is a fallback: when no source clears `from_threshold`, still
+    emit the top-K candidates so the agent does not sit idle when from_prob is
+    uniformly low. Default 1 (Phase 1-3 tuning — was 2, which forced two fires
+    every turn and contributed to overfire).
+
+    `max_fire_count` caps the number of sources that are allowed to fire in one
+    turn; `None` (default) means no cap. Used in Phase 1 to prevent the
+    agent from firing from every own planet when the threshold is lowered.
+
+    `target_temperature` / `ships_temperature` divide the raw logits before
+    argmax. Temperature scaling is a monotone operation on a single logit
+    vector, so `argmax` is actually unchanged for T > 0 — but if a future
+    iteration replaces argmax with top-k sampling or masking, these knobs
+    become meaningful. Accepting them here keeps the decoder API stable.
     """
+    target_T = max(float(target_temperature), 1e-6)
+    ships_T = max(float(ships_temperature), 1e-6)
     from_prob = torch.sigmoid(output.from_logits[0])  # (P,)
-    target_argmax = output.target_logits[0].argmax(dim=-1)  # (P,) template id
-    ships_argmax = output.ships_logits[0].argmax(dim=-1)  # (P,)
+    target_argmax = (output.target_logits[0] / target_T).argmax(dim=-1)
+    ships_argmax = (output.ships_logits[0] / ships_T).argmax(dim=-1)
 
     raw_planets = list(obs.get("planets", []) or [])
     pid_to_planet = {int(row[0]): _build_planet(row) for row in raw_planets}
@@ -110,7 +125,10 @@ def decode(
         prob = float(from_prob[slot].item())
         ranked.append((prob, src_pid))
     ranked.sort(key=lambda x: -x[0])
-    keep_n = max(min_fire_topk, sum(1 for p, _ in ranked if p >= from_threshold))
+    above = sum(1 for p, _ in ranked if p >= from_threshold)
+    keep_n = above if above > 0 else min_fire_topk
+    if max_fire_count is not None:
+        keep_n = min(keep_n, int(max_fire_count))
     src_with_prob = ranked[:keep_n]
 
     for _, src_pid in src_with_prob:

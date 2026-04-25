@@ -45,6 +45,8 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポ
 - 更新は勝敗のみを参照（スコア差は無関係）
 - 1日最大5提出、最新2件が最終提出候補
 
+> **注意**: 勝率・スキルレーティングは他参加者の提出物との **相対評価** であり、対戦相手プールが時間とともに変化するため、同一エージェントでも提出タイミングにより publicScore が大きく変動する。よって **エージェントの優劣はローカル対戦実績 (自己対戦・ローカル head-to-head) のみで評価し、Kaggle publicScore / スキルレーティングは判断材料に用いない**。
+
 ## Technology Stack
 
 - **Language**: Python 3.13

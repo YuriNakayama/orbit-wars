@@ -296,6 +296,41 @@ def _abspath(rel: str | Path) -> Path:
     return p if p.is_absolute() else (_repo_root() / p).resolve()
 
 
+def _duplicate_minority_frames(
+    train_rows: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Row-level augmentation: frames that fire a minority target template get
+    duplicated `multiplier` times so their gradient contribution grows per
+    epoch. Unlike WeightedRandomSampler (which picks the same row repeatedly),
+    this increases the true count of minority frames in the parquet so shuffled
+    training sees fresh pairings against non-duplicated rows each epoch.
+
+    `cfg["templates"]`: list of template ids to treat as minority.
+    `cfg["multiplier"]`: positive int. `2` = frame appears twice total.
+    """
+    templates = set(int(t) for t in cfg.get("templates", []))
+    multiplier = int(cfg.get("multiplier", 2))
+    if not templates or multiplier <= 1:
+        return train_rows
+    extra_copies = multiplier - 1
+    out: list[dict[str, Any]] = []
+    n_dupe = 0
+    for row in train_rows:
+        out.append(row)
+        fired = [int(t) for t in row.get("target_per_src", []) if int(t) != -1]
+        if any(t in templates for t in fired):
+            out.extend(row for _ in range(extra_copies))
+            n_dupe += extra_copies
+    logger.info(
+        "duplicate_minority: original=%d, duplicated_rows=%d, total=%d",
+        len(train_rows),
+        n_dupe,
+        len(out),
+    )
+    return out
+
+
 def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     data_cfg = cfg["data"]
     modes = list(data_cfg.get("modes", ["1v1"]))
@@ -335,6 +370,10 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         target = val_rows if bucket == "val" else train_rows
         target.extend(frames)
         kept += 1
+
+    duplicate_cfg = data_cfg.get("duplicate_minority", {}) or {}
+    if duplicate_cfg.get("enabled", False):
+        train_rows = _duplicate_minority_frames(train_rows, duplicate_cfg)
 
     n_train = _write_parquet(train_rows, out_train)
     n_val = _write_parquet(val_rows, out_val)
