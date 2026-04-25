@@ -15,11 +15,11 @@ paths:
 
 ## Scope
 
-Orbit Wars 本体の提出物は Kaggle 側で実行されるため、`infra/` は **学習基盤（GPU / 大規模自己対戦クラスタ等）を必要とする場合にのみ** 利用する。現時点では未使用でも、将来のクラウド学習環境を想定した共通ルールをここに残す。
+Orbit Wars submission artifacts run on Kaggle, so `infra/` is used **only when training infrastructure (GPU / large-scale self-play clusters etc.) is required**. Even though it is currently unused, the shared rules below are kept here for future cloud-based training environments.
 
 ## Module Structure
 
-レイヤ化したモジュール構成を推奨:
+A layered module structure is recommended:
 
 ```
 infra/
