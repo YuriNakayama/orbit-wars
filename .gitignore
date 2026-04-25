@@ -72,6 +72,7 @@ artifacts/
 *.tfstate.*
 *.tfplan
 *.tfplan.*
+tfplan.out
 .terraform
 .terraform.lock.hcl
 .infracost
@@ -82,10 +83,14 @@ artifacts/
 
 *.db
 
-# data
-/data
-data/
-!data/**/*.md
+# data — actual contents are DVC-managed; only stubs / docs land in git.
+/data/**
+!/data/**/
+!/data/**/*.dvc
+!/data/**/.gitignore
+!/data/**/*.md
+# .dvc ディレクトリの自動生成 .gitignore も拾えるようにする
+!/data/.gitignore
 
 # DVC
 /.dvc/tmp
