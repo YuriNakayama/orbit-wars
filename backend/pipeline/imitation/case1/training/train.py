@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
-from dataclasses import dataclass
+import subprocess
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -48,23 +51,30 @@ class TrainReport:
     best_val_loss: float
     best_epoch: int
     weights_path: Path
+    device: str = "cpu"
+    runtime_seconds: float = 0.0
+    train_loss_history: list[float] = field(default_factory=list)
+    val_loss_history: list[float] = field(default_factory=list)
 
 
 def _seed_all(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     torch.use_deterministic_algorithms(False)  # CPU MLP — already deterministic
 
 
-def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
+def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeatures:
+    """Build BatchFeatures, moving tensors to the target device."""
     return BatchFeatures(
-        planet_feats=sample.planet_feats,
-        planet_mask=sample.planet_mask,
-        my_planet_mask=sample.my_planet_mask,
-        target_mask=sample.target_mask,
-        global_feats=sample.global_feats,
-        template_ctx=sample.template_ctx,
+        planet_feats=sample.planet_feats.to(device, non_blocking=True),
+        planet_mask=sample.planet_mask.to(device, non_blocking=True),
+        my_planet_mask=sample.my_planet_mask.to(device, non_blocking=True),
+        target_mask=sample.target_mask.to(device, non_blocking=True),
+        global_feats=sample.global_feats.to(device, non_blocking=True),
+        template_ctx=sample.template_ctx.to(device, non_blocking=True),
     )
 
 
@@ -73,6 +83,7 @@ def _run_epoch(
     loader: DataLoader,  # type: ignore[type-arg]
     loss_weights: LossWeights,
     optimizer: optim.Optimizer | None,
+    device: torch.device,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -89,14 +100,14 @@ def _run_epoch(
     grad_ctx = torch.enable_grad if is_train else torch.no_grad
     with grad_ctx():
         for batch in loader:
-            features = _to_batch_features(batch)
+            features = _to_batch_features(batch, device)
             output = model(features)
             report = compute_loss(
                 output,
-                from_multihot=batch.from_multihot,
-                target_per_src=batch.target_per_src,
-                ships_per_src=batch.ships_per_src,
-                my_planet_mask=batch.my_planet_mask,
+                from_multihot=batch.from_multihot.to(device, non_blocking=True),
+                target_per_src=batch.target_per_src.to(device, non_blocking=True),
+                ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
+                my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
                 weights=loss_weights,
             )
             if is_train and optimizer is not None:
@@ -116,9 +127,32 @@ def _run_epoch(
     return {k: v / n_batches for k, v in totals.items()}
 
 
+def _resolve_run_dir() -> Path | None:
+    """`ORBIT_WARS_RUN_DIR` env が設定されていれば run dir 絶対パスを返す。
+
+    Vast 上では指定必須、ローカルでは未指定で従来挙動を維持する。
+    `ORBIT_WARS_VAST_INSTANCE_ID` があるのに `ORBIT_WARS_RUN_DIR` が無い場合は
+    canonical weights.pt を誤上書きするリスクがあるため assertion で停止する
+    (Risk #4 防御弾)。
+    """
+    run_dir_env = os.environ.get("ORBIT_WARS_RUN_DIR")
+    vast_id = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
+    if vast_id and not run_dir_env:
+        raise RuntimeError(
+            "ORBIT_WARS_VAST_INSTANCE_ID is set but ORBIT_WARS_RUN_DIR is not. "
+            "Refusing to overwrite canonical weights.pt from a Vast.ai instance."
+        )
+    if not run_dir_env:
+        return None
+    return Path(run_dir_env).resolve()
+
+
 def train(cfg: dict[str, Any]) -> TrainReport:
     seed = int(cfg.get("seed", 0))
     _seed_all(seed)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(json.dumps({"device": device.type}))
 
     data_cfg = cfg["data"]
     train_cfg = cfg["train"]
@@ -162,6 +196,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 }
             )
         )
+    pin_memory = device.type == "cuda"
     train_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         train_ds,
         batch_size=int(train_cfg["batch_size"]),
@@ -170,6 +205,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         collate_fn=collate,
         num_workers=int(train_cfg.get("num_workers", 0)),
         generator=g,
+        pin_memory=pin_memory,
     )
     val_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         val_ds,
@@ -177,6 +213,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         shuffle=False,
         collate_fn=collate,
         num_workers=int(train_cfg.get("num_workers", 0)),
+        pin_memory=pin_memory,
     )
 
     model_config = ModelConfig(
@@ -185,7 +222,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         hidden=int(model_cfg.get("hidden", 64)),
         ships_buckets=int(model_cfg.get("ships_buckets", 4)),
     )
-    model = DeepSetsPolicy(model_config)
+    model = DeepSetsPolicy(model_config).to(device)
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -207,7 +244,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             num_classes=NUM_TEMPLATES,
             beta=float(lw_cfg.get("target_class_weight_beta", 0.9999)),
             ignore_index=-1,
-        )
+        ).to(device)
         logger.info(
             json.dumps(
                 {
@@ -225,7 +262,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             num_classes=num_ships_buckets,
             beta=float(lw_cfg.get("ships_class_weight_beta", 0.9999)),
             ignore_index=-1,
-        )
+        ).to(device)
         logger.info(
             json.dumps(
                 {"ships_class_weights": [round(float(x), 4) for x in ships_cw.tolist()]}
@@ -237,7 +274,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     if ships_focal_alpha_cfg is not None:
         ships_focal_alpha = torch.tensor(
             [float(v) for v in ships_focal_alpha_cfg], dtype=torch.float32
-        )
+        ).to(device)
 
     weights = LossWeights(
         from_w=float(lw_cfg.get("from", 1.0)),
@@ -255,15 +292,27 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         ships_focal_alpha=ships_focal_alpha,
     )
 
-    weights_out = _abspath(train_cfg["weights_out"])
-    weights_out.parent.mkdir(parents=True, exist_ok=True)
+    run_dir = _resolve_run_dir()
+    if run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        weights_out = run_dir / "best.pt"
+    else:
+        weights_out = _abspath(train_cfg["weights_out"])
+        weights_out.parent.mkdir(parents=True, exist_ok=True)
 
     best_val = float("inf")
     best_epoch = -1
+    train_loss_history: list[float] = []
+    val_loss_history: list[float] = []
     epochs = int(train_cfg["epochs"])
+    started = time.monotonic()
     for epoch in range(epochs):
-        train_metrics = _run_epoch(model, train_loader, weights, optimizer)
-        val_metrics = _run_epoch(model, val_loader, weights, optimizer=None)
+        train_metrics = _run_epoch(model, train_loader, weights, optimizer, device)
+        val_metrics = _run_epoch(
+            model, val_loader, weights, optimizer=None, device=device
+        )
+        train_loss_history.append(round(train_metrics["total"], 4))
+        val_loss_history.append(round(val_metrics["total"], 4))
         log_row = {
             "epoch": epoch,
             "train_total": round(train_metrics["total"], 4),
@@ -276,14 +325,119 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         if val_metrics["total"] < best_val:
             best_val = val_metrics["total"]
             best_epoch = epoch
-            torch.save(model.state_dict(), weights_out)
+            # CPU tensor で保存して再読込時のデバイス互換性を確保
+            cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+            torch.save(cpu_state, weights_out)
+    runtime_seconds = round(time.monotonic() - started, 2)
 
-    return TrainReport(
+    report = TrainReport(
         epochs_run=epochs,
         best_val_loss=best_val,
         best_epoch=best_epoch,
         weights_path=weights_out,
+        device=device.type,
+        runtime_seconds=runtime_seconds,
+        train_loss_history=train_loss_history,
+        val_loss_history=val_loss_history,
     )
+
+    if run_dir is not None:
+        _write_run_artifacts(run_dir, report, seed)
+
+    return report
+
+
+def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
+    """metrics.json と run.json を run_dir に書き出す。"""
+    # 遅延 import: 学習スクリプト本体の import グラフを汚染しないため
+    from vast.run_meta import RunMetadata, hash_params, write_run_json
+
+    metrics = {
+        "epochs_run": report.epochs_run,
+        "best_epoch": report.best_epoch,
+        "best_val_loss": report.best_val_loss,
+        "train_loss_history": report.train_loss_history,
+        "val_loss_history": report.val_loss_history,
+        "device": report.device,
+        "runtime_seconds": report.runtime_seconds,
+    }
+    (run_dir / "metrics.json").write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    git_sha = os.environ.get("ORBIT_WARS_GIT_SHA") or _git_rev_parse("HEAD")
+    git_branch = os.environ.get("ORBIT_WARS_GIT_BRANCH") or _git_branch_name()
+    run_id = os.environ.get("ORBIT_WARS_RUN_ID") or run_dir.name
+    vast_id_raw = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
+    vast_id: int | None = None
+    if vast_id_raw:
+        try:
+            vast_id = int(vast_id_raw)
+        except ValueError:
+            vast_id = None
+    gpu_name: str | None = None
+    if torch.cuda.is_available():
+        try:
+            gpu_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - defensive
+            gpu_name = None
+    weights_path_rel = _safe_relative_to_repo(run_dir / "best.pt")
+    command = os.environ.get(
+        "ORBIT_WARS_COMMAND",
+        "uv run --directory backend python -m pipeline.imitation.case1.training.train",
+    )
+    meta = RunMetadata(
+        run_id=run_id,
+        git_sha=git_sha,
+        git_branch=git_branch,
+        params_hash=hash_params(_repo_root() / "params.yaml"),
+        seed=seed,
+        vast_instance_id=vast_id,
+        gpu_name=gpu_name,
+        vast_offer_snapshot=None,
+        command=command,
+        weights_path=weights_path_rel,
+        train_metrics=metrics,
+        local_eval_results=None,
+        status="pushed",
+    )
+    write_run_json(run_dir, meta)
+
+
+def _git_rev_parse(rev: str) -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", rev],
+            cwd=str(_repo_root()),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return out.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _git_branch_name() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(_repo_root()),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return out.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _safe_relative_to_repo(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(_repo_root()))
+    except ValueError:
+        return str(path)
 
 
 app = typer.Typer(add_completion=False)

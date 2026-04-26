@@ -1,0 +1,79 @@
+#!/bin/bash
+# Vast.ai onstart for Orbit Wars GPU training.
+# Placeholders are substituted by vast.instance.render_onstart before upload:
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>
+set -euo pipefail
+exec > >(tee -a /var/log/onstart.log) 2>&1
+
+INSTANCE_ID="${VAST_CONTAINERLABEL:-${CONTAINER_ID:-unknown}}"
+
+cleanup_destroy() {
+  local exit_code=$?
+  echo "[onstart] cleanup status=${exit_code}"
+  if [ "${exit_code}" -ne 0 ]; then
+    echo "[onstart] failure: leaving instance up for manual inspection"
+    exit "${exit_code}"
+  fi
+  if command -v vastai >/dev/null 2>&1 && [ -n "${VAST_API_KEY:-}" ]; then
+    echo "[onstart] self-destroy instance=${INSTANCE_ID}"
+    vastai destroy instance "${INSTANCE_ID}" || true
+  else
+    echo "[onstart] vastai CLI or VAST_API_KEY missing; skipping self-destroy"
+  fi
+}
+trap cleanup_destroy EXIT
+
+echo "[onstart] step=env_persist"
+env >> /etc/environment
+
+echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
+mkdir -p /workspace
+cd /workspace
+if [ ! -d orbit-wars ]; then
+  if [ -n "${GIT_PAT:-}" ]; then
+    git clone "https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')" orbit-wars
+  else
+    git clone "<REPO_URL>" orbit-wars
+  fi
+fi
+cd orbit-wars
+git fetch origin "<COMMIT_SHA>" || true
+git checkout "<COMMIT_SHA>"
+
+echo "[onstart] step=install_uv"
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+echo "[onstart] step=uv_sync"
+uv sync --locked --all-extras --dev --directory backend
+
+echo "[onstart] step=install_vastai_cli_for_self_destroy"
+uv pip install --directory backend vastai >/dev/null 2>&1 || true
+
+echo "[onstart] step=dvc_remote_profile"
+uv run --directory backend dvc remote modify --local s3 profile default
+
+echo "[onstart] step=dvc_pull"
+uv run --directory backend dvc pull
+
+echo "[onstart] step=mkdir_run"
+mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=dvc_repro stage=<STAGE>"
+ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
+  ORBIT_WARS_RUN_ID="<RUN_ID>" \
+  ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
+  ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
+  ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
+  ORBIT_WARS_COMMAND="uv run --directory backend dvc repro <STAGE>" \
+  uv run --directory backend dvc repro "<STAGE>"
+
+echo "[onstart] step=dvc_add_run"
+uv run --directory backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=dvc_push_runs"
+uv run --directory backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=done run_id=<RUN_ID>"

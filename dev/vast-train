@@ -1,0 +1,8 @@
+#!/bin/bash
+# Vast.ai 上で GPU 学習を起動する。
+#
+# Usage:
+#   dev/vast-train <commit-sha> [--stage NAME] [--seed N] [--label TEXT]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend python -m vast train "$@"

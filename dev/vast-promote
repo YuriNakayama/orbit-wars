@@ -1,0 +1,8 @@
+#!/bin/bash
+# Vast.ai で生成された候補 weights を canonical (policy/weights.pt) に昇格する。
+#
+# Usage:
+#   dev/vast-promote <run_id> [--eval-results PATH]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend python -m vast promote "$@"
