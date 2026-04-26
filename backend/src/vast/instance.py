@@ -7,7 +7,6 @@ placeholder 置換時に shell injection を防ぐため、値は厳格な regex
 from __future__ import annotations
 
 import re
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -77,17 +76,18 @@ def render_onstart(
     return text
 
 
-def build_env_string(env: Mapping[str, str]) -> str:
-    """`vastai create_instance(env=...)` に渡す `-e KEY=VAL ...` 形式を組み立てる。
+def build_env_dict(env: Mapping[str, str]) -> dict[str, str]:
+    """`vastai SDK create_instance(env=...)` に渡す dict を組み立てる。
 
-    値は shlex.quote でクォートし、空白や記号でも安全に渡せるようにする。
+    SDK の低レベル API は `env` を dict として受け取り、JSON に直接埋める。
+    変数名のバリデーションだけ行う (shell 注入経路は onstart 側で別途検証)。
     """
-    parts: list[str] = []
+    result: dict[str, str] = {}
     for key, value in env.items():
         if not re.match(r"^[A-Z_][A-Z0-9_]*$", key):
             raise TemplateError(f"invalid env var name: {key!r}")
-        parts.append(f"-e {key}={shlex.quote(value)}")
-    return " ".join(parts)
+        result[key] = value
+    return result
 
 
 def create_instance(
@@ -95,24 +95,26 @@ def create_instance(
     offer_id: int,
     *,
     onstart_cmd: str,
-    env_string: str,
+    env: Mapping[str, str],
     image: str = DEFAULT_IMAGE,
     disk_gb: int = DEFAULT_DISK_GB,
     label: str,
+    runtype: str = "ssh_direc ssh_proxy",
 ) -> int:
     """`VastAI().create_instance(...)` を呼び、生成された instance id を返す。
 
-    SDK の応答 dict から `new_contract` または `id` を抽出する。
+    SSH + direct connection 用の `runtype="ssh_direc ssh_proxy"` をデフォルトとする
+    (vastai CLI の `--ssh --direct` と等価)。SDK の応答 dict から `new_contract`
+    または `id` を抽出する。
     """
     response = sdk.create_instance(
         offer_id,
         image=image,
         disk=float(disk_gb),
-        env=env_string,
+        env=dict(env),
         label=label,
         onstart_cmd=onstart_cmd,
-        ssh=True,
-        direct=True,
+        runtype=runtype,
     )
     if not isinstance(response, Mapping):
         raise RuntimeError(

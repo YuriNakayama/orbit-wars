@@ -26,7 +26,7 @@ from vast.auth import (
 from vast.instance import (
     DEFAULT_DISK_GB,
     DEFAULT_IMAGE,
-    build_env_string,
+    build_env_dict,
     create_instance,
     render_onstart,
 )
@@ -165,7 +165,7 @@ def train(
         branch=branch,
         repo_url=repo_url,
     )
-    env_string = build_env_string(
+    env = build_env_dict(
         {
             "AWS_ACCESS_KEY_ID": aws_creds.access_key_id,
             "AWS_SECRET_ACCESS_KEY": aws_creds.secret_access_key,
@@ -180,7 +180,7 @@ def train(
         sdk,
         chosen.id,
         onstart_cmd=onstart_cmd,
-        env_string=env_string,
+        env=env,
         image=image,
         disk_gb=disk_gb,
         label=label or run_id,

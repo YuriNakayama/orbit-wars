@@ -11,7 +11,7 @@ import pytest
 from vast.instance import (
     DEFAULT_IMAGE,
     TemplateError,
-    build_env_string,
+    build_env_dict,
     create_instance,
     render_onstart,
 )
@@ -77,22 +77,19 @@ def test_rendered_template_has_valid_bash_syntax(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_build_env_string_quotes_special_chars() -> None:
+def test_build_env_dict_passes_through() -> None:
     env = {
         "AWS_ACCESS_KEY_ID": "AKIA",
         "AWS_SECRET_ACCESS_KEY": "secret with space",
         "VAST_API_KEY": "abc123",
     }
-    s = build_env_string(env)
-    assert "-e AWS_ACCESS_KEY_ID=AKIA" in s
-    # space-bearing values must be single-quoted
-    assert "'secret with space'" in s
-    assert "-e VAST_API_KEY=abc123" in s
+    result = build_env_dict(env)
+    assert result == env
 
 
-def test_build_env_string_rejects_bad_var_name() -> None:
+def test_build_env_dict_rejects_bad_var_name() -> None:
     with pytest.raises(TemplateError, match="invalid env var name"):
-        build_env_string({"bad-name": "v"})
+        build_env_dict({"bad-name": "v"})
 
 
 def test_create_instance_returns_new_contract_id() -> None:
@@ -102,7 +99,7 @@ def test_create_instance_returns_new_contract_id() -> None:
         sdk,
         offer_id=99,
         onstart_cmd="echo hi",
-        env_string="-e A=B",
+        env={"A": "B"},
         label="test-run",
     )
     assert instance_id == 12345678
@@ -111,8 +108,8 @@ def test_create_instance_returns_new_contract_id() -> None:
     assert kwargs["disk"] == 40.0
     assert kwargs["label"] == "test-run"
     assert kwargs["onstart_cmd"] == "echo hi"
-    assert kwargs["ssh"] is True
-    assert kwargs["direct"] is True
+    assert kwargs["runtype"] == "ssh_direc ssh_proxy"
+    assert kwargs["env"] == {"A": "B"}
 
 
 def test_create_instance_missing_id_raises() -> None:
@@ -123,7 +120,7 @@ def test_create_instance_missing_id_raises() -> None:
             sdk,
             offer_id=99,
             onstart_cmd="echo hi",
-            env_string="-e A=B",
+            env={"A": "B"},
             label="test-run",
         )
 
@@ -136,6 +133,6 @@ def test_create_instance_unexpected_response_raises() -> None:
             sdk,
             offer_id=99,
             onstart_cmd="echo hi",
-            env_string="-e A=B",
+            env={"A": "B"},
             label="test-run",
         )
