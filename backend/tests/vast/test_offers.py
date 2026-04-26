@@ -36,21 +36,31 @@ def _make_raw(
     }
 
 
-def test_build_query_includes_filters() -> None:
+def test_build_query_uses_in_list_for_multiple_gpus() -> None:
     q = _build_query(
         gpu_names=("RTX_3090", "RTX_4090"),
         max_dph=0.5,
         min_reliability=0.99,
         min_cuda=12.0,
     )
-    assert "gpu_name=RTX_3090" in q
-    assert "gpu_name=RTX_4090" in q
+    assert "gpu_name in [RTX_3090,RTX_4090]" in q
     assert "num_gpus=1" in q
     assert "reliability>=0.99" in q
     assert "cuda_max_good>=12.0" in q
     assert "dph_total<0.5" in q
     assert "rentable=true" in q
     assert "verified=true" in q
+
+
+def test_build_query_uses_eq_for_single_gpu() -> None:
+    q = _build_query(
+        gpu_names=("RTX_3090",),
+        max_dph=0.5,
+        min_reliability=0.99,
+        min_cuda=12.0,
+    )
+    assert "gpu_name=RTX_3090" in q
+    assert "in [" not in q
 
 
 def test_parse_offer_basic() -> None:

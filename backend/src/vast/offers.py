@@ -54,8 +54,15 @@ def _build_query(
     min_reliability: float,
     min_cuda: float,
 ) -> str:
-    """vastai CLI 互換の query 文字列を組み立てる。"""
-    gpu_clause = " ".join(f"gpu_name={n}" for n in gpu_names)
+    """vastai CLI 互換の query 文字列を組み立てる。
+
+    複数 GPU 名は `gpu_name in [X,Y]` 構文を使う必要がある。
+    `gpu_name=X gpu_name=Y` の並列指定は AND として処理されて 0 件になる。
+    """
+    if len(gpu_names) == 1:
+        gpu_clause = f"gpu_name={gpu_names[0]}"
+    else:
+        gpu_clause = f"gpu_name in [{','.join(gpu_names)}]"
     parts = [
         gpu_clause,
         "num_gpus=1",
