@@ -52,10 +52,10 @@ uv sync --locked --all-extras --dev --directory backend
 echo "[onstart] step=install_vastai_cli_for_self_destroy"
 uv pip install --directory backend vastai >/dev/null 2>&1 || true
 
-echo "[onstart] step=dvc_remote_profile"
-uv run --directory backend dvc remote modify --local s3 profile default
-
 echo "[onstart] step=dvc_pull"
+# .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
+# boto3 default credential chain がそのまま拾う。.dvc/config.local は git
+# untracked なので Vast 側には存在せず、profile 上書きの必要は無い。
 uv run --directory backend dvc pull
 
 echo "[onstart] step=mkdir_run"
