@@ -50,13 +50,15 @@ echo "[onstart] step=uv_sync"
 uv sync --locked --all-extras --dev --directory backend
 
 echo "[onstart] step=install_vastai_cli_for_self_destroy"
-uv pip install --directory backend vastai >/dev/null 2>&1 || true
+uv pip install --project backend vastai >/dev/null 2>&1 || true
 
 echo "[onstart] step=dvc_pull"
 # .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
 # boto3 default credential chain がそのまま拾う。.dvc/config.local は git
 # untracked なので Vast 側には存在せず、profile 上書きの必要は無い。
-uv run --directory backend dvc pull
+# DVC コマンドは dvc.yaml がある repo root で実行する必要がある (--directory
+# backend だと backend/dvc.yaml を探しに行って失敗する)。
+uv run --project backend dvc pull
 
 echo "[onstart] step=mkdir_run"
 mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
@@ -67,13 +69,13 @@ ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_COMMAND="uv run --directory backend dvc repro <STAGE>" \
-  uv run --directory backend dvc repro "<STAGE>"
+  ORBIT_WARS_COMMAND="uv run --project backend dvc repro <STAGE>" \
+  uv run --project backend dvc repro "<STAGE>"
 
 echo "[onstart] step=dvc_add_run"
-uv run --directory backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
 
 echo "[onstart] step=dvc_push_runs"
-uv run --directory backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
 
 echo "[onstart] step=done run_id=<RUN_ID>"
