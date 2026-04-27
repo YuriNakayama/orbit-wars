@@ -47,7 +47,18 @@ fi
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 echo "[onstart] step=uv_sync"
-uv sync --locked --all-extras --dev --directory backend
+# 大型 wheel (nvidia-* 数百 MB) で connection reset が起きやすいため retry。
+for attempt in 1 2 3; do
+  if uv sync --locked --all-extras --dev --directory backend; then
+    break
+  fi
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
+  fi
+done
 
 echo "[onstart] step=install_vastai_cli_for_self_destroy"
 uv pip install --project backend vastai >/dev/null 2>&1 || true
