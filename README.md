@@ -148,6 +148,28 @@ git commit -m "..."
 
 Stage 定義は `dvc.yaml`、パラメータは `params.yaml`（Python CLI は `--config` を持たず params.yaml を固定読み）。
 
+### ローカル対戦履歴 (`data/lake/selfplay/matches/`)
+
+selfplay runner が生成する 1v1 / FFA の対戦ログ (index.parquet + replays/) は `dvc add` でディレクトリ単位に track しています。`.dvc` メタファイル (`data/lake/selfplay/matches.dvc`) のみ git で追跡され、実データは S3 remote に push します。
+
+```bash
+# selfplay 実行 (自動で dvc add を走らせる場合)
+cd backend
+uv run python -m dataset run --agents baseline_v1,case0 --mode 1v1 -n 100 --dvc-add
+
+# 手動で dvc add する場合
+uv run --directory backend dvc add data/lake/selfplay/matches
+
+# 変更を共有
+git add data/lake/selfplay/matches.dvc
+git commit -m ":sparkles: selfplay: N 件追加"
+uv run --directory backend dvc push
+```
+
+別 worktree や clean clone から復元するには `dvc pull data/lake/selfplay/matches.dvc` を実行します。Kaggle scraper が出力する `data/lake/kaggle_episodes/matches/` も同様に `dvc add` で管理されています。
+
+> **注意**: `.dvc/cache` は worktree 間で共有 (`/Users/user/project/orbit-wars/.dvc/cache`) のため、複数 worktree で同時に `dvc add` / `dvc pull` を走らせると lock 競合する可能性があります。順次実行してください。
+
 ### インフラ (S3 bucket + IAM)
 
 Terraform 管理。詳細は [`infra/environment/dev/README.md`](infra/environment/dev/README.md) を参照。

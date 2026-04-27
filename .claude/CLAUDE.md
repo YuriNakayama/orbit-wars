@@ -81,7 +81,9 @@ uv run --directory backend dvc push           # 生成物を S3 にアップロ�
 uv run --directory backend dvc dag            # stage 依存グラフ
 ```
 
-**複数 worktree 同時実行は非推奨**: DVC cache は `/Users/user/project/orbit-wars/.dvc/cache` をワークツリー間で共有するため、同時に `dvc repro` / `dvc pull` を走らせると lock 競合の可能性がある。
+`data/lake/selfplay/matches/` (selfplay runner 出力) と `data/lake/kaggle_episodes/matches/` (Kaggle scraper 出力) は `dvc add` でディレクトリ単位 track。selfplay 実行で履歴が増えたら `--dvc-add` フラグで自動更新するか、手動で `dvc add data/lake/selfplay/matches` → `git add *.dvc` → `dvc push` を実行する。
+
+**複数 worktree 同時実行は非推奨**: DVC cache は `/Users/user/project/orbit-wars/.dvc/cache` をワークツリー間で共有するため、同時に `dvc repro` / `dvc pull` / `dvc add` を走らせると lock 競合の可能性がある。
 
 ## Kaggle Submission Policy
 
