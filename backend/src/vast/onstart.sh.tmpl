@@ -74,14 +74,18 @@ uv run --project backend dvc pull
 echo "[onstart] step=mkdir_run"
 mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
 
-echo "[onstart] step=dvc_repro stage=<STAGE>"
+echo "[onstart] step=train_direct stage=<STAGE>"
+# dvc repro は outs (policy/weights.pt) を厳密チェックするため、ORBIT_WARS_RUN_DIR
+# で出力先を run dir に切り替えると DVC が canonical の不在を検出してエラーになる。
+# Vast 側では dvc.yaml を bypass し、train.py を直接実行する (preprocess は cache
+# hit で skip される前提のため repro は使わない)。
 ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_COMMAND="uv run --project backend dvc repro <STAGE>" \
-  uv run --project backend dvc repro "<STAGE>"
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m pipeline.imitation.case1.training.train" \
+  uv run --directory backend python -m pipeline.imitation.case1.training.train
 
 echo "[onstart] step=dvc_add_run"
 uv run --project backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
