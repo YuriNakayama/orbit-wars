@@ -1,0 +1,113 @@
+#!/bin/bash
+# Vast.ai onstart for Orbit Wars GPU training.
+# Placeholders are substituted by vast.instance.render_onstart before upload:
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>
+set -euo pipefail
+exec > >(tee -a /var/log/onstart.log) 2>&1
+
+INSTANCE_ID="${VAST_CONTAINERLABEL:-${CONTAINER_ID:-unknown}}"
+
+cleanup_destroy() {
+  local exit_code=$?
+  echo "[onstart] cleanup status=${exit_code}"
+  if [ "${exit_code}" -ne 0 ]; then
+    echo "[onstart] failure: leaving instance up for manual inspection"
+    exit "${exit_code}"
+  fi
+  if [ -z "${VAST_API_KEY:-}" ]; then
+    echo "[onstart] VAST_API_KEY missing; skipping self-destroy"
+    return
+  fi
+  # vastai CLI は backend venv 内 (uv pip install --project backend) なので
+  # PATH には出ない。venv の python から直接 SDK を呼ぶ。
+  if [ -d /workspace/orbit-wars/backend/.venv ]; then
+    echo "[onstart] self-destroy instance=${INSTANCE_ID} via backend venv"
+    /workspace/orbit-wars/backend/.venv/bin/python -c "
+from vastai import VastAI
+import os
+sdk = VastAI(api_key=os.environ['VAST_API_KEY'])
+try:
+    instance_id = int(os.environ.get('INSTANCE_ID', '${INSTANCE_ID}'))
+except (ValueError, KeyError):
+    print('invalid INSTANCE_ID env')
+    raise SystemExit
+result = sdk.destroy_instance(id=instance_id)
+print('destroy:', result)
+" || echo "[onstart] self-destroy failed (instance left running)"
+  else
+    echo "[onstart] backend venv missing; skipping self-destroy"
+  fi
+}
+trap cleanup_destroy EXIT
+
+echo "[onstart] step=env_persist"
+env >> /etc/environment
+
+echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
+mkdir -p /workspace
+cd /workspace
+if [ ! -d orbit-wars ]; then
+  if [ -n "${GIT_PAT:-}" ]; then
+    git clone "https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')" orbit-wars
+  else
+    git clone "<REPO_URL>" orbit-wars
+  fi
+fi
+cd orbit-wars
+git fetch origin "<COMMIT_SHA>" || true
+git checkout "<COMMIT_SHA>"
+
+echo "[onstart] step=install_uv"
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+echo "[onstart] step=uv_sync"
+# 大型 wheel (nvidia-* 数百 MB) で connection reset が起きやすいため retry。
+for attempt in 1 2 3; do
+  if uv sync --locked --all-extras --dev --directory backend; then
+    break
+  fi
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
+  fi
+done
+
+echo "[onstart] step=install_vastai_cli_for_self_destroy"
+uv pip install --project backend vastai >/dev/null 2>&1 || true
+
+echo "[onstart] step=dvc_pull"
+# .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
+# boto3 default credential chain がそのまま拾う。.dvc/config.local は git
+# untracked なので Vast 側には存在せず、profile 上書きの必要は無い。
+# DVC コマンドは dvc.yaml がある repo root で実行する必要がある (--directory
+# backend だと backend/dvc.yaml を探しに行って失敗する)。
+uv run --project backend dvc pull
+
+echo "[onstart] step=mkdir_run"
+mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=train_direct stage=<STAGE>"
+# dvc repro は outs (policy/weights.pt) を厳密チェックするため、ORBIT_WARS_RUN_DIR
+# で出力先を run dir に切り替えると DVC が canonical の不在を検出してエラーになる。
+# Vast 側では dvc.yaml を bypass し、train.py を直接実行する (preprocess は cache
+# hit で skip される前提のため repro は使わない)。
+ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
+  ORBIT_WARS_RUN_ID="<RUN_ID>" \
+  ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
+  ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
+  ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m pipeline.imitation.case1.training.train" \
+  uv run --directory backend python -m pipeline.imitation.case1.training.train
+
+echo "[onstart] step=dvc_add_run"
+uv run --project backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=dvc_push_runs"
+uv run --project backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
+
+echo "[onstart] step=done run_id=<RUN_ID>"

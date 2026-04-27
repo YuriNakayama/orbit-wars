@@ -61,8 +61,13 @@ __pycache__/
 .mypy_cache
 backend/tests/coverage/
 
-## artifacts
-artifacts/
+## artifacts (Vast.ai run outputs; DVC-managed, see artifacts/README.md)
+/artifacts/**
+!/artifacts/**/
+!/artifacts/**/*.dvc
+!/artifacts/**/.gitignore
+!/artifacts/**/*.md
+!/artifacts/**/.gitkeep
 
 # infra
 

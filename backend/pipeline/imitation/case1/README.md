@@ -60,6 +60,20 @@ uv run python -m pipeline.imitation.case1.evaluation.eval_vs_baseline --episodes
 
 パラメータを変更したい場合はリポジトリルートの `params.yaml` を編集します。
 
+### Vast.ai 経由 (GPU 学習、ローカルから直接起動)
+
+```bash
+git push origin <branch>
+dev/vast-train <commit-sha>            # search offers → pick → onstart 起動
+dev/vast-pull <run_id>                 # 完了後にローカル取得
+dev/vast-promote <run_id>              # 採用なら canonical weights に昇格
+```
+
+`train.py` は `ORBIT_WARS_RUN_DIR` env が指定されているとき、その下に `best.pt`、
+`metrics.json`、`run.json` を出力する設計です（canonical `policy/weights.pt` は
+`dev/vast-promote` を経由しないと更新されません）。詳細は
+[`docs/plans/vast-ai-basis/`](../../../../docs/plans/vast-ai-basis/) を参照。
+
 ## テスト
 
 ```bash
