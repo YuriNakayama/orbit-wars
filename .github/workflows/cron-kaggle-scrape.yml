@@ -1,0 +1,108 @@
+name: Cron Kaggle Scrape
+
+on:
+  schedule:
+    - cron: "0 18 * * *"  # JST 03:00 (UTC 18:00)
+  workflow_dispatch:
+    inputs:
+      top:
+        description: "Leaderboard top N teams"
+        required: false
+        type: number
+        default: 20
+      modes:
+        description: "Comma-separated modes (1v1,ffa4)"
+        required: false
+        type: string
+        default: "1v1,ffa4"
+      limit_per_team:
+        description: "Max episodes per team"
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: kaggle-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.DVC_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ap-northeast-1
+      SCRAPE_TOP: ${{ inputs.top || 20 }}
+      SCRAPE_MODES: ${{ inputs.modes || '1v1,ffa4' }}
+      SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 30 }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+        working-directory: backend
+
+      - name: DVC pull existing kaggle episodes
+        run: uv run --directory backend dvc pull data/lake/kaggle_episodes/matches.dvc
+
+      - name: Scrape kaggle episodes
+        run: |
+          uv run --directory backend python -m dataset kaggle scrape \
+            --top "${SCRAPE_TOP}" \
+            --modes "${SCRAPE_MODES}" \
+            --limit-per-team "${SCRAPE_LIMIT_PER_TEAM}" \
+            --dvc-add \
+            2>&1 | tee /tmp/scrape.log
+
+      - name: Detect data changes
+        id: diff
+        run: |
+          if git diff --quiet -- data/lake/kaggle_episodes/matches.dvc; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: DVC push
+        if: steps.diff.outputs.changed == 'true'
+        run: uv run --directory backend dvc push
+
+      - name: Create pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          add-paths: data/lake/kaggle_episodes/matches.dvc
+          commit-message: "chore(data): refresh kaggle episodes"
+          branch: chore/kaggle-data-refresh
+          delete-branch: true
+          title: "chore(data): refresh kaggle episodes"
+          body: |
+            Automated refresh of `data/lake/kaggle_episodes/matches.dvc`.
+
+            - Trigger: `${{ github.event_name }}`
+            - Top: `${{ env.SCRAPE_TOP }}` / Modes: `${{ env.SCRAPE_MODES }}` / Limit per team: `${{ env.SCRAPE_LIMIT_PER_TEAM }}`
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          labels: data-refresh
+
+      - name: Upload scrape log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-scrape-log
+          path: /tmp/scrape.log
+          if-no-files-found: ignore
+          retention-days: 30

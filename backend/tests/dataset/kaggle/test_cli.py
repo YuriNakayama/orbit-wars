@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -114,3 +116,107 @@ def test_help_lists_three_subcommands() -> None:
     assert "scrape" in result.stdout
     assert "list" in result.stdout
     assert "inspect" in result.stdout
+
+
+def test_scrape_dvc_add_runs_when_records_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dvc_root = tmp_path / "repo"
+    (dvc_root / ".dvc").mkdir(parents=True)
+    data_root = dvc_root / "data" / "kaggle"
+    (data_root / "matches").mkdir(parents=True)
+    monkeypatch.setattr(
+        scraper, "run", lambda spec: _fake_result(records_written=3, replays_written=3)
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/dvc")
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(
+        cmd: list[str], check: bool, cwd: Path
+    ) -> subprocess.CompletedProcess[bytes]:
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["kaggle", "scrape", "--top", "1", "--dvc-add", "--data-root", str(data_root)],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"] == ["/usr/local/bin/dvc", "add", "data/kaggle/matches"]
+    assert captured["cwd"] == dvc_root.resolve()
+
+
+def test_scrape_dvc_add_fails_without_dvc_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "matches").mkdir()
+    monkeypatch.setattr(
+        scraper, "run", lambda spec: _fake_result(records_written=1, replays_written=1)
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/dvc")
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("subprocess.run must not be invoked without .dvc/")
+
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["kaggle", "scrape", "--top", "1", "--dvc-add", "--data-root", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "no `.dvc/` directory found" in result.stdout
+
+
+def test_scrape_dvc_add_skipped_when_dry_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        scraper, "run", lambda spec: _fake_result(dry_run=True, records_written=0)
+    )
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("subprocess.run must not be invoked in dry-run mode")
+
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        [
+            "kaggle",
+            "scrape",
+            "--top",
+            "1",
+            "--dry-run",
+            "--dvc-add",
+            "--data-root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+
+def test_scrape_dvc_add_skipped_when_no_records(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(scraper, "run", lambda spec: _fake_result(records_written=0))
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "subprocess.run must not be invoked when no records written"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["kaggle", "scrape", "--top", "1", "--dvc-add", "--data-root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.stdout
