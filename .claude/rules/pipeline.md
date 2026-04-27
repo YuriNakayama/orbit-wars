@@ -1,15 +1,17 @@
 ---
 paths:
-  - "pipeline/**"
+  - "backend/pipeline/**"
 ---
 
-# Pipeline (pipeline/<category>/case*) Submission Rules
+# Pipeline (backend/pipeline/<category>/case*) Submission Rules
 
-Conventions for keeping `pipeline/<category>/case*/` directories runnable **both locally and on Kaggle after submission**. `<category>` currently has two families: `rulebase/` (case0–case2) and `imitation/` (case1). Case numbers are assigned **independently per category** starting from 1 (rulebase/case1 and imitation/case1 are unrelated).
+Conventions for keeping `backend/pipeline/<category>/case*/` directories runnable **both locally and on Kaggle after submission**. `<category>` currently has two families: `rulebase/` (case0–case2) and `imitation/` (case1). Case numbers are assigned **independently per category** starting from 1 (rulebase/case1 and imitation/case1 are unrelated).
+
+Path notation below uses `backend/` as the anchor (`pipeline/<category>/case<N>/...`). `uv run ...` / `dev/submit ...` are expected to execute with `backend/` as the working directory.
 
 ## Premise: submit infrastructure constraints
 
-Constraints imposed by `src/submit/validator.py` and `src/submit/packager.py`:
+Constraints imposed by `backend/src/submit/validator.py` and `backend/src/submit/packager.py`:
 
 1. `pipeline/<category>/<case>/main.py` **must exist directly under the case directory** and expose `agent(obs)` at the top level (it is loaded directly via `importlib.util.spec_from_file_location`).
 2. The packager bundles `*.py`, `*.json`, `*.yaml`, `*.pkl`, `*.pt`, etc. under `case_dir` into a tar.gz **preserving the relative path structure rooted at `case_dir`**.
@@ -49,7 +51,7 @@ Probable reason: Kaggle's agent loader sets cwd to the extracted directory befor
 
 **Use `Path.cwd()` instead.** Kaggle is implemented under the assumption that the extracted tar.gz directory is cwd, so `Path.cwd()` reliably points at the extraction directory.
 
-Because of this behavior gap, **the local validator (`src/submit/validator.py`) does not change cwd, so `main.py` written with the `Path.cwd()` pattern fails dry-run with `ModuleNotFoundError`**. To pass `--dry-run` locally, combine it with `--skip-validation`, or `cd pipeline/<category>/case<N>` manually before exec. Other local paths (such as `pipeline.<category>.case<N>.baseline.agent:agent` imported via `src/dataset/selfplay/agents.py`) bypass `main.py` and are therefore unaffected.
+Because of this behavior gap, **the local validator (`backend/src/submit/validator.py`) does not change cwd, so `main.py` written with the `Path.cwd()` pattern fails dry-run with `ModuleNotFoundError`**. To pass `--dry-run` locally, combine it with `--skip-validation`, or `cd backend/pipeline/<category>/case<N>` manually before exec. Other local paths (such as `pipeline.<category>.case<N>.baseline.agent:agent` imported via `backend/src/dataset/selfplay/agents.py`) bypass `main.py` and are therefore unaffected.
 
 ### 2) Use relative imports inside subpackages
 
@@ -85,7 +87,7 @@ __all__ = ["agent", "build_world"]
 
 ## Local-side import paths (unchanged)
 
-The following may continue to be used locally (they remain resolvable after the relative-import refactor):
+The following may continue to be used locally (they remain resolvable after the relative-import refactor). Paths are relative to `backend/`:
 
 - `src/dataset/selfplay/agents.py` — `"baseline_v1": "pipeline.rulebase.case1.baseline.agent:agent"`
 - `pipeline/<category>/case<N>/evaluation/*.py` — `from pipeline.<category>.case<N>.baseline import agent as baseline_agent`
@@ -102,18 +104,18 @@ These are not bundled into the Kaggle archive, so absolute imports for local-onl
 5. Run `dev/submit <category>/case<N> --dry-run -m "..."` and confirm that the validator loads `main.py` and `env.run([agent, "random"])` succeeds.
 6. Confirm `pytest tests/pipeline/<category>/case<N>` passes before submitting to production.
 
-## Submission archive exclusions (`pipeline/.submitignore`)
+## Submission archive exclusions (`backend/pipeline/.submitignore`)
 
-The packager reads `pipeline/.submitignore` to decide which paths to exclude from the tar.gz. **It applies across all categories and cases** (a single file directly under the pipeline root).
+The packager reads `backend/pipeline/.submitignore` to decide which paths to exclude from the tar.gz. **It applies across all categories and cases** (a single file directly under the pipeline root).
 
 ### Location and syntax
 
-- Location: `pipeline/.submitignore` (a single file directly under the pipeline root)
+- Location: `backend/pipeline/.submitignore` (a single file directly under the pipeline root)
 - Syntax: gitignore-compatible subset
   - Lines starting with `#` are comments; blank lines are ignored
   - A trailing `/` denotes a directory (excludes everything beneath it)
   - Otherwise the pattern is matched against paths/filenames via `fnmatch`
-- Paths are evaluated **relative to `case_dir`** (e.g. `eda/` matches `pipeline/rulebase/case1/eda/`)
+- Paths are evaluated **relative to `case_dir`** (e.g. `eda/` matches `backend/pipeline/rulebase/case1/eda/`)
 
 ### Standard exclusion list (this repo)
 
@@ -150,7 +152,7 @@ Local-only development scripts such as `evaluation/snapshot_update.py` may conta
 
 Kaggle Orbit Wars allows up to 5 submissions per day, but `SubmissionStatus.ERROR` (validation failures) are **not** counted against the quota. In other words, **submissions that fail validation can be retried immediately**: when an error occurs, inspect the Kaggle Web UI logs, identify the cause, and resubmit right away.
 
-`src/submit/` does not perform a local quota check (if the Kaggle side is over the limit, the submit simply fails — the local-side aggregation can have timing skew, so we avoid spurious local rejections). Check the current submission count with `uv run python -m submit submissions`.
+`backend/src/submit/` does not perform a local quota check (if the Kaggle side is over the limit, the submit simply fails — the local-side aggregation can have timing skew, so we avoid spurious local rejections). Check the current submission count from `backend/` with `uv run python -m submit submissions`.
 
 ## Evaluation metric interpretation (local match results only)
 
@@ -162,13 +164,17 @@ Kaggle Orbit Wars publicScore and skill rating are **relative metrics** computed
 
 ## Verification commands
 
+Run the snippet below from `backend/` (or use `dev/submit` / `dev/test-backend` from the repo root):
+
 ```bash
+cd backend
+
 # Verify the local import path
 uv run python -c "from pipeline.rulebase.case1.baseline.agent import agent; print(agent)"
 
 # Simulate the Kaggle-side import path (equivalent to the validator that loads main.py directly)
 uv run python -m submit submit rulebase/case1 --dry-run -m "dry-run verification"
 
-# Pre-submission check suite
-dev/test-backend
+# Pre-submission check suite (from the repo root)
+cd .. && dev/test-backend
 ```

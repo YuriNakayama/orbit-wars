@@ -59,23 +59,28 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポ
 ## Folder Structure
 
 ```
-src/
-  dataset/              対戦ログ管理 (selfplay 実行 + Kaggle scraper + storage)
-    schema/             MatchRecord 等のドメイン型
-    storage/            parquet 書き出し・読み出し・分析
-    selfplay/           kaggle-environments ラッパー・自己対戦 runner
-    kaggle/             Kaggle EpisodeService scraper
-  submit/               Kaggle 提出の archive / validator / uploader
-pipeline/
-  rulebase/             ルールベース戦略パイプライン
-    case0/              単純スナイパー (参考実装)
-    case1/              baseline_v1
-      eda/              観測データの探索的分析
-    case2/              baseline_v2
-  imitation/            模倣学習パイプライン
-    case1/              DeepSets BC
-tests/                  Pytest unit tests
-data/                   3 層構造 (gitignore)
+backend/                Python 実装一式 (pyproject.toml / uv.lock はここに配置)
+  src/
+    dataset/            対戦ログ管理 (selfplay 実行 + Kaggle scraper + storage)
+      schema/           MatchRecord 等のドメイン型
+      storage/          parquet 書き出し・読み出し・分析
+      selfplay/         kaggle-environments ラッパー・自己対戦 runner
+      kaggle/           Kaggle EpisodeService scraper
+    submit/             Kaggle 提出の archive / validator / uploader
+  pipeline/
+    rulebase/           ルールベース戦略パイプライン
+      case0/            単純スナイパー (参考実装)
+      case1/            baseline_v1
+        eda/            観測データの探索的分析
+      case2/            baseline_v2
+    imitation/          模倣学習パイプライン
+      case1/            DeepSets BC
+  tests/                Pytest unit tests
+infra/                  Terraform によるインフラ管理 (AWS 等)
+  environment/          環境別 root module (dev / staging / prod)
+    dev/
+  module/               再利用可能な共有モジュール
+data/                   3 層構造 (gitignore / メインリポジトリへの symlink)
   lake/                 生データ層
     selfplay/matches/   self-play リプレイ・index
     kaggle_episodes/matches/  Kaggle 上位リプレイ・index
@@ -95,6 +100,8 @@ docs/
   research/             Research prompts and outputs
 ```
 
+Python コマンドは `backend/` 配下で `uv run ...` として実行するか、`dev/*` スクリプト経由で呼び出してください（スクリプトは内部で `cd backend` します）。
+
 ## Commands
 
 ```bash
@@ -103,13 +110,77 @@ dev/format           # Code formatting (ruff)
 dev/lint             # Static analysis (ruff + mypy)
 dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
+dev/dvc-setup        # Configure local DVC (cache dir + AWS profile)
 ```
 
-## Evaluation Framework (`src/dataset/`)
+## Data / Model Management (DVC)
 
-ローカルでの対戦実行・データ蓄積・分析・再生、および Kaggle 上位リプレイの取得を提供する汎用フレームワーク。
+学習データ・前処理済み parquet・モデル重み・評価メトリクスは **DVC + S3** で版管理します。
+Git はコードと `dvc.yaml` / `dvc.lock` / `params.yaml` を追跡し、実データ本体は S3 に push/pull します。
+
+### 初回セットアップ
 
 ```bash
+# 1) AWS CLI に orbit-wars プロファイルを用意しておく (infra/environment/dev で作成した IAM user の key)
+# 2) リポジトリ側のローカル設定 (cache 共有 + profile)
+dev/dvc-setup
+
+# 3) データ取得 (S3 remote から)
+uv run --directory backend dvc pull
+```
+
+### Pipeline 再実行 (`dvc repro`)
+
+```bash
+uv run --directory backend dvc repro                            # 全 stage 依存グラフで差分再実行
+uv run --directory backend dvc repro preprocess_imitation_case1 # 単 stage
+uv run --directory backend dvc dag                              # DAG 描画
+uv run --directory backend dvc status                           # 差分一覧
+```
+
+変更した成果物を S3 に共有:
+
+```bash
+uv run --directory backend dvc push
+git add dvc.lock params.yaml data/mart/imitation/case1/eval_metrics.json
+git commit -m "..."
+```
+
+Stage 定義は `dvc.yaml`、パラメータは `params.yaml`（Python CLI は `--config` を持たず params.yaml を固定読み）。
+
+### ローカル対戦履歴 (`data/lake/selfplay/matches/`)
+
+selfplay runner が生成する 1v1 / FFA の対戦ログ (index.parquet + replays/) は `dvc add` でディレクトリ単位に track しています。`.dvc` メタファイル (`data/lake/selfplay/matches.dvc`) のみ git で追跡され、実データは S3 remote に push します。
+
+```bash
+# selfplay 実行 (自動で dvc add を走らせる場合)
+cd backend
+uv run python -m dataset run --agents baseline_v1,case0 --mode 1v1 -n 100 --dvc-add
+
+# 手動で dvc add する場合
+uv run --directory backend dvc add data/lake/selfplay/matches
+
+# 変更を共有
+git add data/lake/selfplay/matches.dvc
+git commit -m ":sparkles: selfplay: N 件追加"
+uv run --directory backend dvc push
+```
+
+別 worktree や clean clone から復元するには `dvc pull data/lake/selfplay/matches.dvc` を実行します。Kaggle scraper が出力する `data/lake/kaggle_episodes/matches/` も同様に `dvc add` で管理されています。
+
+> **注意**: `.dvc/cache` は worktree 間で共有 (`/Users/user/project/orbit-wars/.dvc/cache`) のため、複数 worktree で同時に `dvc add` / `dvc pull` を走らせると lock 競合する可能性があります。順次実行してください。
+
+### インフラ (S3 bucket + IAM)
+
+Terraform 管理。詳細は [`infra/environment/dev/README.md`](infra/environment/dev/README.md) を参照。
+
+## Evaluation Framework (`backend/src/dataset/`)
+
+ローカルでの対戦実行・データ蓄積・分析・再生、および Kaggle 上位リプレイの取得を提供する汎用フレームワーク。以下のコマンドは `backend/` ディレクトリ配下で実行します。
+
+```bash
+cd backend
+
 # 自己対戦実行 (結果は data/lake/selfplay/matches/ に保存)
 uv run python -m dataset run \
   --agents baseline_v1,case0 --mode 1v1 -n 10 --parallel 4
@@ -126,7 +197,7 @@ uv run python -m dataset kaggle scrape --top 20 --modes 1v1,ffa4
 
 - **データ**: Parquet (hive partition: `mode=`) に指標、`replays/{match_id}.json.gz` に env.toJSON。
 - **分析**: `dataset.storage.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
-- **可視化**: `pipeline/rulebase/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
+- **可視化**: `backend/pipeline/rulebase/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
 
 ## Glossary
 

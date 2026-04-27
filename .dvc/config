@@ -1,0 +1,10 @@
+[core]
+    remote = s3
+    autostage = true
+[cache]
+    type = symlink
+    shared = group
+['remote "s3"']
+    url = s3://orbit-wars-dvc-286854171013/remote
+    region = ap-northeast-1
+    sse = AES256

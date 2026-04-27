@@ -15,33 +15,36 @@ paths:
 
 ## Scope
 
-Orbit Wars submission artifacts run on Kaggle, so `infra/` is used **only when training infrastructure (GPU / large-scale self-play clusters etc.) is required**. Even though it is currently unused, the shared rules below are kept here for future cloud-based training environments.
+Orbit Wars submission artifacts run on Kaggle, so `infra/` is used **only when managing AWS-style cloud resources with Terraform** (training infrastructure, data storage like the DVC remote, CI execution environments, etc.).
 
 ## Module Structure
 
-A layered module structure is recommended:
+The repository uses the following layered structure (singular form):
 
 ```
 infra/
-  environments/          Environment configs (dev, staging, prod, state)
+  environment/           Environment configs (dev, staging, prod)
     dev/
       main.tf
       variables.tf
       outputs.tf
       terraform.tfvars   (gitignored)
-    staging/
-    prod/
-  modules/
+    staging/             (add when needed)
+    prod/                (add when needed)
+  module/                Reusable shared modules
     foundation/          Core infrastructure (networking, IAM)
     platform/            Platform services (compute, storage, monitoring)
-    applications/        Application-specific stacks (training jobs, replay store)
+    application/         Application-specific stacks (training jobs, replay store)
 ```
+
+- `environment/<env>/` is the Terraform root module — run `terraform init / plan / apply` here.
+- Modules under `module/` are reusable building blocks consumed by environments; never apply them on their own.
 
 ### Module Design Principles
 
-- Clearly separate responsibilities (foundation, platform, applications)
+- Clearly separate responsibilities (foundation, platform, application)
 - Do not define `provider` blocks in shared modules
-- Define `required_providers` in root modules
+- Define `required_providers` in root modules (`environment/<env>/`)
 - Manage inter-module dependencies using `outputs`
 
 ## Resource Naming
