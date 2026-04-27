@@ -14,11 +14,28 @@ cleanup_destroy() {
     echo "[onstart] failure: leaving instance up for manual inspection"
     exit "${exit_code}"
   fi
-  if command -v vastai >/dev/null 2>&1 && [ -n "${VAST_API_KEY:-}" ]; then
-    echo "[onstart] self-destroy instance=${INSTANCE_ID}"
-    vastai destroy instance "${INSTANCE_ID}" || true
+  if [ -z "${VAST_API_KEY:-}" ]; then
+    echo "[onstart] VAST_API_KEY missing; skipping self-destroy"
+    return
+  fi
+  # vastai CLI は backend venv 内 (uv pip install --project backend) なので
+  # PATH には出ない。venv の python から直接 SDK を呼ぶ。
+  if [ -d /workspace/orbit-wars/backend/.venv ]; then
+    echo "[onstart] self-destroy instance=${INSTANCE_ID} via backend venv"
+    /workspace/orbit-wars/backend/.venv/bin/python -c "
+from vastai import VastAI
+import os
+sdk = VastAI(api_key=os.environ['VAST_API_KEY'])
+try:
+    instance_id = int(os.environ.get('INSTANCE_ID', '${INSTANCE_ID}'))
+except (ValueError, KeyError):
+    print('invalid INSTANCE_ID env')
+    raise SystemExit
+result = sdk.destroy_instance(id=instance_id)
+print('destroy:', result)
+" || echo "[onstart] self-destroy failed (instance left running)"
   else
-    echo "[onstart] vastai CLI or VAST_API_KEY missing; skipping self-destroy"
+    echo "[onstart] backend venv missing; skipping self-destroy"
   fi
 }
 trap cleanup_destroy EXIT

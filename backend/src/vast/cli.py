@@ -208,7 +208,7 @@ def pull(
     cmd = [
         "uv",
         "run",
-        "--directory",
+        "--project",
         "backend",
         "dvc",
         "pull",
@@ -267,7 +267,7 @@ def promote(
     dvc_commit_cmd = [
         "uv",
         "run",
-        "--directory",
+        "--project",
         "backend",
         "dvc",
         "commit",
@@ -291,7 +291,7 @@ def promote(
     dvc_add_cmd = [
         "uv",
         "run",
-        "--directory",
+        "--project",
         "backend",
         "dvc",
         "add",
