@@ -9,6 +9,8 @@ Kaggle sub-app (`python -m dataset kaggle ...`):
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import typer
@@ -62,6 +64,11 @@ def run(
     data_root: Path = typer.Option(
         DEFAULT_DATA_ROOT, "--data-root", help="Root directory for matches/ output."
     ),
+    dvc_add: bool = typer.Option(
+        False,
+        "--dvc-add/--no-dvc-add",
+        help="Run `dvc add <data_root>/matches` after persisting.",
+    ),
 ) -> None:
     """Run N episodes and persist records + replays."""
     agent_names = _parse_agents(agents)
@@ -77,6 +84,36 @@ def run(
     with Progress(console=console) as progress:
         records = run_episodes(spec, progress=progress)
     report.summarize(records, console=console, title=f"Summary — {mode}")
+    if dvc_add:
+        _dvc_add_matches(data_root)
+
+
+def _dvc_add_matches(data_root: Path) -> None:
+    """Run `dvc add <data_root>/matches` to refresh the tracking metafile.
+
+    Skips with a warning if `dvc` is not on PATH or the target is missing.
+    """
+    target = data_root / "matches"
+    if not target.exists():
+        console.print(f"[yellow]--dvc-add skipped: {target} does not exist[/yellow]")
+        return
+    dvc_bin = shutil.which("dvc")
+    if dvc_bin is None:
+        console.print("[yellow]--dvc-add skipped: `dvc` not found on PATH[/yellow]")
+        return
+    cmd = [dvc_bin, "add", str(target)]
+    console.print(f"[cyan]running: {' '.join(cmd)}[/cyan]")
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        console.print(
+            f"[red]dvc add exited with code {result.returncode}; "
+            "review output above and resolve manually[/red]"
+        )
+        raise typer.Exit(code=result.returncode)
+    console.print(
+        f"[green]dvc add complete; commit `{target}.dvc` and run `dvc push` "
+        "when ready[/green]"
+    )
 
 
 @app.command("list")

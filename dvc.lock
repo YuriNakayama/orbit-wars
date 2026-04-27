@@ -18,8 +18,8 @@ stages:
       size: 7490
     - path: backend/pipeline/imitation/case1/training/preprocess.py
       hash: md5
-      md5: 61beab1e7646eddf1beb3054f425f728
-      size: 12436
+      md5: ed267c2bfe901f6189f06258e0c7cd39
+      size: 13979
     - path: data/lake/kaggle_episodes/matches
       hash: md5
       md5: 236eecee60592df2728395a16417fc8a.dir
@@ -109,3 +109,26 @@ stages:
       hash: md5
       md5: 6e33b5e92f490ad1a06d95d8ca8b3036
       size: 977061
+  eval_imitation_case1:
+    cmd: uv run --directory backend python -m 
+      pipeline.imitation.case1.evaluation.eval_vs_baseline
+    deps:
+    - path: backend/pipeline/imitation/case1/evaluation/eval_vs_baseline.py
+      hash: md5
+      md5: c06ac522cf74381475e893bb3157fd02
+      size: 4822
+    - path: backend/pipeline/imitation/case1/policy/weights.pt
+      hash: md5
+      md5: 6e33b5e92f490ad1a06d95d8ca8b3036
+      size: 977061
+    params:
+      params.yaml:
+        evaluation:
+          metrics_out: data/mart/imitation/case1/eval_metrics.json
+          episodes: 100
+          seed: 0
+    outs:
+    - path: data/mart/imitation/case1/eval_metrics.json
+      hash: md5
+      md5: 64803cc3b27f0b39911d935d2fbd993a
+      size: 313
