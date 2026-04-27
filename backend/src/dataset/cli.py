@@ -88,12 +88,22 @@ def run(
         _dvc_add_matches(data_root)
 
 
-def _dvc_add_matches(data_root: Path) -> None:
-    """Run `dvc add <data_root>/matches` to refresh the tracking metafile.
+def _find_dvc_root(start: Path) -> Path | None:
+    """`start` から親ディレクトリへ遡り、最初に見つかった `.dvc/` の親を返す。"""
+    for candidate in (start, *start.parents):
+        if (candidate / ".dvc").is_dir():
+            return candidate
+    return None
 
-    Skips with a warning if `dvc` is not on PATH or the target is missing.
+
+def _dvc_add_matches(data_root: Path) -> None:
+    """Run `dvc add <matches>` from the DVC project root that owns the target.
+
+    Worktree から外部パスを指定された場合でも、target の実体側に `.dvc/` がある
+    なら、そこを CWD として `dvc add` を呼ぶ。Skips with a warning if `dvc` is
+    not on PATH or the target is missing.
     """
-    target = data_root / "matches"
+    target = (data_root / "matches").resolve()
     if not target.exists():
         console.print(f"[yellow]--dvc-add skipped: {target} does not exist[/yellow]")
         return
@@ -101,9 +111,16 @@ def _dvc_add_matches(data_root: Path) -> None:
     if dvc_bin is None:
         console.print("[yellow]--dvc-add skipped: `dvc` not found on PATH[/yellow]")
         return
-    cmd = [dvc_bin, "add", str(target)]
-    console.print(f"[cyan]running: {' '.join(cmd)}[/cyan]")
-    result = subprocess.run(cmd, check=False)
+    dvc_root = _find_dvc_root(target.parent)
+    if dvc_root is None:
+        console.print(
+            f"[red]--dvc-add failed: no `.dvc/` directory found above {target}[/red]"
+        )
+        raise typer.Exit(code=1)
+    rel_target = target.relative_to(dvc_root)
+    cmd = [dvc_bin, "add", str(rel_target)]
+    console.print(f"[cyan]running (cwd={dvc_root}): {' '.join(cmd)}[/cyan]")
+    result = subprocess.run(cmd, check=False, cwd=dvc_root)
     if result.returncode != 0:
         console.print(
             f"[red]dvc add exited with code {result.returncode}; "
@@ -111,7 +128,7 @@ def _dvc_add_matches(data_root: Path) -> None:
         )
         raise typer.Exit(code=result.returncode)
     console.print(
-        f"[green]dvc add complete; commit `{target}.dvc` and run `dvc push` "
+        f"[green]dvc add complete; commit `{rel_target}.dvc` and run `dvc push` "
         "when ready[/green]"
     )
 
@@ -183,6 +200,11 @@ def kaggle_scrape(
     data_root: Path = typer.Option(
         DEFAULT_KAGGLE_ROOT, "--data-root", help="Root directory for output."
     ),
+    dvc_add: bool = typer.Option(
+        False,
+        "--dvc-add/--no-dvc-add",
+        help="Run `dvc add <data_root>/matches` after persisting.",
+    ),
 ) -> None:
     """Fetch top-team episodes and persist records + replays."""
 
@@ -196,6 +218,8 @@ def kaggle_scrape(
     )
     result = scraper.run(spec)
     _render_scrape_summary(result)
+    if dvc_add and not dry_run and result.records_written > 0:
+        _dvc_add_matches(data_root)
 
 
 @kaggle_app.command("list")
