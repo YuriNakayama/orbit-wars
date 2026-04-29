@@ -56,11 +56,14 @@ jobs:
         working-directory: backend
 
       - name: DVC pull existing kaggle episodes
-        run: uv run --directory backend dvc pull data/lake/kaggle_episodes/matches.dvc
+        # `--project backend` は uv に backend の venv を使わせるだけで cwd は repo root のまま。
+        # `--directory backend` を使うと cwd が backend/ になり DVC が backend/data/... を
+        # 探してしまうため (`workspace not found` + `matches.dvc does not exist`) NG。
+        run: uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 
       - name: Scrape kaggle episodes
         run: |
-          uv run --directory backend python -m dataset kaggle scrape \
+          uv run --project backend python -m dataset kaggle scrape \
             --top "${SCRAPE_TOP}" \
             --modes "${SCRAPE_MODES}" \
             --limit-per-team "${SCRAPE_LIMIT_PER_TEAM}" \
@@ -78,7 +81,7 @@ jobs:
 
       - name: DVC push
         if: steps.diff.outputs.changed == 'true'
-        run: uv run --directory backend dvc push
+        run: uv run --project backend dvc push
 
       - name: Create pull request
         if: steps.diff.outputs.changed == 'true'

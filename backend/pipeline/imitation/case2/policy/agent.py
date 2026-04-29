@@ -14,9 +14,9 @@ from .model import DeepSetsPolicy, ModelConfig
 
 _WEIGHTS_PATH = Path(__file__).resolve().parent / "weights.pt"
 
-# Phase 1 inference knobs (values tuned on val.parquet with canonical iter6 weights):
-# - FROM_THRESHOLD=0.31 maximizes positive-class F1 on from_head (sweep: 0.47 vs 0.20 at 0.5)
-# - TARGET_TEMPERATURE=0.8 minimizes val NLL on target_head and reduces ECE 0.047 → 0.014
+# Phase 1 inference knobs (tuned on val.parquet with canonical iter6 weights):
+# - FROM_THRESHOLD=0.31 maximizes positive-class F1 on from_head (vs 0.20 at 0.5)
+# - TARGET_TEMPERATURE=0.8 minimizes val NLL on target_head, ECE 0.047 → 0.014
 # - SHIPS_TEMPERATURE=1.1 minimizes val NLL on ships_head and reduces ECE 0.023 → 0.011
 # - MIN_FIRE_TOPK=1 is a fallback for turns where no source clears FROM_THRESHOLD
 # - MAX_FIRE_COUNT caps simultaneous fires to curb overfire under lower thresholds

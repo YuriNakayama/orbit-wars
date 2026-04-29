@@ -1,4 +1,4 @@
-"""Rear guard: push ships from deep-rear planets toward the front to avoid stagnation."""
+"""Rear guard: push ships from deep-rear planets to the front to break stagnation."""
 
 from __future__ import annotations
 

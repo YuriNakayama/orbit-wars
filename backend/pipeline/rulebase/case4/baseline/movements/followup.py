@@ -1,4 +1,4 @@
-"""Followup attack: after mission dispatch, use leftover ships for opportunistic captures."""
+"""Followup attack: use leftover ships for opportunistic captures post-dispatch."""
 
 from __future__ import annotations
 

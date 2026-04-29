@@ -1,41 +1,27 @@
 """Regenerate the action snapshot used by tests/pipeline/rulebase/case5/.
 
-The captured (obs, agent(obs)) pair acts as the equivalence guard for
-Phase B refactoring: when agent_full.py is split into core/missions/movements
-modules, the snapshot test must continue to pass.
+Capture/write helpers live in `src/evaluation/snapshot_update.py`; this wrapper
+binds them to the case5 baseline agent and the case5 snapshot paths.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 import typer
 
+from evaluation.snapshot_update import capture_observation, write_snapshot
 from pipeline.rulebase.case5.baseline import agent as baseline_agent
+from utils.repo_root import find_repo_root
 
-app = typer.Typer(add_completion=False, help="Snapshot updater for case5 agent.")
+app = typer.Typer(add_completion=False, help="Snapshot updater for case5 baseline.")
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = find_repo_root(Path(__file__))
 DEFAULT_SNAPSHOT_DIR = (
     REPO_ROOT / "tests" / "pipeline" / "rulebase" / "case5" / "snapshots"
 )
 DEFAULT_OBS = DEFAULT_SNAPSHOT_DIR / "obs_seed0_turn10.json"
 DEFAULT_ACTION = DEFAULT_SNAPSHOT_DIR / "action_seed0_turn10.json"
-
-
-def _captured_observation(seed: int, turn: int) -> dict[str, Any]:
-    import kaggle_environments
-
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": seed}
-    )
-    for _ in range(turn + 1):
-        env.step([[], []])
-    obs = env.steps[-1][0]["observation"]
-    assert isinstance(obs, dict)
-    return obs
 
 
 @app.command()
@@ -46,12 +32,9 @@ def update(
     action_out: Path = typer.Option(DEFAULT_ACTION, "--action-out"),
 ) -> None:
     """Capture (obs, agent(obs)) at (seed, turn) and write both to disk."""
-    obs = _captured_observation(seed, turn)
+    obs = capture_observation(seed, turn)
     action = baseline_agent(obs)
-
-    obs_out.parent.mkdir(parents=True, exist_ok=True)
-    obs_out.write_text(json.dumps(obs), encoding="utf-8")
-    action_out.write_text(json.dumps(action), encoding="utf-8")
+    write_snapshot(obs, action, obs_out, action_out)
     typer.echo(f"obs written: {obs_out}")
     typer.echo(f"action written: {action_out} ({len(action)} moves)")
 

@@ -140,13 +140,50 @@ Local-only development scripts such as `evaluation/snapshot_update.py` may conta
 | `configs/` (locally referenced settings) | No (move constants into `core/config.py`) | Yes |
 | Model weights `.pt` / `.pkl` | Yes | No |
 
+## Per-case required / recommended layout
+
+Refactor 2026-04-29 codified the minimum surface every case must expose plus the
+recommended subdirectories for non-submission concerns.
+
+### Required (every case must have these)
+
+```
+case<N>/
+├── main.py            # Kaggle entrypoint (sys.path.insert(0, str(Path.cwd())))
+├── __init__.py
+├── README.md          # purpose, strategy summary, latest publicScore (if known)
+└── baseline/  or  policy/   # agent body — must export `agent` callable
+```
+
+### Recommended (non-submission)
+
+| Directory | Purpose | Excluded by `.submitignore`? |
+|-----------|---------|-------------------------------|
+| `evaluation/` | typer wrappers around `src/evaluation/*` | yes |
+| `training/`   | imitation cases only — preprocess/train scripts | yes |
+| `eda/`, `notebook/` | exploratory analysis | yes |
+| `configs/`    | per-case YAML kept locally (params.yaml集約はしない) | yes |
+| `planner/` (under `baseline/`) | decomposition target for big strategy.py — case1 採用例 | no (submission-bound, must use relative imports) |
+
+### Cross-case independence rule
+
+Cases must remain self-contained. **Never** import from another case
+(`from pipeline.rulebase.case2.* import ...` inside `case1/`). When the same
+helper is needed in multiple cases, copy it into each — duplication is
+preferred to cross-case coupling. Shared development utilities live in
+`backend/src/` (e.g. `src/evaluation/`, `src/utils/repo_root.py`) and are
+imported only from `evaluation/` / `training/` (excluded from submission tar).
+
 ## Anti-patterns
 
 - Inlining logic in `main.py` — makes it hard to host multiple strategies and to unit-test.
 - Using `from pipeline.<category>.caseN.xxx import ...` inside subpackages — `ImportError` on Kaggle.
+- Cross-case imports (`from pipeline.rulebase.case2.baseline import ...` inside `case1/`) — violates case independence.
 - Placing `sys.path.insert` outside `main.py` — scatters global side effects and makes them untraceable.
 - Writing absolute imports in `__init__.py` — defeats the relative-import refactor.
 - **Injecting into sys.path via `__file__` — causes Validation Episode failed on Kaggle**. Always use `Path.cwd()` (see the "Do not use `__file__`" section above).
+- Hardcoding paths as typer-Option defaults (`Path("data/.../foo.parquet")`) without making them overridable — use `--config`/`--out` / params.yaml hooks so the script is testable in isolation.
+- Functions over ~200 lines in `strategy.py` — decompose into a `planner/` subpackage (case1 layout) instead of relaxing `pyproject.toml` lint exceptions.
 
 ## Submission quota behavior (discovered 2026-04-18)
 
