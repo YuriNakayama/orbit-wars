@@ -1,8 +1,9 @@
-"""Rear guard: push ships from deep-rear planets to the front to break stagnation."""
+"""Rear-guard advance: ferry rear-line ships toward the front."""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..core.config import (
     REAR_DISTANCE_RATIO,
@@ -13,8 +14,15 @@ from ..core.config import (
     REAR_SOURCE_MIN_SHIPS,
     REAR_STAGE_PROGRESS,
 )
+from ..core.types import Planet
 from ..core.world_model import WorldModel, nearest_distance_to_set
 from ..strategy_helpers import planet_distance
+
+
+def _frontier_targets(world: WorldModel) -> list[Planet]:
+    if world.enemy_planets:
+        return world.enemy_planets
+    return world.static_neutral_planets or world.neutral_planets
 
 
 def emit_rear_guard_moves(
@@ -23,18 +31,20 @@ def emit_rear_guard_moves(
     source_attack_left: Callable[[int], int],
     append_move: Callable[[int, float, int], int],
 ) -> None:
-    if not (world.enemy_planets or world.neutral_planets):
-        return
-    if len(world.my_planets) <= 1 or world.is_late:
+    """Ferry rear-line ships toward the closest front planet (skipped late game)."""
+    if not (
+        (world.enemy_planets or world.neutral_planets)
+        and len(world.my_planets) > 1
+        and not world.is_late
+    ):
         return
 
-    frontier_targets = (
-        world.enemy_planets
-        if world.enemy_planets
-        else (world.static_neutral_planets or world.neutral_planets)
-    )
+    frontier = _frontier_targets(world)
+    if not frontier:
+        return
+
     frontier_distance = {
-        planet.id: nearest_distance_to_set(planet.x, planet.y, frontier_targets)
+        planet.id: nearest_distance_to_set(planet.x, planet.y, frontier)
         for planet in world.my_planets
     }
     safe_fronts = [
@@ -55,7 +65,8 @@ def emit_rear_guard_moves(
         send_ratio = max(send_ratio, REAR_SEND_RATIO_FOUR_PLAYER)
 
     for rear in sorted(
-        world.my_planets, key=lambda planet: -frontier_distance[planet.id]
+        world.my_planets,
+        key=lambda planet: -frontier_distance[planet.id],
     ):
         if rear.id == front_anchor.id or rear.id in world.doomed_candidates:
             continue
@@ -81,7 +92,7 @@ def emit_rear_guard_moves(
             )
         else:
             objective = min(
-                frontier_targets,
+                frontier,
                 key=lambda target: planet_distance(rear, target),
             )
             remaining_fronts = [

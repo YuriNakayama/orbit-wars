@@ -1,8 +1,9 @@
-"""Followup attack: use leftover ships for opportunistic captures post-dispatch."""
+"""Followup moves: per source, find best secondary target after main missions."""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..core.config import (
     ATTACK_COST_TURN_WEIGHT,
@@ -14,9 +15,10 @@ from ..core.config import (
 from ..core.types import Planet
 from ..core.world_model import WorldModel
 from ..strategy_helpers import (
+    apply_score_modifiers,
     opening_filter,
     preferred_send,
-    score_attack,
+    target_value,
 )
 
 
@@ -27,6 +29,7 @@ def emit_followup_moves(
     source_attack_left: Callable[[int], int],
     append_move: Callable[[int, float, int], int],
 ) -> None:
+    """Each source's best follow-up target (skipped during very-late game)."""
     if world.is_very_late:
         return
 
@@ -77,17 +80,16 @@ def emit_followup_moves(
             if send < rough_needed:
                 continue
 
-            score = score_attack(
-                target,
-                send,
-                est_turns,
-                "capture",
-                ATTACK_COST_TURN_WEIGHT,
-                world,
-                modes,
-            )
-            if score <= 0:
+            value = target_value(target, est_turns, "capture", world, modes)
+            if value <= 0:
                 continue
+
+            score = apply_score_modifiers(
+                value / (send + est_turns * ATTACK_COST_TURN_WEIGHT + 1.0),
+                target,
+                "capture",
+                world,
+            )
             if best is None or score > best[0]:
                 best = (score, target, send)
 

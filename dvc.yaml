@@ -39,6 +39,7 @@ stages:
     deps:
       - backend/pipeline/imitation/case1/policy/weights.pt
       - backend/pipeline/imitation/case1/evaluation/eval_vs_baseline.py
+      - backend/src/evaluation/vs_baseline.py
     params:
       - evaluation
     metrics:

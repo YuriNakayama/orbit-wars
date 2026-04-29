@@ -18,7 +18,6 @@ import yaml
 from torch.utils.data import DataLoader
 
 from pipeline.imitation.case2.policy.model import DeepSetsPolicy, ModelConfig
-from pipeline.imitation.case2.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case2.policy.types import BatchFeatures
 from pipeline.imitation.case2.training.dataset import (
     BatchedSample,
