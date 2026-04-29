@@ -8,12 +8,13 @@ Vast.ai 等の GPU 学習で生成された **候補モデル** の保存先。`
 artifacts/
 └── models/
     └── imitation/
-        └── case1/
+        └── case<N>/
             └── runs/
                 └── <run_id>/
                     ├── best.pt        # 学習済み weights (DVC 管理)
-                    ├── metrics.json   # epoch 履歴 + best metrics
-                    └── run.json       # lineage record (git SHA / params hash / GPU 等)
+                    ├── history.jsonl  # epoch ごとの train/val loss・accuracy (1行=1epoch)
+                    ├── config.yaml    # 実行時の config snapshot
+                    └── summary.json   # best_epoch / best_val_loss / git SHA / branch / 終了時刻
 ```
 
 `<run_id>` の形式: `<YYYYMMDD-HHMMSS>__<branch_slug>__<sha7>__seed<N>`

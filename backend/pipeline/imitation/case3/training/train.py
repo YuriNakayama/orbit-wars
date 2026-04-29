@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
+import shutil
+import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +29,12 @@ import yaml
 from torch import optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
+from pipeline.imitation.case3.evaluation.eval_metrics import (
+    collect_arrays,
+    from_metrics,
+    ships_metrics,
+    target_metrics,
+)
 from pipeline.imitation.case3.policy.featurizer_phase2 import (
     GLOBAL_FEAT_DIM,
     PLANET_FEAT_DIM,
@@ -52,6 +62,67 @@ class TrainReport:
     best_val_loss: float
     best_epoch: int
     weights_path: Path
+    run_dir: Path
+
+
+def _git_sha() -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short=7", "HEAD"], stderr=subprocess.DEVNULL
+        )
+        return out.decode().strip()
+    except Exception:
+        return "nogit"
+
+
+def _git_branch_slug() -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
+        )
+        branch = out.decode().strip()
+    except Exception:
+        branch = "nobranch"
+    return branch.replace("/", "-").replace("_", "-")
+
+
+def _round_or_none(value: Any, ndigits: int) -> float | None:
+    """Round if value is a real number; pass through None / n=0 sentinels."""
+    if value is None:
+        return None
+    return round(float(value), ndigits)
+
+
+def _build_run_dir(case: str, seed: int) -> Path:
+    """artifacts/models/imitation/<case>/runs/<run_id>/ を生成する.
+
+    run_id 形式: <YYYYMMDD-HHMMSS>__<branch_slug>__<sha7>__seed<N>
+    (artifacts/README.md の規約に準拠)
+    """
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_id = f"{ts}__{_git_branch_slug()}__{_git_sha()}__seed{seed}"
+    return Path("artifacts/models/imitation") / case / "runs" / run_id
+
+
+def _resolve_run_dir(cfg_run_dir: str | None, case: str, seed: int) -> Path:
+    """run_dir を解決する.
+
+    優先順: ORBIT_WARS_RUN_DIR env (Vast 注入) > cfg run_dir > 自動生成.
+    ORBIT_WARS_VAST_INSTANCE_ID があるのに ORBIT_WARS_RUN_DIR が無い場合は
+    canonical weights を誤上書きするリスクがあるため停止する (Risk #4 防御弾).
+    """
+    env_run_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
+    vast_id = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
+    if vast_id and not env_run_dir:
+        raise RuntimeError(
+            "ORBIT_WARS_VAST_INSTANCE_ID is set but ORBIT_WARS_RUN_DIR is not. "
+            "Refusing to overwrite canonical weights from a Vast.ai instance."
+        )
+    if env_run_dir:
+        return Path(env_run_dir).resolve()
+    if cfg_run_dir:
+        return Path(cfg_run_dir).resolve()
+    return _build_run_dir(case=case, seed=seed)
 
 
 def _seed_all(seed: int) -> None:
@@ -270,8 +341,30 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         ships_focal_alpha=ships_focal_alpha,
     )
 
-    weights_out = Path(train_cfg["weights_out"])
+    case_name = str(train_cfg.get("case", "case3"))
+    run_dir = _resolve_run_dir(
+        cfg_run_dir=train_cfg.get("run_dir"),
+        case=case_name,
+        seed=int(cfg.get("seed", 0)),
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    # Vast モード (ORBIT_WARS_RUN_DIR 注入時) では weights_out も run_dir/best.pt に
+    # 揃え、canonical weights.pt を誤上書きしない。ローカル時は cfg の weights_out
+    # を使い、加えて run_dir にもコピーする (履歴保持)。
+    use_run_dir_as_canonical = bool(os.environ.get("ORBIT_WARS_RUN_DIR"))
+    if use_run_dir_as_canonical:
+        weights_out = run_dir / "best.pt"
+    else:
+        weights_out = Path(train_cfg["weights_out"])
     weights_out.parent.mkdir(parents=True, exist_ok=True)
+
+    history_path = run_dir / "history.jsonl"
+    history_path.write_text("")  # truncate any prior content for this run_dir
+    run_weights_path = run_dir / "best.pt"
+    config_snapshot = run_dir / "config.yaml"
+    with config_snapshot.open("w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+    logger.info(json.dumps({"run_dir": str(run_dir), "weights_out": str(weights_out)}))
 
     best_val = float("inf")
     best_epoch = -1
@@ -279,26 +372,114 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     for epoch in range(epochs):
         train_metrics = _run_epoch(model, train_loader, weights, optimizer)
         val_metrics = _run_epoch(model, val_loader, weights, optimizer=None)
+        # Per-epoch full-validation AUC / F1: re-runs the model on val_loader in
+        # eval mode to collect probabilities, then computes the same multi-faceted
+        # metrics as evaluation/eval_metrics.py.
+        from_arr, target_arr, ships_arr = collect_arrays(model, val_loader)
+        from_m = from_metrics(from_arr)
+        target_m = target_metrics(target_arr)
+        ships_m = ships_metrics(ships_arr)
         log_row = {
             "epoch": epoch,
             "train_total": round(train_metrics["total"], 4),
+            "train_from_loss": round(train_metrics["from"], 4),
+            "train_target_loss": round(train_metrics["target"], 4),
+            "train_ships_loss": round(train_metrics["ships"], 4),
             "val_total": round(val_metrics["total"], 4),
+            "val_from_loss": round(val_metrics["from"], 4),
+            "val_target_loss": round(val_metrics["target"], 4),
+            "val_ships_loss": round(val_metrics["ships"], 4),
             "val_from_acc": round(val_metrics["from_acc"], 4),
             "val_target_acc": round(val_metrics["target_acc"], 4),
             "val_ships_acc": round(val_metrics["ships_acc"], 4),
+            # from head: ROC-AUC / PR-AUC / best-F1
+            "val_from_roc_auc": _round_or_none(from_m.get("roc_auc"), 4),
+            "val_from_pr_auc": _round_or_none(from_m.get("pr_auc"), 4),
+            "val_from_f1_best": _round_or_none(from_m.get("f1_best"), 4),
+            "val_from_f1_threshold": _round_or_none(from_m.get("f1_threshold"), 3),
+            # target head: top-1 / top-2 acc + macro-F1
+            "val_target_top1_acc": _round_or_none(target_m.get("top1_acc"), 4),
+            "val_target_top2_acc": _round_or_none(target_m.get("top2_acc"), 4),
+            "val_target_macro_f1": _round_or_none(target_m.get("macro_f1"), 4),
+            # ships head: macro-F1 + ordinal MAE
+            "val_ships_macro_f1": _round_or_none(ships_m.get("macro_f1"), 4),
+            "val_ships_ordinal_mae": _round_or_none(ships_m.get("ordinal_mae"), 4),
         }
         logger.info(json.dumps(log_row))
+        with history_path.open("a") as f:
+            f.write(json.dumps(log_row) + "\n")
         if val_metrics["total"] < best_val:
             best_val = val_metrics["total"]
             best_epoch = epoch
             torch.save(model.state_dict(), weights_out)
+            shutil.copyfile(weights_out, run_weights_path)
+
+    summary = {
+        "epochs_run": epochs,
+        "best_epoch": best_epoch,
+        "best_val_loss": round(best_val, 6),
+        "weights_out": str(weights_out),
+        "run_weights": str(run_weights_path),
+        "git_sha": _git_sha(),
+        "git_branch": _git_branch_slug(),
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    # case1 と同じ schema の run.json を生成 (vast pull / promote / cost-report が
+    # 共通コードで動くようにするため)。
+    _write_run_json(run_dir, summary, seed=int(cfg.get("seed", 0)))
 
     return TrainReport(
         epochs_run=epochs,
         best_val_loss=best_val,
         best_epoch=best_epoch,
         weights_path=weights_out,
+        run_dir=run_dir,
     )
+
+
+def _write_run_json(run_dir: Path, summary: dict[str, Any], *, seed: int) -> None:
+    """`<run_dir>/run.json` を case1 互換 schema で生成する。"""
+    from vast.run_meta import RunMetadata, write_run_json
+
+    git_sha = os.environ.get("ORBIT_WARS_GIT_SHA") or _git_sha()
+    git_branch = os.environ.get("ORBIT_WARS_GIT_BRANCH") or _git_branch_slug()
+    run_id = os.environ.get("ORBIT_WARS_RUN_ID") or run_dir.name
+    vast_id_raw = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
+    vast_id: int | None = None
+    if vast_id_raw:
+        try:
+            vast_id = int(vast_id_raw)
+        except ValueError:
+            vast_id = None
+    gpu_name: str | None = None
+    if torch.cuda.is_available():
+        try:
+            gpu_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - defensive
+            gpu_name = None
+    command = os.environ.get(
+        "ORBIT_WARS_COMMAND",
+        "uv run --directory backend python -m pipeline.imitation.case3.training.train",
+    )
+    weights_path_rel = str(run_dir / "best.pt")
+    meta = RunMetadata(
+        run_id=run_id,
+        git_sha=git_sha,
+        git_branch=git_branch,
+        params_hash="",  # case3 は configs/*.yaml 直読 → params.yaml hash 対象外
+        seed=seed,
+        vast_instance_id=vast_id,
+        gpu_name=gpu_name,
+        vast_offer_snapshot=None,
+        command=command,
+        weights_path=weights_path_rel,
+        train_metrics=summary,
+        local_eval_results=None,
+        status="pushed",
+    )
+    write_run_json(run_dir, meta)
 
 
 app = typer.Typer(add_completion=False)
@@ -320,6 +501,7 @@ def main(
     with config.open() as f:
         cfg = yaml.safe_load(f)
     report = train(cfg)
+    typer.echo(f"run_dir={report.run_dir}")
     typer.echo(
         f"best_val_loss={report.best_val_loss:.4f} "
         f"best_epoch={report.best_epoch} "

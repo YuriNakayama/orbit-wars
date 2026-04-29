@@ -15,12 +15,23 @@ from typing import Any
 # 英数 + . _ - / : の組合せのみ ( `:` は URL の scheme separator、`/` は path separator)
 # branch slug 内に `/` は出ないが repo URL のために : と / は許容する。
 _VALID_VALUE = re.compile(r"^[A-Za-z0-9._\-/:]+$")
+# CONFIG_ARG は空文字 (case1 で省略) または `--config <path>` の 2 トークンのみ許可。
+# 空白を含むため _VALID_VALUE とは別の regex でバリデーションする。
+_VALID_CONFIG_ARG = re.compile(r"^(|--config [A-Za-z0-9._\-/]+)$")
+# PREPROCESS_CMD は空文字または `module.path[ --config <path>]` 形式のみ許可。
+_VALID_PREPROCESS_CMD = re.compile(
+    r"^(|[A-Za-z0-9._\-/]+( --config [A-Za-z0-9._\-/]+)?)$"
+)
 _TEMPLATE_PLACEHOLDERS = (
     "<COMMIT_SHA>",
     "<RUN_ID>",
     "<STAGE>",
     "<BRANCH>",
     "<REPO_URL>",
+    "<CASE>",
+    "<TRAIN_MODULE>",
+    "<CONFIG_ARG>",
+    "<PREPROCESS_CMD>",
 )
 
 DEFAULT_IMAGE = "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime"
@@ -41,6 +52,24 @@ def _validate(name: str, value: str) -> None:
         )
 
 
+def _validate_config_arg(value: str) -> None:
+    """空文字 or `--config <safe_path>` のみ許容。"""
+    if not _VALID_CONFIG_ARG.match(value):
+        raise TemplateError(
+            f"invalid config_arg={value!r}; expected '' or '--config <path>' "
+            "with safe characters only"
+        )
+
+
+def _validate_preprocess_cmd(value: str) -> None:
+    """空文字 or `module[ --config <path>]` のみ許容。"""
+    if not _VALID_PREPROCESS_CMD.match(value):
+        raise TemplateError(
+            f"invalid preprocess_cmd={value!r}; expected '' or "
+            "'module.path [--config <path>]' with safe characters only"
+        )
+
+
 def render_onstart(
     template_path: Path,
     *,
@@ -49,16 +78,25 @@ def render_onstart(
     stage: str,
     branch: str,
     repo_url: str,
+    case: str = "case1",
+    train_module: str = "pipeline.imitation.case1.training.train",
+    config_arg: str = "",
+    preprocess_cmd: str = "",
 ) -> str:
-    """テンプレを読み 5 placeholder を置換した script 文字列を返す。
+    """テンプレを読み placeholder を置換した script 文字列を返す。
 
     値は事前に regex でバリデーション。違反したら TemplateError。
+    `case` / `train_module` / `config_arg` / `preprocess_cmd` は新規追加。
     """
     _validate("commit_sha", commit_sha)
     _validate("run_id", run_id)
     _validate("stage", stage)
     _validate("branch", branch)
     _validate("repo_url", repo_url)
+    _validate("case", case)
+    _validate("train_module", train_module)
+    _validate_config_arg(config_arg)
+    _validate_preprocess_cmd(preprocess_cmd)
     text = template_path.read_text(encoding="utf-8")
     substitutions = {
         "<COMMIT_SHA>": commit_sha,
@@ -66,6 +104,10 @@ def render_onstart(
         "<STAGE>": stage,
         "<BRANCH>": branch,
         "<REPO_URL>": repo_url,
+        "<CASE>": case,
+        "<TRAIN_MODULE>": train_module,
+        "<CONFIG_ARG>": config_arg,
+        "<PREPROCESS_CMD>": preprocess_cmd,
     }
     for placeholder, value in substitutions.items():
         text = text.replace(placeholder, value)

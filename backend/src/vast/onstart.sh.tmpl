@@ -1,7 +1,10 @@
 #!/bin/bash
 # Vast.ai onstart for Orbit Wars GPU training.
 # Placeholders are substituted by vast.instance.render_onstart before upload:
-#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>,
+#   <CASE> (e.g. case1 / case3), <TRAIN_MODULE> (python -m target),
+#   <CONFIG_ARG> ('' or '--config <path>'),
+#   <PREPROCESS_MODULE> ('' or python -m target for preprocess)
 set -euo pipefail
 exec > >(tee -a /var/log/onstart.log) 2>&1
 
@@ -89,25 +92,32 @@ echo "[onstart] step=dvc_pull"
 uv run --project backend dvc pull
 
 echo "[onstart] step=mkdir_run"
-mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
+mkdir -p "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
 
-echo "[onstart] step=train_direct stage=<STAGE>"
+# Preprocess は parquet が S3 に push されていない case (例: case3) でのみ走らせる。
+# 空文字 placeholder のときはスキップ。
+if [ -n "<PREPROCESS_CMD>" ]; then
+  echo "[onstart] step=preprocess case=<CASE>"
+  uv run --directory backend python -m <PREPROCESS_CMD>
+fi
+
+echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
 # dvc repro は outs (policy/weights.pt) を厳密チェックするため、ORBIT_WARS_RUN_DIR
 # で出力先を run dir に切り替えると DVC が canonical の不在を検出してエラーになる。
 # Vast 側では dvc.yaml を bypass し、train.py を直接実行する (preprocess は cache
 # hit で skip される前提のため repro は使わない)。
-ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
+ORBIT_WARS_RUN_DIR="artifacts/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_COMMAND="uv run --directory backend python -m pipeline.imitation.case1.training.train" \
-  uv run --directory backend python -m pipeline.imitation.case1.training.train
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 
 echo "[onstart] step=dvc_add_run"
-uv run --project backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc add "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc push "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=done run_id=<RUN_ID>"

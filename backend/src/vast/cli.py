@@ -44,6 +44,7 @@ app = typer.Typer(
 )
 console = Console()
 
+DEFAULT_CASE = "case1"
 DEFAULT_STAGE = "train_imitation_case1"
 DEFAULT_RUNS_ROOT = Path("artifacts/models/imitation/case1/runs")
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent / "onstart.sh.tmpl"
@@ -51,6 +52,44 @@ DEFAULT_CANONICAL_WEIGHTS = Path("backend/pipeline/imitation/case1/policy/weight
 DEFAULT_COST_REPORT_DIR = Path("docs/experiment")
 DEFAULT_COST_LIMIT_USD = 1.0
 ESTIMATED_RUNTIME_HOURS = 0.5
+
+# Case-specific defaults. Adding a new case = adding an entry here.
+# `train_module` は `python -m <module>` の引数。`config_arg` は `--config <path>`
+# 形式の文字列で、case が configs/*.yaml を直接読む設計のときに使う (params.yaml
+# 経由の case1 系では空文字)。
+CASE_DEFAULTS: dict[str, dict[str, str]] = {
+    "case1": {
+        "stage": "train_imitation_case1",
+        "train_module": "pipeline.imitation.case1.training.train",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "backend/pipeline/imitation/case1/policy/weights.pt",
+    },
+    "case3": {
+        "stage": "train_imitation_case3",
+        "train_module": "pipeline.imitation.case3.training.train",
+        "config_arg": "--config pipeline/imitation/case3/configs/il_phase2.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case3.training.preprocess "
+            "--config pipeline/imitation/case3/configs/il_phase2.yaml"
+        ),
+        "canonical_weights": (
+            "backend/pipeline/imitation/case3/policy/weights_phase2.pt"
+        ),
+    },
+}
+
+
+def _runs_root_for(case: str) -> Path:
+    return Path(f"artifacts/models/imitation/{case}/runs")
+
+
+def _case_defaults(case: str) -> dict[str, str]:
+    if case not in CASE_DEFAULTS:
+        raise typer.BadParameter(
+            f"unknown case={case!r}; supported: {sorted(CASE_DEFAULTS)}"
+        )
+    return CASE_DEFAULTS[case]
 
 
 def _repo_root() -> Path:
@@ -105,8 +144,33 @@ def _verify_commit_pushed(commit_sha: str) -> None:
 @app.command()
 def train(
     commit_sha: str = typer.Argument(..., help="must be pushed to origin"),
-    stage: str = typer.Option(
-        DEFAULT_STAGE, "--stage", "-s", help="dvc.yaml stage name"
+    case: str = typer.Option(
+        DEFAULT_CASE,
+        "--case",
+        help=f"imitation case to train (one of: {sorted(CASE_DEFAULTS)})",
+    ),
+    stage: str | None = typer.Option(
+        None,
+        "--stage",
+        "-s",
+        help="dvc.yaml stage name (default: derived from --case)",
+    ),
+    train_module: str | None = typer.Option(
+        None,
+        "--train-module",
+        help="python -m target (default: derived from --case)",
+    ),
+    config_arg: str | None = typer.Option(
+        None,
+        "--config-arg",
+        help="extra '--config <path>' string for the train CLI "
+        "(default: derived from --case; pass '' to force empty)",
+    ),
+    preprocess_cmd: str | None = typer.Option(
+        None,
+        "--preprocess-cmd",
+        help="optional 'module.path [--config <path>]' to run before training "
+        "(default: derived from --case; pass '' to skip)",
     ),
     seed: int = typer.Option(0, "--seed", help="seed override (recorded in run.json)"),
     label: str | None = typer.Option(None, "--label", help="custom Vast label"),
@@ -122,6 +186,18 @@ def train(
     disk_gb: int = typer.Option(DEFAULT_DISK_GB, "--disk-gb"),
 ) -> None:
     """Search Vast offers, pick one, and launch GPU training for a given commit."""
+    defaults = _case_defaults(case)
+    resolved_stage = stage if stage is not None else defaults["stage"]
+    resolved_train_module = (
+        train_module if train_module is not None else defaults["train_module"]
+    )
+    resolved_config_arg = (
+        config_arg if config_arg is not None else defaults["config_arg"]
+    )
+    resolved_preprocess_cmd = (
+        preprocess_cmd if preprocess_cmd is not None else defaults["preprocess_cmd"]
+    )
+
     try:
         repo_url = _git_remote_url()
     except subprocess.CalledProcessError as exc:
@@ -161,9 +237,13 @@ def train(
         DEFAULT_TEMPLATE_PATH,
         commit_sha=commit_sha,
         run_id=run_id,
-        stage=stage,
+        stage=resolved_stage,
         branch=branch,
         repo_url=repo_url,
+        case=case,
+        train_module=resolved_train_module,
+        config_arg=resolved_config_arg,
+        preprocess_cmd=resolved_preprocess_cmd,
     )
     env = build_env_dict(
         {
@@ -174,6 +254,7 @@ def train(
             "ORBIT_WARS_RUN_ID": run_id,
             "ORBIT_WARS_GIT_SHA": commit_sha,
             "ORBIT_WARS_GIT_BRANCH": branch,
+            "ORBIT_WARS_CASE": case,
         }
     )
     instance_id = create_instance(
@@ -186,24 +267,30 @@ def train(
         label=label or run_id,
     )
     console.print(
-        f"\n[green]Instance launched![/] id=[bold]{instance_id}[/] run_id={run_id}"
+        f"\n[green]Instance launched![/] id=[bold]{instance_id}[/] run_id={run_id} "
+        f"case={case}"
     )
     console.print(f"  Monitor logs: [cyan]vastai logs {instance_id}[/]")
     console.print(f"  Stop manually: [cyan]vastai destroy instance {instance_id}[/]")
     console.print(
-        f"  After completion: [cyan]dev/vast-pull {run_id}[/] then "
-        f"[cyan]dev/vast-promote {run_id}[/] to adopt"
+        f"  After completion: [cyan]dev/vast-pull {run_id} --case {case}[/] then "
+        f"[cyan]dev/vast-promote {run_id} --case {case}[/] to adopt"
     )
 
 
 @app.command()
 def pull(
     run_id: str = typer.Argument(..., help="run_id from vast-train"),
-    runs_root: Path = typer.Option(
-        DEFAULT_RUNS_ROOT, "--runs-root", help="root of run dirs"
+    case: str = typer.Option(
+        DEFAULT_CASE, "--case", help="imitation case (used to resolve runs_root)"
+    ),
+    runs_root: Path | None = typer.Option(
+        None, "--runs-root", help="override runs root (default: derived from --case)"
     ),
 ) -> None:
     """`dvc pull` で run dir をローカルに取得し、run.json を表示する。"""
+    if runs_root is None:
+        runs_root = _runs_root_for(case)
     relative = runs_root / run_id
     cmd = [
         "uv",
@@ -237,13 +324,16 @@ def pull(
 @app.command()
 def promote(
     run_id: str = typer.Argument(..., help="run_id to promote"),
-    runs_root: Path = typer.Option(
-        DEFAULT_RUNS_ROOT, "--runs-root", help="root of run dirs"
+    case: str = typer.Option(
+        DEFAULT_CASE, "--case", help="imitation case (resolves runs_root + canonical)"
     ),
-    canonical: Path = typer.Option(
-        DEFAULT_CANONICAL_WEIGHTS,
+    runs_root: Path | None = typer.Option(
+        None, "--runs-root", help="override runs root (default: derived from --case)"
+    ),
+    canonical: Path | None = typer.Option(
+        None,
         "--canonical",
-        help="canonical weights.pt path",
+        help="canonical weights.pt path (default: derived from --case)",
     ),
     eval_results_path: Path | None = typer.Option(
         None,
@@ -252,6 +342,11 @@ def promote(
     ),
 ) -> None:
     """Run dir の best.pt を canonical weights.pt にコピーし、run.json を adopted に更新する。"""
+    defaults = _case_defaults(case)
+    if runs_root is None:
+        runs_root = _runs_root_for(case)
+    if canonical is None:
+        canonical = Path(defaults["canonical_weights"])
     repo_root = _repo_root()
     run_dir = repo_root / runs_root / run_id
     src = run_dir / "best.pt"
@@ -317,14 +412,19 @@ def cost_report_cmd(
     month: str | None = typer.Option(
         None, "--month", help="filter by YYYY-MM (default: current month)"
     ),
-    runs_root: Path = typer.Option(
-        DEFAULT_RUNS_ROOT, "--runs-root", help="root of run dirs"
+    case: str = typer.Option(
+        DEFAULT_CASE, "--case", help="imitation case (resolves runs_root)"
+    ),
+    runs_root: Path | None = typer.Option(
+        None, "--runs-root", help="override runs root (default: derived from --case)"
     ),
     output_dir: Path = typer.Option(
         DEFAULT_COST_REPORT_DIR, "--output-dir", help="markdown output dir"
     ),
 ) -> None:
     """run.json を集計して markdown のコストレポートを生成する。"""
+    if runs_root is None:
+        runs_root = _runs_root_for(case)
     if month is None:
         month = datetime.now(UTC).strftime("%Y-%m")
     cost_mod.parse_month(month)
