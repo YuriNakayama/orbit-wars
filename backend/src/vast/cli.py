@@ -249,21 +249,39 @@ def train(
 
     sdk = _build_sdk(vast_api_key)
 
-    # Volume 解決: 明示 --volume-id > --volume-name 自動再利用 > --auto-create-volume.
-    # いずれも無ければ volume_info=None (永続化なし).
+    # Volume 解決:
+    # - 既存 volume (--volume-name 一致 or --volume-id 明示) があれば、その
+    #   machine_id を取得して GPU offer 検索を絞り込む (Local volume は
+    #   machine_id 固定なので一致 host のみで動く)
+    # - 無くて --auto-create-volume なら volume offer を選び、その machine_id 上の
+    #   GPU offer を選んで create_instance(volume_info={create_new=True, ...}) で
+    #   同時作成 + mount する
+    # - いずれでもなければ volume_info=None (永続化なし、従来挙動)
     volume_info: dict[str, Any] | None = None
+    required_machine_id: int | None = None
     if volume_id is not None:
+        # 既存 id 指定: list_volumes() で machine_id を引く
+        existing_list = list_volumes(sdk)
+        match = next((v for v in existing_list if v.id == int(volume_id)), None)
+        if match is None or match.machine_id is None:
+            console.print(
+                f"[red]volume id={volume_id} not found or has no machine_id[/]"
+            )
+            raise typer.Exit(code=1)
+        required_machine_id = match.machine_id
         volume_info = {
             "mount_path": mount_path,
             "create_new": False,
             "volume_id": int(volume_id),
         }
         console.print(
-            f"[cyan]volume:[/] linking existing id={volume_id} at {mount_path}"
+            f"[cyan]volume:[/] linking existing id={volume_id} machine={match.machine_id} "
+            f"at {mount_path}"
         )
     else:
         existing = find_volume_by_name(list_volumes(sdk), volume_name)
-        if existing is not None:
+        if existing is not None and existing.machine_id is not None:
+            required_machine_id = existing.machine_id
             volume_info = {
                 "mount_path": mount_path,
                 "create_new": False,
@@ -271,7 +289,7 @@ def train(
             }
             console.print(
                 f"[cyan]volume:[/] reusing {existing.name!r} id={existing.id} "
-                f"size={existing.size_gb:.0f}GB at {mount_path}"
+                f"machine={existing.machine_id} size={existing.size_gb:.0f}GB"
             )
         elif auto_create_volume:
             v_offers = search_volume_offers(sdk, min_size_gb=volume_size_gb)
@@ -279,6 +297,7 @@ def train(
                 console.print("[red]No volume offers matched. Aborting.[/]")
                 raise typer.Exit(code=1)
             v_chosen = pick_volume_offer(v_offers, console=console)
+            required_machine_id = v_chosen.machine_id
             volume_info = {
                 "mount_path": mount_path,
                 "create_new": True,
@@ -288,7 +307,8 @@ def train(
             }
             console.print(
                 f"[cyan]volume:[/] creating new {volume_name!r} from offer "
-                f"{v_chosen.id} size={volume_size_gb:.0f}GB at {mount_path}"
+                f"{v_chosen.id} machine={v_chosen.machine_id} "
+                f"size={volume_size_gb:.0f}GB at {mount_path}"
             )
         else:
             console.print(
@@ -296,9 +316,16 @@ def train(
                 "  --auto-create-volume で初回作成、以降は --volume-name で自動再利用."
             )
 
-    offers = search_offers(sdk)
+    offers = search_offers(sdk, machine_id=required_machine_id)
     if not offers:
-        console.print("[red]No offers matched the filter. Try again later.[/]")
+        if required_machine_id is not None:
+            console.print(
+                f"[red]No GPU offers on machine_id={required_machine_id} "
+                f"(volume の machine 上に GPU が無い).[/]\n"
+                "  別 machine の volume を選ぶか --auto-create-volume で再作成してください."
+            )
+        else:
+            console.print("[red]No offers matched the filter. Try again later.[/]")
         raise typer.Exit(code=1)
     chosen = pick_offer(offers, console=console)
     estimated = chosen.dph_total * ESTIMATED_RUNTIME_HOURS
@@ -573,7 +600,7 @@ def volume_list_cmd() -> None:
 @volume_app.command("search")
 def volume_search_cmd(
     min_size_gb: float = typer.Option(15.0, "--min-size"),
-    max_dph: float = typer.Option(0.50, "--max-dph", help="$/TB/month の上限"),
+    max_dph: float = typer.Option(1.00, "--max-dph", help="$/TB/month の上限"),
     limit: int = typer.Option(10, "--limit"),
 ) -> None:
     """購入可能な volume offer を検索."""
@@ -596,7 +623,7 @@ def volume_search_cmd(
 def volume_create_cmd(
     name: str = typer.Argument(..., help="volume name (再利用キー)"),
     size_gb: float = typer.Option(15.0, "--size"),
-    max_dph: float = typer.Option(0.50, "--max-dph", help="$/TB/month の上限"),
+    max_dph: float = typer.Option(1.00, "--max-dph", help="$/TB/month の上限"),
 ) -> None:
     """最安 offer から volume を新規作成し id を表示."""
     try:

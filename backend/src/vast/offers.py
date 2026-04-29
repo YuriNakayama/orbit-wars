@@ -103,10 +103,13 @@ def search_offers(
     min_reliability: float = 0.99,
     min_cuda: float = 12.0,
     limit: int = 10,
+    machine_id: int | None = None,
 ) -> list[Offer]:
     """vastai SDK 経由で offers を検索し、dph_total 昇順で limit 件返す。
 
     `sdk` は `VastAI()` インスタンス (テストでは mock を渡せる)。
+    `machine_id` を指定すると、その machine 上の offer のみに絞り込む
+    (Local volume を attach する場合に必要).
     """
     query = _build_query(
         gpu_names=gpu_names,
@@ -114,6 +117,8 @@ def search_offers(
         min_reliability=min_reliability,
         min_cuda=min_cuda,
     )
+    if machine_id is not None:
+        query = f"{query} machine_id={int(machine_id)}"
     raw_results = sdk.search_offers(
         query=query, type="on-demand", order="dph_total", limit=limit
     )

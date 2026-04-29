@@ -101,7 +101,10 @@ def test_train_happy_path(
 ) -> None:
     sdk = MagicMock()
     monkeypatch.setattr("vast.cli._build_sdk", lambda _key: sdk)
-    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk: [mock_offer])
+    monkeypatch.setattr("vast.cli.list_volumes", lambda _sdk: [])
+    monkeypatch.setattr(
+        "vast.cli.search_offers", lambda _sdk, **_kwargs: [mock_offer]
+    )
     monkeypatch.setattr("vast.cli.pick_offer", lambda offers, console=None: offers[0])
     monkeypatch.setattr(
         "vast.cli.create_instance",
@@ -123,7 +126,8 @@ def test_train_no_offers_exits(
 ) -> None:
     sdk = MagicMock()
     monkeypatch.setattr("vast.cli._build_sdk", lambda _key: sdk)
-    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk: [])
+    monkeypatch.setattr("vast.cli.list_volumes", lambda _sdk: [])
+    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk, **_kwargs: [])
     result = runner.invoke(app, ["train", "abc1234deadbeef"])
     assert result.exit_code == 1
     assert "No offers" in result.output
@@ -147,7 +151,8 @@ def test_train_cost_limit_aborts_when_declined(
         verified=True,
     )
     monkeypatch.setattr("vast.cli._build_sdk", lambda _key: MagicMock())
-    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk: [expensive])
+    monkeypatch.setattr("vast.cli.list_volumes", lambda _sdk: [])
+    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk, **_kwargs: [expensive])
     monkeypatch.setattr("vast.cli.pick_offer", lambda offers, console=None: offers[0])
     result = runner.invoke(
         app,

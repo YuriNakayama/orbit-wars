@@ -63,22 +63,24 @@ def search_volume_offers(
     sdk: Any,
     *,
     min_size_gb: float = 15.0,
-    max_storage_per_month_per_tb: float = 0.50,
+    max_storage_per_month_per_tb: float = 1.00,
     min_reliability: float = 0.99,
     limit: int = 10,
+    network: bool = False,
 ) -> list[VolumeOffer]:
     """Volume offer を検索. storage_cost ($/TB/month) 昇順で limit 件返す.
 
-    SDK の search_volumes は query を dict で受け取る (vastai/api/offers.py:153
-    で q.update(query) する設計). 文字列を渡すと ValueError になる.
-    `storage_cost` の単位は $/TB/month で、相場は $0.10〜$0.30/TB/月.
+    `network=True` (デフォルト) なら network volume offer を検索する.
+    Network volume は machine 非依存で attach 可能 (host 切替後も再利用できる).
+    Local volume (network=False) は machine_id 固定なので host 切替時に再利用不可.
     """
     query: dict[str, Any] = {
         "disk_space": {"gte": float(min_size_gb)},
         "storage_cost": {"lt": float(max_storage_per_month_per_tb)},
         "reliability2": {"gte": float(min_reliability)},
     }
-    raw_offers = sdk.search_volumes(
+    search_fn = sdk.search_network_volumes if network else sdk.search_volumes
+    raw_offers = search_fn(
         query=query,
         order=[["storage_cost", "asc"]],
         limit=limit,
@@ -142,9 +144,16 @@ def pick_volume_offer(
     return offers[idx - 1]
 
 
-def create_volume(sdk: Any, *, offer_id: int, size_gb: float, name: str) -> int:
-    """Volume を新規作成し volume_id を返す."""
-    response = sdk.create_volume(id=offer_id, size=size_gb, name=name)
+def create_volume(
+    sdk: Any, *, offer_id: int, size_gb: float, name: str, network: bool = True
+) -> int:
+    """Volume を新規作成し volume_id を返す.
+
+    `network=True` (デフォルト) なら machine 非依存の network volume を作成する.
+    これにより host を切り替えても同じ volume を再利用できる.
+    """
+    create_fn = sdk.create_network_volume if network else sdk.create_volume
+    response = create_fn(id=offer_id, size=size_gb, name=name)
     if not isinstance(response, Mapping):
         raise RuntimeError(
             f"unexpected create_volume response: {type(response).__name__}"
@@ -156,11 +165,38 @@ def create_volume(sdk: Any, *, offer_id: int, size_gb: float, name: str) -> int:
 
 
 def list_volumes(sdk: Any) -> list[Volume]:
-    """所有する volumes を一覧."""
+    """所有する volumes を一覧 (local + network).
+
+    show_volumes() に加え show_network_disks() の結果も含める.
+    """
+    items: list[Volume] = []
     raw = sdk.show_volumes()
-    if not isinstance(raw, list):
-        return []
-    return [Volume.from_raw(r) for r in raw]
+    if isinstance(raw, list):
+        items.extend(Volume.from_raw(r) for r in raw)
+    try:
+        raw_net = sdk.show_network_disks()
+    except Exception:  # pragma: no cover — API 差異吸収
+        raw_net = None
+    if isinstance(raw_net, list):
+        items.extend(Volume.from_raw(r) for r in raw_net)
+    elif isinstance(raw_net, dict):
+        # SDK によっては {"disks": [...]} を返すケースあり
+        disks = raw_net.get("disks")
+        if isinstance(disks, list):
+            items.extend(Volume.from_raw(r) for r in disks)
+    return items
+
+
+def add_network_disk_to_machine(
+    sdk: Any, *, disk_id: int, machine_id: int, mount_point: str
+) -> dict[str, Any]:
+    """Network volume を指定 machine に mount する (post-attach 用)."""
+    response = sdk.add_network_disk(
+        machines=[machine_id], mount_point=mount_point, disk_id=disk_id
+    )
+    if isinstance(response, Mapping):
+        return dict(response)
+    return {"raw": response}
 
 
 def find_volume_by_name(volumes: list[Volume], name: str) -> Volume | None:
@@ -175,6 +211,7 @@ def find_volume_by_name(volumes: list[Volume], name: str) -> Volume | None:
 __all__ = [
     "Volume",
     "VolumeOffer",
+    "add_network_disk_to_machine",
     "create_volume",
     "find_volume_by_name",
     "list_volumes",
