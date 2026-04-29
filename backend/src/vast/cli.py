@@ -201,9 +201,12 @@ def train(
         help="既存 volume を /persist に link. 省略 + --volume-name 一致なら自動再利用",
     ),
     volume_name: str = typer.Option(
-        "orbit-wars-cache",
+        "orbit_wars_cache",
         "--volume-name",
-        help="自動再利用 / 新規作成時の volume name",
+        help=(
+            "自動再利用 / 新規作成時の volume name. "
+            "Vast.ai の制約で alphanumeric + underscore のみ許可 (max 64 chars)"
+        ),
     ),
     mount_path: str = typer.Option(
         "/persist",

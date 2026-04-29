@@ -5,6 +5,7 @@ uv wheel cache や DVC cache を Vast インスタンス間で永続化するた
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -144,6 +145,18 @@ def pick_volume_offer(
     return offers[idx - 1]
 
 
+_VALID_VOLUME_NAME = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
+
+def validate_volume_name(name: str) -> None:
+    """Vast.ai の制約: alphanumeric + underscore, max 64 chars."""
+    if not _VALID_VOLUME_NAME.match(name):
+        raise ValueError(
+            f"invalid volume name {name!r}: Vast.ai requires "
+            "alphanumeric + underscore only, max 64 chars"
+        )
+
+
 def create_volume(
     sdk: Any, *, offer_id: int, size_gb: float, name: str, network: bool = True
 ) -> int:
@@ -152,6 +165,7 @@ def create_volume(
     `network=True` (デフォルト) なら machine 非依存の network volume を作成する.
     これにより host を切り替えても同じ volume を再利用できる.
     """
+    validate_volume_name(name)
     create_fn = sdk.create_network_volume if network else sdk.create_volume
     response = create_fn(id=offer_id, size=size_gb, name=name)
     if not isinstance(response, Mapping):
