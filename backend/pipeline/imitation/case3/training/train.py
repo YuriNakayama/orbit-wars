@@ -65,6 +65,25 @@ class TrainReport:
     run_dir: Path
 
 
+def _repo_root() -> Path:
+    """`backend/` の親ディレクトリ (リポジトリ root) を返す。"""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "backend").is_dir() and (parent / ".git").exists():
+            return parent
+    raise RuntimeError(f"repo root not found from {here}")
+
+
+def _abspath(rel: str | Path) -> Path:
+    """相対パスを repo root 起点の絶対パスに解決する.
+
+    Vast.ai では `uv run --directory backend ...` で CWD が backend/ になるため、
+    config の `data/...` 相対パスをそのまま開くと `backend/data/...` になる.
+    """
+    p = Path(rel)
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
 def _git_sha() -> str:
     try:
         out = subprocess.check_output(
@@ -119,10 +138,10 @@ def _resolve_run_dir(cfg_run_dir: str | None, case: str, seed: int) -> Path:
             "Refusing to overwrite canonical weights from a Vast.ai instance."
         )
     if env_run_dir:
-        return Path(env_run_dir).resolve()
+        return _abspath(env_run_dir)
     if cfg_run_dir:
-        return Path(cfg_run_dir).resolve()
-    return _build_run_dir(case=case, seed=seed)
+        return _abspath(cfg_run_dir)
+    return _abspath(_build_run_dir(case=case, seed=seed))
 
 
 def _seed_all(seed: int) -> None:
@@ -203,12 +222,12 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     mask_planet_cols = list(ablation_cfg.get("planet_cols", []) or [])
     mask_global_cols = list(ablation_cfg.get("global_cols", []) or [])
     train_ds = CaseThreeDataset(
-        Path(data_cfg["out_train"]),
+        _abspath(data_cfg["out_train"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
     )
     val_ds = CaseThreeDataset(
-        Path(data_cfg["out_val"]),
+        _abspath(data_cfg["out_val"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
     )
@@ -355,7 +374,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     if use_run_dir_as_canonical:
         weights_out = run_dir / "best.pt"
     else:
-        weights_out = Path(train_cfg["weights_out"])
+        weights_out = _abspath(train_cfg["weights_out"])
     weights_out.parent.mkdir(parents=True, exist_ok=True)
 
     history_path = run_dir / "history.jsonl"
