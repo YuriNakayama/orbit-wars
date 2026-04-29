@@ -37,14 +37,15 @@ from vast.offers import (
 )
 from vast.run_meta import generate_run_id
 from vast.volumes import (
-    create_volume as create_volume_fn,
-)
-from vast.volumes import (
+    add_network_disk_to_machine,
     find_volume_by_name,
     list_volumes,
     pick_volume_offer,
     render_volume_offers,
     search_volume_offers,
+)
+from vast.volumes import (
+    create_volume as create_volume_fn,
 )
 
 app = typer.Typer(
@@ -249,66 +250,51 @@ def train(
 
     sdk = _build_sdk(vast_api_key)
 
-    # Volume 解決:
-    # - 既存 volume (--volume-name 一致 or --volume-id 明示) があれば、その
-    #   machine_id を取得して GPU offer 検索を絞り込む (Local volume は
-    #   machine_id 固定なので一致 host のみで動く)
-    # - 無くて --auto-create-volume なら volume offer を選び、その machine_id 上の
-    #   GPU offer を選んで create_instance(volume_info={create_new=True, ...}) で
-    #   同時作成 + mount する
-    # - いずれでもなければ volume_info=None (永続化なし、従来挙動)
-    volume_info: dict[str, Any] | None = None
-    required_machine_id: int | None = None
+    # Volume 解決 (network volume 前提):
+    # Network volume は machine 非依存で attach 可能なので、GPU offer の machine
+    # 制約はかからない. 解決順:
+    # 1) --volume-id 明示
+    # 2) --volume-name 一致の既存 network volume を再利用
+    # 3) --auto-create-volume があれば network volume offer から新規作成
+    # 4) どれでもなければ永続化なし (volume_info_resolved=None)
+    # 解決した volume は instance 起動後に add_network_disk で post-attach する.
+    volume_id_resolved: int | None = None
     if volume_id is not None:
-        # 既存 id 指定: list_volumes() で machine_id を引く
-        existing_list = list_volumes(sdk)
-        match = next((v for v in existing_list if v.id == int(volume_id)), None)
-        if match is None or match.machine_id is None:
-            console.print(
-                f"[red]volume id={volume_id} not found or has no machine_id[/]"
-            )
-            raise typer.Exit(code=1)
-        required_machine_id = match.machine_id
-        volume_info = {
-            "mount_path": mount_path,
-            "create_new": False,
-            "volume_id": int(volume_id),
-        }
+        volume_id_resolved = int(volume_id)
         console.print(
-            f"[cyan]volume:[/] linking existing id={volume_id} machine={match.machine_id} "
+            f"[cyan]volume:[/] will attach existing id={volume_id_resolved} "
             f"at {mount_path}"
         )
     else:
         existing = find_volume_by_name(list_volumes(sdk), volume_name)
-        if existing is not None and existing.machine_id is not None:
-            required_machine_id = existing.machine_id
-            volume_info = {
-                "mount_path": mount_path,
-                "create_new": False,
-                "volume_id": existing.id,
-            }
+        if existing is not None:
+            volume_id_resolved = existing.id
             console.print(
                 f"[cyan]volume:[/] reusing {existing.name!r} id={existing.id} "
-                f"machine={existing.machine_id} size={existing.size_gb:.0f}GB"
+                f"size={existing.size_gb:.0f}GB"
             )
         elif auto_create_volume:
-            v_offers = search_volume_offers(sdk, min_size_gb=volume_size_gb)
+            v_offers = search_volume_offers(
+                sdk, min_size_gb=volume_size_gb, network=True
+            )
             if not v_offers:
-                console.print("[red]No volume offers matched. Aborting.[/]")
+                console.print(
+                    "[red]No network volume offers matched. Aborting.[/]\n"
+                    "  Try `dev/vast-volume search` to inspect offers."
+                )
                 raise typer.Exit(code=1)
             v_chosen = pick_volume_offer(v_offers, console=console)
-            required_machine_id = v_chosen.machine_id
-            volume_info = {
-                "mount_path": mount_path,
-                "create_new": True,
-                "volume_id": v_chosen.id,
-                "name": volume_name,
-                "size": volume_size_gb,
-            }
+            new_id = create_volume_fn(
+                sdk,
+                offer_id=v_chosen.id,
+                size_gb=volume_size_gb,
+                name=volume_name,
+                network=True,
+            )
+            volume_id_resolved = new_id
             console.print(
-                f"[cyan]volume:[/] creating new {volume_name!r} from offer "
-                f"{v_chosen.id} machine={v_chosen.machine_id} "
-                f"size={volume_size_gb:.0f}GB at {mount_path}"
+                f"[green]created network volume:[/] id={new_id} name={volume_name!r} "
+                f"size={volume_size_gb:.0f}GB"
             )
         else:
             console.print(
@@ -316,16 +302,9 @@ def train(
                 "  --auto-create-volume で初回作成、以降は --volume-name で自動再利用."
             )
 
-    offers = search_offers(sdk, machine_id=required_machine_id)
+    offers = search_offers(sdk)
     if not offers:
-        if required_machine_id is not None:
-            console.print(
-                f"[red]No GPU offers on machine_id={required_machine_id} "
-                f"(volume の machine 上に GPU が無い).[/]\n"
-                "  別 machine の volume を選ぶか --auto-create-volume で再作成してください."
-            )
-        else:
-            console.print("[red]No offers matched the filter. Try again later.[/]")
+        console.print("[red]No offers matched the filter. Try again later.[/]")
         raise typer.Exit(code=1)
     chosen = pick_offer(offers, console=console)
     estimated = chosen.dph_total * ESTIMATED_RUNTIME_HOURS
@@ -373,8 +352,31 @@ def train(
         image=image,
         disk_gb=disk_gb,
         label=label or run_id,
-        volume_info=volume_info,
     )
+    # Network volume の post-attach. instance の machine_id を取得してから
+    # add_network_disk(disk_id=volume, machines=[machine_id], mount_point=...).
+    if volume_id_resolved is not None:
+        try:
+            inst_info = sdk.show_instance(id=instance_id)
+            inst_machine_id = int(inst_info.get("machine_id"))
+            attach_resp = add_network_disk_to_machine(
+                sdk,
+                disk_id=volume_id_resolved,
+                machine_id=inst_machine_id,
+                mount_point=mount_path,
+            )
+            console.print(
+                f"[green]volume attached:[/] disk_id={volume_id_resolved} "
+                f"machine={inst_machine_id} mount={mount_path}"
+            )
+            console.print(f"  attach response: {attach_resp}")
+        except Exception as exc:  # noqa: BLE001
+            console.print(
+                f"[yellow]volume attach failed:[/] {exc}\n"
+                "  instance は起動済みなので onstart は走るが /persist は無し.\n"
+                f"  手動 attach: vastai attach-network-disk {volume_id_resolved} "
+                f"--machines <id> --mount-point {mount_path}"
+            )
     console.print(
         f"\n[green]Instance launched![/] id=[bold]{instance_id}[/] run_id={run_id} "
         f"case={case}"
