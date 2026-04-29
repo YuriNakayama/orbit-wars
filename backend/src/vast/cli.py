@@ -36,6 +36,16 @@ from vast.offers import (
     search_offers,
 )
 from vast.run_meta import generate_run_id
+from vast.volumes import (
+    create_volume as create_volume_fn,
+)
+from vast.volumes import (
+    find_volume_by_name,
+    list_volumes,
+    pick_volume_offer,
+    render_volume_offers,
+    search_volume_offers,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -184,6 +194,29 @@ def train(
     ),
     image: str = typer.Option(DEFAULT_IMAGE, "--image"),
     disk_gb: int = typer.Option(DEFAULT_DISK_GB, "--disk-gb"),
+    volume_id: int | None = typer.Option(
+        None,
+        "--volume-id",
+        help="既存 volume を /persist に link. 省略 + --volume-name 一致なら自動再利用",
+    ),
+    volume_name: str = typer.Option(
+        "orbit-wars-cache",
+        "--volume-name",
+        help="自動再利用 / 新規作成時の volume name",
+    ),
+    mount_path: str = typer.Option(
+        "/persist",
+        "--mount-path",
+        help="volume のマウント先 (container 内 path)",
+    ),
+    auto_create_volume: bool = typer.Option(
+        False,
+        "--auto-create-volume",
+        help="一致 volume が無ければ最安 offer から新規作成 (size=--volume-size)",
+    ),
+    volume_size_gb: float = typer.Option(
+        15.0, "--volume-size", help="新規作成時の volume size (GB)"
+    ),
 ) -> None:
     """Search Vast offers, pick one, and launch GPU training for a given commit."""
     defaults = _case_defaults(case)
@@ -215,6 +248,54 @@ def train(
         raise typer.Exit(code=2) from exc
 
     sdk = _build_sdk(vast_api_key)
+
+    # Volume 解決: 明示 --volume-id > --volume-name 自動再利用 > --auto-create-volume.
+    # いずれも無ければ volume_info=None (永続化なし).
+    volume_info: dict[str, Any] | None = None
+    if volume_id is not None:
+        volume_info = {
+            "mount_path": mount_path,
+            "create_new": False,
+            "volume_id": int(volume_id),
+        }
+        console.print(
+            f"[cyan]volume:[/] linking existing id={volume_id} at {mount_path}"
+        )
+    else:
+        existing = find_volume_by_name(list_volumes(sdk), volume_name)
+        if existing is not None:
+            volume_info = {
+                "mount_path": mount_path,
+                "create_new": False,
+                "volume_id": existing.id,
+            }
+            console.print(
+                f"[cyan]volume:[/] reusing {existing.name!r} id={existing.id} "
+                f"size={existing.size_gb:.0f}GB at {mount_path}"
+            )
+        elif auto_create_volume:
+            v_offers = search_volume_offers(sdk, min_size_gb=volume_size_gb)
+            if not v_offers:
+                console.print("[red]No volume offers matched. Aborting.[/]")
+                raise typer.Exit(code=1)
+            v_chosen = pick_volume_offer(v_offers, console=console)
+            volume_info = {
+                "mount_path": mount_path,
+                "create_new": True,
+                "volume_id": v_chosen.id,
+                "name": volume_name,
+                "size": volume_size_gb,
+            }
+            console.print(
+                f"[cyan]volume:[/] creating new {volume_name!r} from offer "
+                f"{v_chosen.id} size={volume_size_gb:.0f}GB at {mount_path}"
+            )
+        else:
+            console.print(
+                "[yellow]volume: not configured (uv cache 等は永続化されない).[/]\n"
+                "  --auto-create-volume で初回作成、以降は --volume-name で自動再利用."
+            )
+
     offers = search_offers(sdk)
     if not offers:
         console.print("[red]No offers matched the filter. Try again later.[/]")
@@ -265,6 +346,7 @@ def train(
         image=image,
         disk_gb=disk_gb,
         label=label or run_id,
+        volume_info=volume_info,
     )
     console.print(
         f"\n[green]Instance launched![/] id=[bold]{instance_id}[/] run_id={run_id} "
@@ -444,6 +526,94 @@ def _build_sdk(api_key: str) -> Any:
     from vastai import VastAI
 
     return VastAI(api_key=api_key)
+
+
+volume_app = typer.Typer(
+    add_completion=False,
+    help="Manage Vast.ai persistent volumes (uv cache / DVC cache 等の永続化).",
+    no_args_is_help=True,
+)
+app.add_typer(volume_app, name="volume")
+
+
+@volume_app.command("list")
+def volume_list_cmd() -> None:
+    """所有する volumes を一覧."""
+    try:
+        api_key = load_vast_api_key()
+    except CredentialsError as exc:
+        console.print(f"[red]credentials error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    sdk = _build_sdk(api_key)
+    volumes = list_volumes(sdk)
+    if not volumes:
+        console.print("[yellow]No volumes found.[/]")
+        return
+    from rich.table import Table
+
+    table = Table(title="Vast.ai volumes")
+    table.add_column("id", justify="right")
+    table.add_column("name")
+    table.add_column("size_gb", justify="right")
+    table.add_column("mount_path")
+    table.add_column("machine_id", justify="right")
+    table.add_column("$/h", justify="right")
+    for v in volumes:
+        table.add_row(
+            str(v.id),
+            v.name or "-",
+            f"{v.size_gb:.0f}",
+            v.mount_path or "-",
+            str(v.machine_id) if v.machine_id else "-",
+            f"${v.storage_per_hour:.5f}",
+        )
+    console.print(table)
+
+
+@volume_app.command("search")
+def volume_search_cmd(
+    min_size_gb: float = typer.Option(15.0, "--min-size"),
+    max_dph: float = typer.Option(0.005, "--max-dph"),
+    limit: int = typer.Option(10, "--limit"),
+) -> None:
+    """購入可能な volume offer を検索."""
+    try:
+        api_key = load_vast_api_key()
+    except CredentialsError as exc:
+        console.print(f"[red]credentials error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    sdk = _build_sdk(api_key)
+    offers = search_volume_offers(
+        sdk, min_size_gb=min_size_gb, max_storage_per_hour=max_dph, limit=limit
+    )
+    if not offers:
+        console.print("[yellow]No offers matched.[/]")
+        return
+    render_volume_offers(offers, console=console)
+
+
+@volume_app.command("create")
+def volume_create_cmd(
+    name: str = typer.Argument(..., help="volume name (再利用キー)"),
+    size_gb: float = typer.Option(15.0, "--size"),
+    max_dph: float = typer.Option(0.005, "--max-dph"),
+) -> None:
+    """最安 offer から volume を新規作成し id を表示."""
+    try:
+        api_key = load_vast_api_key()
+    except CredentialsError as exc:
+        console.print(f"[red]credentials error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    sdk = _build_sdk(api_key)
+    offers = search_volume_offers(
+        sdk, min_size_gb=size_gb, max_storage_per_hour=max_dph
+    )
+    if not offers:
+        console.print("[red]No offers matched.[/]")
+        raise typer.Exit(code=1)
+    chosen = pick_volume_offer(offers, console=console)
+    new_id = create_volume_fn(sdk, offer_id=chosen.id, size_gb=size_gb, name=name)
+    console.print(f"[green]created volume:[/] id={new_id} name={name!r}")
 
 
 # Re-exports kept for downstream wrapper usage.

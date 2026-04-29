@@ -142,22 +142,26 @@ def create_instance(
     disk_gb: int = DEFAULT_DISK_GB,
     label: str,
     runtype: str = "ssh_direc ssh_proxy",
+    volume_info: Mapping[str, Any] | None = None,
 ) -> int:
     """`VastAI().create_instance(...)` を呼び、生成された instance id を返す。
 
     SSH + direct connection 用の `runtype="ssh_direc ssh_proxy"` をデフォルトとする
     (vastai CLI の `--ssh --direct` と等価)。SDK の応答 dict から `new_contract`
     または `id` を抽出する。
+    `volume_info` を渡すと既存 volume の link or 新規作成で /persist mount される.
     """
-    response = sdk.create_instance(
-        offer_id,
-        image=image,
-        disk=float(disk_gb),
-        env=dict(env),
-        label=label,
-        onstart_cmd=onstart_cmd,
-        runtype=runtype,
-    )
+    kwargs: dict[str, Any] = {
+        "image": image,
+        "disk": float(disk_gb),
+        "env": dict(env),
+        "label": label,
+        "onstart_cmd": onstart_cmd,
+        "runtype": runtype,
+    }
+    if volume_info is not None:
+        kwargs["volume_info"] = dict(volume_info)
+    response = sdk.create_instance(offer_id, **kwargs)
     if not isinstance(response, Mapping):
         raise RuntimeError(
             f"unexpected create_instance response: {type(response).__name__}"

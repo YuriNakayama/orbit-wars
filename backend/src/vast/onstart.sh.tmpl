@@ -46,6 +46,21 @@ trap cleanup_destroy EXIT
 echo "[onstart] step=env_persist"
 env >> /etc/environment
 
+# Persistent volume が /persist にマウントされている場合、uv cache / DVC cache /
+# 中間 mart データを symlink で永続化する。volume が無いとき (=未マウント) は
+# 通常通りローカルディスクに置く。冪等な mkdir/ln を使う。
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_setup mount=/persist"
+  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/uv" 2>/dev/null || true
+  ln -sfn /persist/uv-cache "$HOME/.cache/uv"
+  export UV_CACHE_DIR="$HOME/.cache/uv"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache"
+else
+  echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
+fi
+
 echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
 mkdir -p /workspace
 cd /workspace
@@ -59,6 +74,18 @@ fi
 cd orbit-wars
 git fetch origin "<COMMIT_SHA>" || true
 git checkout "<COMMIT_SHA>"
+
+# Repo 内の .dvc/cache と data/mart を /persist に symlink. 既存のクリーンな
+# ディレクトリを退避してから ln -sfn で張り替え (冪等).
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_link_repo"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn /persist/dvc-cache .dvc/cache
+  mkdir -p data
+  rm -rf data/mart 2>/dev/null || true
+  ln -sfn /persist/data-mart data/mart
+fi
 
 echo "[onstart] step=install_uv"
 if ! command -v uv >/dev/null 2>&1; then
@@ -98,10 +125,16 @@ echo "[onstart] step=mkdir_run"
 mkdir -p "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
 
 # Preprocess は parquet が S3 に push されていない case (例: case3) でのみ走らせる。
-# 空文字 placeholder のときはスキップ。
+# 空文字 placeholder のときはスキップ。永続化された /persist/data-mart に既に
+# parquet が存在するなら preprocess を skip して再利用する.
 if [ -n "<PREPROCESS_CMD>" ]; then
-  echo "[onstart] step=preprocess case=<CASE>"
-  uv run --directory backend python -m <PREPROCESS_CMD>
+  if [ -d /persist ] && [ -d "data/mart/imitation/<CASE>" ] && \
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (cached parquet found in /persist)"
+  else
+    echo "[onstart] step=preprocess case=<CASE>"
+    uv run --directory backend python -m <PREPROCESS_CMD>
+  fi
 fi
 
 echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
