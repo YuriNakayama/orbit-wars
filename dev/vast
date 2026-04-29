@@ -1,0 +1,13 @@
+#!/bin/bash
+# Vast.ai 操作の統合エントリポイント。
+#
+# Usage:
+#   dev/vast train <commit-sha> [--stage NAME] [--seed N] [--label TEXT]
+#   dev/vast pull <run_id>
+#   dev/vast promote <run_id> [--eval-results PATH]
+#   dev/vast cost-report [--month YYYY-MM]
+#
+# Backed by `python -m vast <subcommand>` (backend/src/vast/cli.py).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend python -m vast "$@"

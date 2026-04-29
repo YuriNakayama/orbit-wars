@@ -1,6 +1,6 @@
 """Vast.ai 操作の Typer CLI: train / pull / promote / cost-report。
 
-`dev/vast-*` thin wrappers から `python -m vast <cmd>` で呼ばれる前提。
+`dev/vast <subcmd>` thin wrapper から `python -m vast <subcmd>` で呼ばれる前提。
 """
 
 from __future__ import annotations
@@ -191,8 +191,8 @@ def train(
     console.print(f"  Monitor logs: [cyan]vastai logs {instance_id}[/]")
     console.print(f"  Stop manually: [cyan]vastai destroy instance {instance_id}[/]")
     console.print(
-        f"  After completion: [cyan]dev/vast-pull {run_id}[/] then "
-        f"[cyan]dev/vast-promote {run_id}[/] to adopt"
+        f"  After completion: [cyan]dev/vast pull {run_id}[/] then "
+        f"[cyan]dev/vast promote {run_id}[/] to adopt"
     )
 
 
