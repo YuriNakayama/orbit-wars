@@ -50,9 +50,12 @@ class Volume:
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, Any]) -> Volume:
+        # Vast.ai SDK の show_volumes() レスポンスは volume name を 'label' に
+        # 入れる. 互換のため 'name' / 'volume_name' / 'label' を順に見る.
+        name = raw.get("name") or raw.get("volume_name") or raw.get("label") or ""
         return cls(
             id=int(raw.get("id", 0)),
-            name=str(raw.get("name") or ""),
+            name=str(name),
             size_gb=float(raw.get("disk_space", raw.get("size", 0.0))),
             mount_path=raw.get("mount_path"),
             machine_id=raw.get("machine_id"),
@@ -172,33 +175,34 @@ def create_volume(
         raise RuntimeError(
             f"unexpected create_volume response: {type(response).__name__}"
         )
+    # 一部の Vast API endpoint (network_volumes) は id を返さず success フラグと
+    # name/size のみを返すので、その場合は list_volumes で name 一致を引いて id を
+    # 解決する.
     new_id = response.get("new_contract") or response.get("id")
     if new_id is None:
-        raise RuntimeError(f"create_volume response missing id: keys={list(response)}")
+        if not response.get("success"):
+            raise RuntimeError(f"create_volume failed: response={dict(response)}")
+        # show_network_disks / show_volumes から name 一致を探す
+        for v in list_volumes(sdk):
+            if v.name == name:
+                return int(v.id)
+        raise RuntimeError(
+            f"create_volume succeeded but volume not found by name={name!r}: "
+            f"response={dict(response)}"
+        )
     return int(new_id)
 
 
 def list_volumes(sdk: Any) -> list[Volume]:
-    """所有する volumes を一覧 (local + network).
+    """所有する volumes を一覧 (network volume も同じ show_volumes に含まれる).
 
-    show_volumes() に加え show_network_disks() の結果も含める.
+    `show_network_disks()` は Host 専用 API (Customer は 401) なので使わない.
+    Customer 視点では show_volumes() が network/local 両方を返す.
     """
-    items: list[Volume] = []
     raw = sdk.show_volumes()
-    if isinstance(raw, list):
-        items.extend(Volume.from_raw(r) for r in raw)
-    try:
-        raw_net = sdk.show_network_disks()
-    except Exception:  # pragma: no cover — API 差異吸収
-        raw_net = None
-    if isinstance(raw_net, list):
-        items.extend(Volume.from_raw(r) for r in raw_net)
-    elif isinstance(raw_net, dict):
-        # SDK によっては {"disks": [...]} を返すケースあり
-        disks = raw_net.get("disks")
-        if isinstance(disks, list):
-            items.extend(Volume.from_raw(r) for r in disks)
-    return items
+    if not isinstance(raw, list):
+        return []
+    return [Volume.from_raw(r) for r in raw]
 
 
 def add_network_disk_to_machine(
