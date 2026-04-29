@@ -573,7 +573,7 @@ def volume_list_cmd() -> None:
 @volume_app.command("search")
 def volume_search_cmd(
     min_size_gb: float = typer.Option(15.0, "--min-size"),
-    max_dph: float = typer.Option(0.005, "--max-dph"),
+    max_dph: float = typer.Option(0.50, "--max-dph", help="$/TB/month の上限"),
     limit: int = typer.Option(10, "--limit"),
 ) -> None:
     """購入可能な volume offer を検索."""
@@ -584,7 +584,7 @@ def volume_search_cmd(
         raise typer.Exit(code=2) from exc
     sdk = _build_sdk(api_key)
     offers = search_volume_offers(
-        sdk, min_size_gb=min_size_gb, max_storage_per_hour=max_dph, limit=limit
+        sdk, min_size_gb=min_size_gb, max_storage_per_month_per_tb=max_dph, limit=limit
     )
     if not offers:
         console.print("[yellow]No offers matched.[/]")
@@ -596,7 +596,7 @@ def volume_search_cmd(
 def volume_create_cmd(
     name: str = typer.Argument(..., help="volume name (再利用キー)"),
     size_gb: float = typer.Option(15.0, "--size"),
-    max_dph: float = typer.Option(0.005, "--max-dph"),
+    max_dph: float = typer.Option(0.50, "--max-dph", help="$/TB/month の上限"),
 ) -> None:
     """最安 offer から volume を新規作成し id を表示."""
     try:
@@ -606,7 +606,7 @@ def volume_create_cmd(
         raise typer.Exit(code=2) from exc
     sdk = _build_sdk(api_key)
     offers = search_volume_offers(
-        sdk, min_size_gb=size_gb, max_storage_per_hour=max_dph
+        sdk, min_size_gb=size_gb, max_storage_per_month_per_tb=max_dph
     )
     if not offers:
         console.print("[red]No offers matched.[/]")

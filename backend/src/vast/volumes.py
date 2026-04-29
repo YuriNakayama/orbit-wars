@@ -63,19 +63,24 @@ def search_volume_offers(
     sdk: Any,
     *,
     min_size_gb: float = 15.0,
-    max_storage_per_hour: float = 0.005,
+    max_storage_per_month_per_tb: float = 0.50,
     min_reliability: float = 0.99,
     limit: int = 10,
 ) -> list[VolumeOffer]:
-    """Volume offer を検索. dph_storage 昇順で limit 件返す."""
-    query = (
-        f"disk_space>={min_size_gb} "
-        f"storage_cost<{max_storage_per_hour} "
-        f"reliability>={min_reliability}"
-    )
+    """Volume offer を検索. storage_cost ($/TB/month) 昇順で limit 件返す.
+
+    SDK の search_volumes は query を dict で受け取る (vastai/api/offers.py:153
+    で q.update(query) する設計). 文字列を渡すと ValueError になる.
+    `storage_cost` の単位は $/TB/month で、相場は $0.10〜$0.30/TB/月.
+    """
+    query: dict[str, Any] = {
+        "disk_space": {"gte": float(min_size_gb)},
+        "storage_cost": {"lt": float(max_storage_per_month_per_tb)},
+        "reliability2": {"gte": float(min_reliability)},
+    }
     raw_offers = sdk.search_volumes(
         query=query,
-        order="storage_cost",
+        order=[["storage_cost", "asc"]],
         limit=limit,
         storage=min_size_gb,
     )
@@ -95,16 +100,20 @@ def render_volume_offers(
     table.add_column("offer_id")
     table.add_column("machine_id")
     table.add_column("size_gb", justify="right")
-    table.add_column("$/h", justify="right")
+    table.add_column("$/TB/mo", justify="right")
+    table.add_column("est. $/mo", justify="right")
     table.add_column("reliability", justify="right")
     table.add_column("region")
     for i, o in enumerate(offers, 1):
+        # Estimated monthly cost for 15GB allocation
+        est_15gb = o.storage_per_hour * 15.0 / 1024.0
         table.add_row(
             str(i),
             str(o.id),
             str(o.machine_id),
             f"{o.disk_space_gb:.0f}",
-            f"${o.storage_per_hour:.5f}",
+            f"${o.storage_per_hour:.4f}",
+            f"${est_15gb:.4f}",
             f"{o.reliability:.3f}",
             o.geolocation or "-",
         )
