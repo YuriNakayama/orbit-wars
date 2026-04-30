@@ -1,0 +1,39 @@
+# AWS CodeBuild buildspec for orbit-wars Vast.ai runtime image.
+# Triggered manually via `aws codebuild start-build` or by Terraform-managed
+# CodePipeline / GitHub webhook (future).
+version: 0.2
+
+env:
+  variables:
+    DVC_S3_PREFIX: "remote/files/md5"
+
+phases:
+  pre_build:
+    commands:
+      - echo "ecr=$ECR_URL bucket=$DVC_S3_BUCKET sha=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}"
+      - aws ecr get-login-password --region "${AWS_REGION:-ap-northeast-1}" \
+          | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+
+  build:
+    commands:
+      # CodeBuild の task role が S3 read 権限を持っているので credentials を
+      # build secret として渡す必要は無い (instance profile で十分).
+      # 一方 BuildKit secret は profile chain 経由の credential が要るので、
+      # ここでは Dockerfile を CodeBuild 用に書き換えて aws s3 sync を素で実行.
+      - SHA=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - >-
+        docker buildx build
+        --platform linux/amd64
+        --file infra/runtime/Dockerfile
+        --build-arg DVC_S3_BUCKET="$DVC_S3_BUCKET"
+        --build-arg DVC_S3_PREFIX="$DVC_S3_PREFIX"
+        --tag "${ECR_URL}:latest"
+        --tag "${ECR_URL}:${SHA}"
+        --load
+        .
+      - docker push "${ECR_URL}:latest"
+      - docker push "${ECR_URL}:${SHA}"
+
+  post_build:
+    commands:
+      - echo "pushed ${ECR_URL}:latest and ${ECR_URL}:${SHA}"

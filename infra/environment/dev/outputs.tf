@@ -41,3 +41,8 @@ output "ecr_runtime_push_secret_access_key" {
   value       = module.ecr_runtime.push_secret_access_key
   sensitive   = true
 }
+
+output "runtime_codebuild_project_name" {
+  description = "Trigger via: aws codebuild start-build --project-name <this>"
+  value       = module.runtime_codebuild.project_name
+}
