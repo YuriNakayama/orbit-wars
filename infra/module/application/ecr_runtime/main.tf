@@ -96,3 +96,9 @@ resource "aws_iam_user_policy" "ecr_push" {
     ]
   })
 }
+
+# Push 用 access key を Terraform で発行する. 発行後は出力値を ~/.aws/credentials
+# (profile=orbit-wars-ecr-push) に登録する.
+resource "aws_iam_access_key" "ecr_push" {
+  user = aws_iam_user.ecr_push.name
+}

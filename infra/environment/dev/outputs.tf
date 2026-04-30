@@ -29,3 +29,15 @@ output "ecr_runtime_push_user_name" {
   description = "IAM user authorized to push to the runtime ECR repository."
   value       = module.ecr_runtime.push_user_name
 }
+
+output "ecr_runtime_push_access_key_id" {
+  description = "Access key ID for the ECR push user."
+  value       = module.ecr_runtime.push_access_key_id
+  sensitive   = true
+}
+
+output "ecr_runtime_push_secret_access_key" {
+  description = "Secret access key for the ECR push user (sensitive)."
+  value       = module.ecr_runtime.push_secret_access_key
+  sensitive   = true
+}
