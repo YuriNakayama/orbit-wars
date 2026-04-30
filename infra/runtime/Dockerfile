@@ -41,7 +41,10 @@ ENV UV_CACHE_DIR=/root/.cache/uv
 # 取得することで、git/dvc init が不要になり build を簡素化する.
 # build 時に AWS credentials を BuildKit secret 経由で受け取り、layer には残さない.
 WORKDIR /opt/orbit-wars
-RUN --mount=type=secret,id=aws_creds,target=/root/.aws/credentials \
+# BuildKit secret 経由 (ローカル dev) または env 経由 (CodeBuild) の AWS auth に
+# 両対応する. CodeBuild の場合は task role が credentials を提供するので
+# secret mount は no-op (空ファイル) でも問題なく動く.
+RUN --mount=type=secret,id=aws_creds,target=/root/.aws/credentials,required=false \
     pip install --no-cache-dir awscli==1.40.* >/dev/null && \
     mkdir -p .dvc/cache/files/md5 && \
     aws s3 sync \

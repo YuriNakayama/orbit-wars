@@ -1,6 +1,11 @@
 # AWS CodeBuild buildspec for orbit-wars Vast.ai runtime image.
-# Triggered manually via `aws codebuild start-build` or by Terraform-managed
-# CodePipeline / GitHub webhook (future).
+# Trigger: `aws codebuild start-build --project-name orbit-wars-dev-runtime`
+# (Source は S3 zip; build_via_codebuild.sh が upload + start を行う)
+#
+# 環境変数 (terraform で project に注入される):
+#   ECR_URL          private ECR repository URL
+#   PUBLIC_ECR_URI   public ECR Gallery URI (Vast.ai が pull するのはこちら)
+#   DVC_S3_BUCKET    DVC remote S3 bucket name
 version: 0.2
 
 env:
@@ -10,17 +15,17 @@ env:
 phases:
   pre_build:
     commands:
-      - echo "ecr=$ECR_URL bucket=$DVC_S3_BUCKET sha=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}"
+      - SHA=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - echo "private=$ECR_URL public=$PUBLIC_ECR_URI bucket=$DVC_S3_BUCKET sha=$SHA"
       - aws ecr get-login-password --region "${AWS_REGION:-ap-northeast-1}" \
           | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+      - aws ecr-public get-login-password --region us-east-1 \
+          | docker login --username AWS --password-stdin "${PUBLIC_ECR_URI%%/*}"
 
   build:
     commands:
-      # CodeBuild の task role が S3 read 権限を持っているので credentials を
-      # build secret として渡す必要は無い (instance profile で十分).
-      # 一方 BuildKit secret は profile chain 経由の credential が要るので、
-      # ここでは Dockerfile を CodeBuild 用に書き換えて aws s3 sync を素で実行.
-      - SHA=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      # CodeBuild task role が ECR + S3 (DVC) read 権限を持つので
+      # BuildKit secret は不要 (Dockerfile 側で required=false にしてある).
       - >-
         docker buildx build
         --platform linux/amd64
@@ -29,11 +34,15 @@ phases:
         --build-arg DVC_S3_PREFIX="$DVC_S3_PREFIX"
         --tag "${ECR_URL}:latest"
         --tag "${ECR_URL}:${SHA}"
+        --tag "${PUBLIC_ECR_URI}:latest"
+        --tag "${PUBLIC_ECR_URI}:${SHA}"
         --load
         .
       - docker push "${ECR_URL}:latest"
       - docker push "${ECR_URL}:${SHA}"
+      - docker push "${PUBLIC_ECR_URI}:latest"
+      - docker push "${PUBLIC_ECR_URI}:${SHA}"
 
   post_build:
     commands:
-      - echo "pushed ${ECR_URL}:latest and ${ECR_URL}:${SHA}"
+      - echo "pushed private=${ECR_URL}:${SHA} public=${PUBLIC_ECR_URI}:${SHA}"

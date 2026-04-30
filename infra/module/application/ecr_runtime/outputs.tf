@@ -8,6 +8,11 @@ output "public_repository_uri" {
   value       = aws_ecrpublic_repository.runtime.repository_uri
 }
 
+output "public_repository_arn" {
+  description = "Public ECR repository ARN (for IAM resource scoping)"
+  value       = aws_ecrpublic_repository.runtime.arn
+}
+
 output "repository_arn" {
   description = "ECR repository ARN"
   value       = aws_ecr_repository.runtime.arn

@@ -44,9 +44,11 @@ module "ecr_runtime" {
 # CodeBuild project: GitHub の変更検知 / 手動 trigger で image を build & push.
 # ローカル Docker (容量逼迫) に依存しないクラウド側 build pipeline.
 module "runtime_codebuild" {
-  source             = "../../module/application/runtime_codebuild"
-  prefix             = var.resource_prefix
-  ecr_repository_url = module.ecr_runtime.repository_url
-  ecr_repository_arn = module.ecr_runtime.repository_arn
-  dvc_bucket_name    = var.dvc_bucket_name
+  source                    = "../../module/application/runtime_codebuild"
+  prefix                    = var.resource_prefix
+  ecr_repository_url        = module.ecr_runtime.repository_url
+  ecr_repository_arn        = module.ecr_runtime.repository_arn
+  public_ecr_repository_uri = module.ecr_runtime.public_repository_uri
+  public_ecr_repository_arn = module.ecr_runtime.public_repository_arn
+  dvc_bucket_name           = var.dvc_bucket_name
 }

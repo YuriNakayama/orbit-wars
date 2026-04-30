@@ -75,6 +75,10 @@ resource "aws_codebuild_project" "runtime" {
       value = var.ecr_repository_url
     }
     environment_variable {
+      name  = "PUBLIC_ECR_URI"
+      value = var.public_ecr_repository_uri
+    }
+    environment_variable {
       name  = "DVC_S3_BUCKET"
       value = var.dvc_bucket_name
     }
@@ -121,6 +125,8 @@ data "aws_iam_policy_document" "codebuild_inline" {
     effect = "Allow"
     actions = [
       "ecr:GetAuthorizationToken",
+      "ecr-public:GetAuthorizationToken",
+      "sts:GetServiceBearerToken",
     ]
     resources = ["*"]
   }
@@ -139,6 +145,20 @@ data "aws_iam_policy_document" "codebuild_inline" {
       "ecr:DescribeImages",
     ]
     resources = [var.ecr_repository_arn]
+  }
+  statement {
+    sid    = "EcrPublicPush"
+    effect = "Allow"
+    actions = [
+      "ecr-public:BatchCheckLayerAvailability",
+      "ecr-public:CompleteLayerUpload",
+      "ecr-public:InitiateLayerUpload",
+      "ecr-public:PutImage",
+      "ecr-public:UploadLayerPart",
+      "ecr-public:DescribeRepositories",
+      "ecr-public:DescribeImages",
+    ]
+    resources = [var.public_ecr_repository_arn]
   }
   statement {
     sid    = "S3DvcRead"
