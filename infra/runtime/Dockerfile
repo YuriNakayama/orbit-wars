@@ -7,6 +7,10 @@
 
 FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
+# DVC remote (S3) を変えるとき build_and_push.sh から --build-arg で渡す.
+ARG DVC_S3_BUCKET=orbit-wars-dvc-286854171013
+ARG DVC_S3_PREFIX=remote/files/md5
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
@@ -33,22 +37,21 @@ RUN uv sync --locked --no-install-project --no-dev
 ENV UV_CACHE_DIR=/root/.cache/uv
 
 # DVC tracked データを image に焼き込み、Vast 起動時の dvc_pull を skip する.
-# 焼込み対象: kaggle replays (~370MB) + case3 parquet (~387MB) + case3 *.dvc メタ.
-# build 時に AWS credentials を BuildKit secret 経由で受け取り、
-# image layer には credentials は残さない (RUN --mount=type=secret).
+# DVC remote の S3 prefix から直接 `aws s3 sync` でコンテンツアドレス cache を
+# 取得することで、git/dvc init が不要になり build を簡素化する.
+# build 時に AWS credentials を BuildKit secret 経由で受け取り、layer には残さない.
 WORKDIR /opt/orbit-wars
-COPY .dvc/config .dvc/config
-COPY data/lake/kaggle_episodes/matches.dvc data/lake/kaggle_episodes/matches.dvc
-COPY data/mart/imitation/case3/train_phase2_fixed.parquet.dvc \
-     data/mart/imitation/case3/train_phase2_fixed.parquet.dvc
-COPY data/mart/imitation/case3/val_phase2_fixed.parquet.dvc \
-     data/mart/imitation/case3/val_phase2_fixed.parquet.dvc
 RUN --mount=type=secret,id=aws_creds,target=/root/.aws/credentials \
-    cd backend && \
-    uv run --no-sync dvc pull --project /opt/orbit-wars \
-        ../data/lake/kaggle_episodes/matches.dvc \
-        ../data/mart/imitation/case3/train_phase2_fixed.parquet.dvc \
-        ../data/mart/imitation/case3/val_phase2_fixed.parquet.dvc
+    pip install --no-cache-dir awscli==1.40.* >/dev/null && \
+    mkdir -p .dvc/cache/files/md5 && \
+    aws s3 sync \
+        "s3://${DVC_S3_BUCKET}/${DVC_S3_PREFIX}" \
+        .dvc/cache/files/md5 \
+        --no-progress \
+    && pip uninstall -y awscli >/dev/null
+
+# Vast onstart は clone 先 (/workspace/orbit-wars) で `.dvc/cache` を
+# /opt/orbit-wars/.dvc/cache に symlink して焼込み済 cache を流用する.
 
 # clone 先 (onstart で /workspace/orbit-wars に clone される)
 WORKDIR /workspace
