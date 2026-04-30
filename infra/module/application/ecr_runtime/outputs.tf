@@ -1,6 +1,11 @@
 output "repository_url" {
-  description = "ECR repository URL (use as docker push/pull target)"
+  description = "Private ECR repository URL (push only, requires AWS auth)"
   value       = aws_ecr_repository.runtime.repository_url
+}
+
+output "public_repository_uri" {
+  description = "Public ECR Gallery URI for anonymous docker pull (Vast.ai 等から)"
+  value       = aws_ecrpublic_repository.runtime.repository_uri
 }
 
 output "repository_arn" {

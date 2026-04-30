@@ -10,6 +10,20 @@ provider "aws" {
   }
 }
 
+# Public ECR Gallery は us-east-1 限定. alias でだけ呼び出す.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project     = "OrbitWars"
+      Environment = "dev"
+      ManagedBy   = "Terraform"
+    }
+  }
+}
+
 module "dvc_remote" {
   source      = "../../module/application/dvc_remote"
   bucket_name = var.dvc_bucket_name
@@ -17,9 +31,14 @@ module "dvc_remote" {
 }
 
 # Vast.ai 学習ノードが pull する Docker base image (依存焼込み済) を ECR で管理.
+# Public ECR Gallery (us-east-1) も同 module で発行し Vast.ai が匿名 pull.
 module "ecr_runtime" {
   source = "../../module/application/ecr_runtime"
   prefix = var.resource_prefix
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
 }
 
 # CodeBuild project: GitHub の変更検知 / 手動 trigger で image を build & push.

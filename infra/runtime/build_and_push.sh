@@ -27,19 +27,22 @@ done
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
-# Terraform output から ECR repo URL を取得 (terraform state を信頼).
+# Terraform output から private + public ECR URL を取得.
 ECR_URL=$(cd infra/environment/dev && terraform output -raw ecr_runtime_repository_url)
-REGION=$(cd infra/environment/dev && terraform output -raw -json 2>/dev/null \
-  | python3 -c 'import json, sys; d=json.load(sys.stdin); print(d.get("aws_region", {}).get("value", "ap-northeast-1"))' \
-  || echo "ap-northeast-1")
+PUBLIC_URI=$(cd infra/environment/dev && terraform output -raw ecr_runtime_public_uri)
+REGION="ap-northeast-1"
 REGISTRY="${ECR_URL%%/*}"
+PUBLIC_REGISTRY="${PUBLIC_URI%%/*}"
 SHA=$(git rev-parse --short=7 HEAD)
 
-echo "[runtime] ecr=${ECR_URL} region=${REGION} tag=${TAG} sha=${SHA}"
+echo "[runtime] private=${ECR_URL} public=${PUBLIC_URI} tag=${TAG} sha=${SHA}"
 
-echo "[runtime] step=ecr_login"
+echo "[runtime] step=ecr_login (private + public)"
 aws ecr get-login-password --region "${REGION}" --profile "${PROFILE}" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
+# Public ECR は us-east-1 限定
+aws ecr-public get-login-password --region us-east-1 --profile "${PROFILE}" \
+  | docker login --username AWS --password-stdin "${PUBLIC_REGISTRY}"
 
 echo "[runtime] step=prepare_dvc_secret"
 # DVC が image build 時に S3 から fetch するための credentials を BuildKit
@@ -64,13 +67,18 @@ DOCKER_BUILDKIT=1 docker buildx build \
   --secret "id=aws_creds,src=${DVC_CRED_FILE}" \
   --tag "${ECR_URL}:${TAG}" \
   --tag "${ECR_URL}:${SHA}" \
+  --tag "${PUBLIC_URI}:${TAG}" \
+  --tag "${PUBLIC_URI}:${SHA}" \
   --load \
   .
 
-echo "[runtime] step=docker_push"
+echo "[runtime] step=docker_push (private)"
 docker push "${ECR_URL}:${TAG}"
 docker push "${ECR_URL}:${SHA}"
 
-echo "[runtime] done. usable image:"
-echo "  ${ECR_URL}:${TAG}"
-echo "  ${ECR_URL}:${SHA}"
+echo "[runtime] step=docker_push (public)"
+docker push "${PUBLIC_URI}:${TAG}"
+docker push "${PUBLIC_URI}:${SHA}"
+
+echo "[runtime] done. Vast.ai が pull するのは public:"
+echo "  ${PUBLIC_URI}:${TAG}"

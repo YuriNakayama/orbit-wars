@@ -15,6 +15,19 @@ resource "aws_ecr_repository" "runtime" {
   }
 }
 
+# Public ECR Gallery (us-east-1) で同名 repository を払い出す.
+# Vast.ai インスタンスが匿名で `docker pull` できるよう public 化.
+resource "aws_ecrpublic_repository" "runtime" {
+  provider        = aws.us_east_1
+  repository_name = "${var.prefix}-runtime"
+
+  catalog_data {
+    about_text        = "Vast.ai runtime base image for orbit-wars (uv + DVC cache baked)."
+    architectures     = ["x86-64"]
+    operating_systems = ["Linux"]
+  }
+}
+
 # Vast.ai インスタンスが pull するため public read を許可する IAM policy.
 # image の中身は依存ライブラリのみで秘密情報は含まないので公開でも安全.
 resource "aws_ecr_repository_policy" "public_pull" {
@@ -74,11 +87,13 @@ resource "aws_iam_user_policy" "ecr_push" {
         Effect = "Allow"
         Action = [
           "ecr:GetAuthorizationToken",
+          "ecr-public:GetAuthorizationToken",
+          "sts:GetServiceBearerToken",
         ]
         Resource = "*"
       },
       {
-        Sid    = "PushPullThisRepo"
+        Sid    = "PushPullPrivateRepo"
         Effect = "Allow"
         Action = [
           "ecr:BatchGetImage",
@@ -92,6 +107,20 @@ resource "aws_iam_user_policy" "ecr_push" {
           "ecr:DescribeImages",
         ]
         Resource = aws_ecr_repository.runtime.arn
+      },
+      {
+        Sid    = "PushPublicRepo"
+        Effect = "Allow"
+        Action = [
+          "ecr-public:BatchCheckLayerAvailability",
+          "ecr-public:CompleteLayerUpload",
+          "ecr-public:InitiateLayerUpload",
+          "ecr-public:PutImage",
+          "ecr-public:UploadLayerPart",
+          "ecr-public:DescribeRepositories",
+          "ecr-public:DescribeImages",
+        ]
+        Resource = aws_ecrpublic_repository.runtime.arn
       },
     ]
   })

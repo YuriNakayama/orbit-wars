@@ -21,8 +21,13 @@ output "dvc_iam_secret_access_key" {
 }
 
 output "ecr_runtime_repository_url" {
-  description = "ECR repository URL for the Vast.ai runtime base image."
+  description = "Private ECR repository URL (push from CI/dev only)."
   value       = module.ecr_runtime.repository_url
+}
+
+output "ecr_runtime_public_uri" {
+  description = "Public ECR Gallery URI used by Vast.ai for anonymous docker pull."
+  value       = module.ecr_runtime.public_repository_uri
 }
 
 output "ecr_runtime_push_user_name" {
