@@ -3,11 +3,6 @@ variable "prefix" {
   type        = string
 }
 
-variable "github_repo_url" {
-  description = "GitHub repository URL (HTTPS clone url)"
-  type        = string
-}
-
 variable "ecr_repository_url" {
   description = "ECR repository URL (passed to docker push)"
   type        = string

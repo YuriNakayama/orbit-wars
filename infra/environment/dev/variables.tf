@@ -15,8 +15,3 @@ variable "resource_prefix" {
   default     = "orbit-wars-dev"
 }
 
-variable "github_repo_url" {
-  description = "GitHub repository URL (HTTPS) used by the runtime CodeBuild project."
-  type        = string
-  default     = "https://github.com/YuriNakayama/orbit-wars.git"
-}

@@ -1,11 +1,53 @@
 # CodeBuild project: orbit-wars Vast.ai runtime image を ECR に build & push する.
-# トリガ: GitHub の `pyproject.toml` / `uv.lock` / `infra/runtime/**` 変更時、
-# あるいは手動 (terraform 経由 / GitHub Actions / `aws codebuild start-build`).
-#
+# Source は S3 zip (`source/orbit-wars-source.zip`) を採用. GitHub OAuth 連携が
+# 不要になり Terraform 単独で完全管理可能.
 # 利点:
 #  - ローカル Docker (8GB RAM, builder cache 21GB) に依存しない
-#  - GitHub Actions secrets を使わずに OIDC で AWS 認証
+#  - GitHub OAuth 連携が不要 (Terraform で完結)
 #  - Terraform で project 設定 + IAM を完全管理
+# トリガ:
+#   1) 開発者ローカル: dev/runtime-build-cloud (zip → s3 cp → start-build)
+#   2) 将来 CI 化する場合は GitHub Actions から OIDC で start-build
+
+resource "aws_s3_bucket" "source" {
+  bucket = "${var.prefix}-codebuild-source"
+}
+
+resource "aws_s3_bucket_versioning" "source" {
+  bucket = aws_s3_bucket.source.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "source" {
+  bucket = aws_s3_bucket.source.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "source" {
+  bucket                  = aws_s3_bucket.source.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "source" {
+  bucket = aws_s3_bucket.source.id
+  rule {
+    id     = "expire-old-zips"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 14
+    }
+  }
+}
 
 resource "aws_codebuild_project" "runtime" {
   name         = "${var.prefix}-runtime"
@@ -13,10 +55,9 @@ resource "aws_codebuild_project" "runtime" {
   service_role = aws_iam_role.codebuild.arn
 
   source {
-    type            = "GITHUB"
-    location        = var.github_repo_url
-    git_clone_depth = 1
-    buildspec       = "infra/runtime/buildspec.yml"
+    type      = "S3"
+    location  = "${aws_s3_bucket.source.id}/source/orbit-wars-source.zip"
+    buildspec = "infra/runtime/buildspec.yml"
   }
 
   artifacts {
@@ -109,6 +150,19 @@ data "aws_iam_policy_document" "codebuild_inline" {
     resources = [
       "arn:aws:s3:::${var.dvc_bucket_name}",
       "arn:aws:s3:::${var.dvc_bucket_name}/*",
+    ]
+  }
+  statement {
+    sid    = "S3SourceRead"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:ListBucket",
+    ]
+    resources = [
+      aws_s3_bucket.source.arn,
+      "${aws_s3_bucket.source.arn}/*",
     ]
   }
 }

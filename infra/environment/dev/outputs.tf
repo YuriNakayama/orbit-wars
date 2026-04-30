@@ -46,3 +46,8 @@ output "runtime_codebuild_project_name" {
   description = "Trigger via: aws codebuild start-build --project-name <this>"
   value       = module.runtime_codebuild.project_name
 }
+
+output "runtime_codebuild_source_bucket" {
+  description = "S3 bucket to upload source zip before triggering CodeBuild."
+  value       = module.runtime_codebuild.source_bucket_name
+}

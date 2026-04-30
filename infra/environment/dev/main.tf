@@ -27,7 +27,6 @@ module "ecr_runtime" {
 module "runtime_codebuild" {
   source             = "../../module/application/runtime_codebuild"
   prefix             = var.resource_prefix
-  github_repo_url    = var.github_repo_url
   ecr_repository_url = module.ecr_runtime.repository_url
   ecr_repository_arn = module.ecr_runtime.repository_arn
   dvc_bucket_name    = var.dvc_bucket_name
