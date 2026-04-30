@@ -32,5 +32,23 @@ RUN uv sync --locked --no-install-project --no-dev
 # Vast 起動時の uv cache hit を最大化するため、cache をユーザ可視な場所に維持.
 ENV UV_CACHE_DIR=/root/.cache/uv
 
+# DVC tracked データを image に焼き込み、Vast 起動時の dvc_pull を skip する.
+# 焼込み対象: kaggle replays (~370MB) + case3 parquet (~387MB) + case3 *.dvc メタ.
+# build 時に AWS credentials を BuildKit secret 経由で受け取り、
+# image layer には credentials は残さない (RUN --mount=type=secret).
+WORKDIR /opt/orbit-wars
+COPY .dvc/config .dvc/config
+COPY data/lake/kaggle_episodes/matches.dvc data/lake/kaggle_episodes/matches.dvc
+COPY data/mart/imitation/case3/train_phase2_fixed.parquet.dvc \
+     data/mart/imitation/case3/train_phase2_fixed.parquet.dvc
+COPY data/mart/imitation/case3/val_phase2_fixed.parquet.dvc \
+     data/mart/imitation/case3/val_phase2_fixed.parquet.dvc
+RUN --mount=type=secret,id=aws_creds,target=/root/.aws/credentials \
+    cd backend && \
+    uv run --no-sync dvc pull --project /opt/orbit-wars \
+        ../data/lake/kaggle_episodes/matches.dvc \
+        ../data/mart/imitation/case3/train_phase2_fixed.parquet.dvc \
+        ../data/mart/imitation/case3/val_phase2_fixed.parquet.dvc
+
 # clone 先 (onstart で /workspace/orbit-wars に clone される)
 WORKDIR /workspace

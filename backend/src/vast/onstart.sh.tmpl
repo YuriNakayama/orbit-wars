@@ -119,13 +119,18 @@ echo "[onstart] step=install_vastai_cli_for_self_destroy"
 uv pip install --project backend vastai >/dev/null 2>&1 || true
 
 echo "[onstart] step=dvc_pull"
+# Image (/opt/orbit-wars/.dvc/cache) に焼き込んだ DVC cache を流用するため、
+# clone 先の .dvc/cache を image cache に symlink する.
+PREBUILT_DVC_CACHE="/opt/orbit-wars/.dvc/cache"
+if [ -d "$PREBUILT_DVC_CACHE" ]; then
+  echo "[onstart] dvc_pull: reusing prebuilt cache from $PREBUILT_DVC_CACHE"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn "$PREBUILT_DVC_CACHE" .dvc/cache
+fi
 # .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
-# boto3 default credential chain がそのまま拾う。.dvc/config.local は git
-# untracked なので Vast 側には存在せず、profile 上書きの必要は無い。
-# DVC コマンドは dvc.yaml がある repo root で実行する必要がある (--directory
-# backend だと backend/dvc.yaml を探しに行って失敗する)。
-# 引数なしでも全 tracked outs を pull するが、kaggle replays は preprocess の
-# 必須入力なので明示指定して取得失敗を即時検出する。
+# boto3 default credential chain がそのまま拾う。
+# 焼込み済の場合は dvc pull が cache hit でほぼゼロ秒で完了する.
 uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 uv run --project backend dvc pull
 

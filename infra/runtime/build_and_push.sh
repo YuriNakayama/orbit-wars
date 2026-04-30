@@ -41,11 +41,27 @@ echo "[runtime] step=ecr_login"
 aws ecr get-login-password --region "${REGION}" --profile "${PROFILE}" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
 
+echo "[runtime] step=prepare_dvc_secret"
+# DVC が image build 時に S3 から fetch するための credentials を BuildKit
+# secret に渡す. Terraform 管理下の dvc_user (S3 RW) を使う.
+DVC_PROFILE="${ORBIT_WARS_DVC_PROFILE:-orbit-wars}"
+DVC_CRED_FILE="$(mktemp)"
+trap 'rm -f "$DVC_CRED_FILE"' EXIT
+{
+  echo "[default]"
+  aws configure get aws_access_key_id --profile "$DVC_PROFILE" \
+    | sed 's/^/aws_access_key_id = /'
+  aws configure get aws_secret_access_key --profile "$DVC_PROFILE" \
+    | sed 's/^/aws_secret_access_key = /'
+  echo "region = ${REGION}"
+} > "$DVC_CRED_FILE"
+
 echo "[runtime] step=docker_build"
 # linux/amd64 を明示 (Apple Silicon でも Vast 側 amd64 が必要)
-docker buildx build \
+DOCKER_BUILDKIT=1 docker buildx build \
   --platform linux/amd64 \
   --file infra/runtime/Dockerfile \
+  --secret "id=aws_creds,src=${DVC_CRED_FILE}" \
   --tag "${ECR_URL}:${TAG}" \
   --tag "${ECR_URL}:${SHA}" \
   --load \
