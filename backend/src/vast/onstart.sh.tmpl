@@ -124,13 +124,15 @@ uv run --project backend dvc pull
 echo "[onstart] step=mkdir_run"
 mkdir -p "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
 
-# Preprocess は parquet が S3 に push されていない case (例: case3) でのみ走らせる。
-# 空文字 placeholder のときはスキップ。永続化された /persist/data-mart に既に
-# parquet が存在するなら preprocess を skip して再利用する.
+# Preprocess: parquet が既に存在すれば skip する.
+# - dvc pull で data/mart/imitation/<CASE>/*.parquet が取得済み (S3 に push 済み)
+#   なら preprocess を 100% skip
+# - 永続化 volume (/persist/data-mart) に cache がある場合も同様
+# - どちらも無いなら preprocess を実行
 if [ -n "<PREPROCESS_CMD>" ]; then
-  if [ -d /persist ] && [ -d "data/mart/imitation/<CASE>" ] && \
+  if [ -d "data/mart/imitation/<CASE>" ] && \
      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
-    echo "[onstart] step=preprocess_skip (cached parquet found in /persist)"
+    echo "[onstart] step=preprocess_skip (parquet already present)"
   else
     echo "[onstart] step=preprocess case=<CASE>"
     uv run --directory backend python -m <PREPROCESS_CMD>

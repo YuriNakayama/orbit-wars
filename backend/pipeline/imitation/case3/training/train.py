@@ -431,7 +431,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             best_val = val_metrics["total"]
             best_epoch = epoch
             torch.save(model.state_dict(), weights_out)
-            shutil.copyfile(weights_out, run_weights_path)
+            # Vast モードでは weights_out == run_weights_path なので copy 不要.
+            # ローカルモードでのみ run_dir にも履歴コピーする.
+            if weights_out.resolve() != run_weights_path.resolve():
+                shutil.copyfile(weights_out, run_weights_path)
 
     summary = {
         "epochs_run": epochs,
