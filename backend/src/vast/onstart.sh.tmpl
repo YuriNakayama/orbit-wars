@@ -94,9 +94,17 @@ fi
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 echo "[onstart] step=uv_sync"
+# ECR の焼込み image (/opt/orbit-wars/backend/.venv) があるなら symlink で
+# venv を流用し、新規 wheel ダウンロードを回避する.
+PREBUILT_VENV="/opt/orbit-wars/backend/.venv"
+if [ -d "$PREBUILT_VENV" ] && [ ! -e backend/.venv ]; then
+  echo "[onstart] uv_sync: reusing prebuilt venv from $PREBUILT_VENV"
+  ln -sfn "$PREBUILT_VENV" backend/.venv
+fi
 # 大型 wheel (nvidia-* 数百 MB) で connection reset が起きやすいため retry。
+# image 焼込み済の場合は実体 download なしで lockfile だけ照合される (~30秒).
 for attempt in 1 2 3; do
-  if uv sync --locked --all-extras --dev --directory backend; then
+  if uv sync --locked --no-dev --directory backend; then
     break
   fi
   echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"

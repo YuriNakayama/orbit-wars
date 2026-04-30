@@ -75,22 +75,39 @@ class ShipsArrays:
     labels: np.ndarray  # (M,) int64 in [0, K)
 
 
-def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
+def _to_batch_features(
+    sample: BatchedSample, device: torch.device | None = None
+) -> BatchFeatures:
+    """Build BatchFeatures, optionally moving tensors to the target device."""
+    if device is None:
+        return BatchFeatures(
+            planet_feats=sample.planet_feats,
+            planet_mask=sample.planet_mask,
+            my_planet_mask=sample.my_planet_mask,
+            target_mask=sample.target_mask,
+            global_feats=sample.global_feats,
+            template_ctx=sample.template_ctx,
+        )
     return BatchFeatures(
-        planet_feats=sample.planet_feats,
-        planet_mask=sample.planet_mask,
-        my_planet_mask=sample.my_planet_mask,
-        target_mask=sample.target_mask,
-        global_feats=sample.global_feats,
-        template_ctx=sample.template_ctx,
+        planet_feats=sample.planet_feats.to(device, non_blocking=True),
+        planet_mask=sample.planet_mask.to(device, non_blocking=True),
+        my_planet_mask=sample.my_planet_mask.to(device, non_blocking=True),
+        target_mask=sample.target_mask.to(device, non_blocking=True),
+        global_feats=sample.global_feats.to(device, non_blocking=True),
+        template_ctx=sample.template_ctx.to(device, non_blocking=True),
     )
 
 
 def collect_arrays(
     model: DeepSetsPolicy, loader: DataLoader[BatchedSample]
 ) -> tuple[FromArrays, TargetArrays, ShipsArrays]:
-    """Run model in eval mode over loader, return per-head arrays."""
+    """Run model in eval mode over loader, return per-head arrays.
+
+    Detect model device from its parameters (for GPU 学習時にも整合) と
+    batch tensor を同 device に移送する.
+    """
     model.eval()
+    device = next(model.parameters()).device
     from_probs_list: list[np.ndarray] = []
     from_labels_list: list[np.ndarray] = []
     target_probs_list: list[np.ndarray] = []
@@ -100,14 +117,17 @@ def collect_arrays(
 
     with torch.no_grad():
         for batch in loader:
-            features = _to_batch_features(batch)
+            features = _to_batch_features(batch, device=device)
             output = model(features)
             from_logits = output.from_logits  # (B, P)
             target_logits = output.target_logits  # (B, P, NUM_TEMPLATES)
             ships_logits = output.ships_logits  # (B, P, K)
 
-            my_mask = batch.my_planet_mask  # (B, P)
-            from_multihot = batch.from_multihot  # (B, P)
+            # mask / labels も同 device に揃える (GPU 学習時の indexing 不整合回避)
+            my_mask = batch.my_planet_mask.to(device, non_blocking=True)
+            from_multihot = batch.from_multihot.to(device, non_blocking=True)
+            target_per_src = batch.target_per_src.to(device, non_blocking=True)
+            ships_per_src = batch.ships_per_src.to(device, non_blocking=True)
 
             # from head: collect probs/labels at every my-planet slot.
             valid = my_mask
@@ -132,11 +152,7 @@ def collect_arrays(
                     .astype(np.float32)
                 )
                 tl = (
-                    batch.target_per_src[b_idx, p_idx]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.int64)
+                    target_per_src[b_idx, p_idx].detach().cpu().numpy().astype(np.int64)
                 )
                 sp = (
                     torch.softmax(ships_logits[b_idx, p_idx], dim=-1)
@@ -145,13 +161,7 @@ def collect_arrays(
                     .numpy()
                     .astype(np.float32)
                 )
-                sl = (
-                    batch.ships_per_src[b_idx, p_idx]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.int64)
-                )
+                sl = ships_per_src[b_idx, p_idx].detach().cpu().numpy().astype(np.int64)
                 target_probs_list.append(tp)
                 target_labels_list.append(tl)
                 ships_probs_list.append(sp)

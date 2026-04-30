@@ -19,3 +19,13 @@ output "dvc_iam_secret_access_key" {
   value       = module.dvc_remote.iam_secret_access_key
   sensitive   = true
 }
+
+output "ecr_runtime_repository_url" {
+  description = "ECR repository URL for the Vast.ai runtime base image."
+  value       = module.ecr_runtime.repository_url
+}
+
+output "ecr_runtime_push_user_name" {
+  description = "IAM user authorized to push to the runtime ECR repository."
+  value       = module.ecr_runtime.push_user_name
+}

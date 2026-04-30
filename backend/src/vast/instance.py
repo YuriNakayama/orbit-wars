@@ -6,6 +6,7 @@ placeholder 置換時に shell injection を防ぐため、値は厳格な regex
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -34,7 +35,13 @@ _TEMPLATE_PLACEHOLDERS = (
     "<PREPROCESS_CMD>",
 )
 
-DEFAULT_IMAGE = "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime"
+# ECR の依存焼込み image を使う場合は env で上書きする (terraform apply 後の URL).
+# 例: export ORBIT_WARS_RUNTIME_IMAGE=<acct>.dkr.ecr.ap-northeast-1.amazonaws.com/orbit-wars-runtime:latest
+# 未設定時は upstream の pytorch image にフォールバック (毎回 uv sync 必要).
+DEFAULT_IMAGE = os.environ.get(
+    "ORBIT_WARS_RUNTIME_IMAGE",
+    "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime",
+)
 DEFAULT_DISK_GB = 40
 
 

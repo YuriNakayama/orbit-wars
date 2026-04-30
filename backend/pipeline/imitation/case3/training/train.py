@@ -148,17 +148,20 @@ def _seed_all(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.use_deterministic_algorithms(False)  # CPU MLP — already deterministic
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(False)
 
 
-def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
+def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeatures:
+    """Build BatchFeatures, moving tensors to the target device."""
     return BatchFeatures(
-        planet_feats=sample.planet_feats,
-        planet_mask=sample.planet_mask,
-        my_planet_mask=sample.my_planet_mask,
-        target_mask=sample.target_mask,
-        global_feats=sample.global_feats,
-        template_ctx=sample.template_ctx,
+        planet_feats=sample.planet_feats.to(device, non_blocking=True),
+        planet_mask=sample.planet_mask.to(device, non_blocking=True),
+        my_planet_mask=sample.my_planet_mask.to(device, non_blocking=True),
+        target_mask=sample.target_mask.to(device, non_blocking=True),
+        global_feats=sample.global_feats.to(device, non_blocking=True),
+        template_ctx=sample.template_ctx.to(device, non_blocking=True),
     )
 
 
@@ -167,6 +170,7 @@ def _run_epoch(
     loader: DataLoader,  # type: ignore[type-arg]
     loss_weights: LossWeights,
     optimizer: optim.Optimizer | None,
+    device: torch.device,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -183,14 +187,14 @@ def _run_epoch(
     grad_ctx = torch.enable_grad if is_train else torch.no_grad
     with grad_ctx():
         for batch in loader:
-            features = _to_batch_features(batch)
+            features = _to_batch_features(batch, device)
             output = model(features)
             report = compute_loss(
                 output,
-                from_multihot=batch.from_multihot,
-                target_per_src=batch.target_per_src,
-                ships_per_src=batch.ships_per_src,
-                my_planet_mask=batch.my_planet_mask,
+                from_multihot=batch.from_multihot.to(device, non_blocking=True),
+                target_per_src=batch.target_per_src.to(device, non_blocking=True),
+                ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
+                my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
                 weights=loss_weights,
             )
             if is_train and optimizer is not None:
@@ -213,6 +217,9 @@ def _run_epoch(
 def train(cfg: dict[str, Any]) -> TrainReport:
     seed = int(cfg.get("seed", 0))
     _seed_all(seed)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(json.dumps({"device": device.type}))
 
     data_cfg = cfg["data"]
     train_cfg = cfg["train"]
@@ -267,6 +274,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 }
             )
         )
+    pin_memory = device.type == "cuda"
     train_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         train_ds,
         batch_size=int(train_cfg["batch_size"]),
@@ -275,6 +283,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         collate_fn=collate,
         num_workers=int(train_cfg.get("num_workers", 0)),
         generator=g,
+        pin_memory=pin_memory,
     )
     val_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         val_ds,
@@ -282,6 +291,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         shuffle=False,
         collate_fn=collate,
         num_workers=int(train_cfg.get("num_workers", 0)),
+        pin_memory=pin_memory,
     )
 
     model_config = ModelConfig(
@@ -290,7 +300,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         hidden=int(model_cfg.get("hidden", 64)),
         ships_buckets=int(model_cfg.get("ships_buckets", 4)),
     )
-    model = DeepSetsPolicy(model_config)
+    model = DeepSetsPolicy(model_config).to(device)
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -389,8 +399,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     best_epoch = -1
     epochs = int(train_cfg["epochs"])
     for epoch in range(epochs):
-        train_metrics = _run_epoch(model, train_loader, weights, optimizer)
-        val_metrics = _run_epoch(model, val_loader, weights, optimizer=None)
+        train_metrics = _run_epoch(model, train_loader, weights, optimizer, device)
+        val_metrics = _run_epoch(
+            model, val_loader, weights, optimizer=None, device=device
+        )
         # Per-epoch full-validation AUC / F1: re-runs the model on val_loader in
         # eval mode to collect probabilities, then computes the same multi-faceted
         # metrics as evaluation/eval_metrics.py.
@@ -430,7 +442,9 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         if val_metrics["total"] < best_val:
             best_val = val_metrics["total"]
             best_epoch = epoch
-            torch.save(model.state_dict(), weights_out)
+            # Kaggle Sandbox は CPU 推論なので state_dict を CPU に揃えて保存.
+            cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+            torch.save(cpu_state, weights_out)
             # Vast モードでは weights_out == run_weights_path なので copy 不要.
             # ローカルモードでのみ run_dir にも履歴コピーする.
             if weights_out.resolve() != run_weights_path.resolve():
