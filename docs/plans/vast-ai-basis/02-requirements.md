@@ -12,7 +12,7 @@
 
 - As a **developer**, I want to run `dev/vast-train <commit-sha>` from my laptop and have the GPU training start on Vast.ai automatically, so that I don't need to maintain a CI workflow or local GPU.
 - As a **developer**, I want the CLI to show me the cheapest 10 GPU offers and let me pick one, so that I can balance cost and availability per run.
-- As a **developer**, I want each run's outputs (best.pt + metrics.json + run.json) saved to a unique directory under `artifacts/models/imitation/case1/runs/<run_id>/`, so that experiments don't overwrite each other.
+- As a **developer**, I want each run's outputs (best.pt + metrics.json + run.json) saved to a unique directory under `data/output/models/imitation/case1/runs/<run_id>/`, so that experiments don't overwrite each other.
 - As a **developer**, I want to run `dev/vast-pull <run_id>` locally to get the artifacts via DVC, so that I can evaluate without re-pulling the whole DVC tree.
 - As a **developer**, I want `dev/promote-weights <run_id>` to copy `runs/<run_id>/best.pt` to `pipeline/imitation/case1/policy/weights.pt` and `dvc commit` it, so that adoption is one explicit step that cannot happen by accident.
 - As a **researcher**, I want `run.json` to record git SHA / branch / params hash / seed / Vast instance id / GPU type / training command / training metrics / local eval results / status, so that I can reproduce or audit any past run.
@@ -46,9 +46,9 @@
 5. F2.5: `uv sync --locked --all-extras --dev --directory backend` で依存解決（lockfile based）。
 6. F2.6: `uv run --directory backend dvc remote modify --local s3 profile default` で AWS profile を default に切替（env 経由 credentials を使うため）。
 7. F2.7: `uv run --directory backend dvc pull` で deps を取得。
-8. F2.8: `mkdir -p artifacts/models/imitation/case1/runs/<RUN_ID>` で run dir 作成。
-9. F2.9: `ORBIT_WARS_RUN_DIR=artifacts/models/imitation/case1/runs/<RUN_ID> uv run --directory backend dvc repro <STAGE>` で学習を実行。`train.py` 側はこの env を読んで `weights_out` を override（後述 F4）。
-10. F2.10: 学習完了後、`uv run --directory backend dvc push artifacts/models/imitation/case1/runs/<RUN_ID>` で S3 にプッシュ。
+8. F2.8: `mkdir -p data/output/models/imitation/case1/runs/<RUN_ID>` で run dir 作成。
+9. F2.9: `ORBIT_WARS_RUN_DIR=data/output/models/imitation/case1/runs/<RUN_ID> uv run --directory backend dvc repro <STAGE>` で学習を実行。`train.py` 側はこの env を読んで `weights_out` を override（後述 F4）。
+10. F2.10: 学習完了後、`uv run --directory backend dvc push data/output/models/imitation/case1/runs/<RUN_ID>` で S3 にプッシュ。
 11. F2.11: 最後に `vastai destroy instance "$VAST_INSTANCE_ID"` で自分自身を破壊（`VAST_API_KEY` は env 経由）。
 12. F2.12: 各ステップの開始/終了を `echo "[onstart] step=... status=ok|fail"` で stdout に出力。
 
@@ -76,12 +76,12 @@
 
 ### F5. CLI: `dev/vast-pull <run_id>`
 
-1. F5.1: `artifacts/models/imitation/case1/runs/<run_id>/` を `dvc pull <path>` でローカルに取得。
+1. F5.1: `data/output/models/imitation/case1/runs/<run_id>/` を `dvc pull <path>` でローカルに取得。
 2. F5.2: pull 後、`run.json` を表示（cat）し、`status` が `pushed` 以外なら警告。
 
 ### F6. CLI: `dev/promote-weights <run_id> [--message <text>]`
 
-1. F6.1: `artifacts/models/imitation/case1/runs/<run_id>/best.pt` の存在確認。
+1. F6.1: `data/output/models/imitation/case1/runs/<run_id>/best.pt` の存在確認。
 2. F6.2: `cp <run_dir>/best.pt backend/pipeline/imitation/case1/policy/weights.pt`。
 3. F6.3: `uv run --directory backend dvc commit pipeline/imitation/case1/policy/weights.pt`（既に DVC 管理されているので `add` ではなく `commit`）。
 4. F6.4: `git status` を表示し、ユーザーに git commit を促す（自動 commit は行わない、メッセージは人間が確認）。
@@ -89,7 +89,7 @@
 
 ### F7. Cost Aggregator: `dev/vast-cost-report [--month <YYYY-MM>]`
 
-1. F7.1: `artifacts/models/imitation/case1/runs/*/run.json` を全走査。
+1. F7.1: `data/output/models/imitation/case1/runs/*/run.json` を全走査。
 2. F7.2: 月単位（デフォルト当月）で `gpu_name`, `vast_offer_snapshot.dph_total`, `train_metrics.runtime_seconds` を集計。
 3. F7.3: 推定コスト合計 / run 数 / 採用 run 数 を表で出力し、`docs/experiment/vast_cost_report_<YYYY-MM>.md` に保存。
 
@@ -142,7 +142,7 @@
 | Term | Description |
 |------|-------------|
 | `run_id` | `<YYYYMMDD-HHMMSS>__<branch_slug>__<sha7>__seed<N>` 形式の 1 学習実行を一意特定する文字列 |
-| `run dir` | `artifacts/models/imitation/case1/runs/<run_id>/`。1 run の全成果物を含むディレクトリ |
+| `run dir` | `data/output/models/imitation/case1/runs/<run_id>/`。1 run の全成果物を含むディレクトリ |
 | canonical weights | `backend/pipeline/imitation/case1/policy/weights.pt`。Kaggle submit 時の正本 |
 | candidate weights | `<run_dir>/best.pt`。採用前の学習成果物 |
 | onstart | Vast.ai インスタンス起動時に自動実行されるシェルスクリプト |

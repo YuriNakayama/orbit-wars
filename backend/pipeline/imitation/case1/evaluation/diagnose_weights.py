@@ -7,7 +7,7 @@ diagnostic: pulls in case1's DeepSetsPolicy + CaseThreeDataset directly.
 Usage:
     uv run python -m pipeline.imitation.case1.evaluation.diagnose_weights \\
         --weights pipeline/imitation/case1/policy/weights.pt \\
-        --report docs/experiment/imitation_case1_val_metrics.json
+        --report data/output/experiment/imitation_case1_val_metrics.json
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pipeline.imitation.case1.training.dataset import (
 
 DEFAULT_CONFIG = Path("pipeline/imitation/case1/configs/il_baseline.yaml")
 DEFAULT_WEIGHTS = Path("pipeline/imitation/case1/policy/weights.pt")
-DEFAULT_REPORT = Path("docs/experiment/imitation_case1_val_metrics.json")
+DEFAULT_REPORT = Path("data/output/experiment/imitation_case1_val_metrics.json")
 SHIPS_BUCKETS = 4
 
 

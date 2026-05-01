@@ -71,6 +71,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kaggle-submission-log
-          path: data/submissions/${{ inputs.case }}/
+          path: data/output/submit/${{ inputs.case }}/
           if-no-files-found: ignore
           retention-days: 30

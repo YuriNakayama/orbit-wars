@@ -39,6 +39,28 @@ PHASE2 = "phase2"
 
 logger = logging.getLogger(__name__)
 
+
+def _repo_root() -> Path:
+    """`backend/` の親ディレクトリ (リポジトリ root) を返す。"""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "backend").is_dir() and (parent / ".git").exists():
+            return parent
+    raise RuntimeError(f"repo root not found from {here}")
+
+
+def _abspath(rel: str | Path) -> Path:
+    """相対パスを repo root 起点の絶対パスに解決する.
+
+    Vast.ai 上では `uv run --directory backend ...` で CWD が backend/ になるため、
+    config の `data/...` 相対パスをそのまま `Path(...)` で開くと
+    `backend/data/...` を見に行ってしまい FileNotFoundError になる。常に
+    repo root 起点で解決して CWD 非依存にする (case1 preprocess と同パターン)。
+    """
+    p = Path(rel)
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
 UNUSED_LABEL = -1
 SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100%
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
@@ -346,9 +368,9 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     rating_quantile = float(data_cfg.get("rating_quantile", 0.75))
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
-    out_train = Path(data_cfg["out_train"])
-    out_val = Path(data_cfg["out_val"])
-    index_path = Path(data_cfg["kaggle_index_root"])
+    out_train = _abspath(data_cfg["out_train"])
+    out_val = _abspath(data_cfg["out_val"])
+    index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
     featurizer_name = str(data_cfg.get("featurizer", "baseline"))
     if featurizer_name not in FEATURIZERS:

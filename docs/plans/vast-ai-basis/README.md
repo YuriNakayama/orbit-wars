@@ -39,7 +39,7 @@ dev/vast-pull <run_id>
 #   → run.json の中身が pretty-printed で表示される
 
 # E) ローカル評価 (例: case1 evaluator を run dir の weights で実行)
-ORBIT_WARS_WEIGHTS=artifacts/models/imitation/case1/runs/<run_id>/best.pt \
+ORBIT_WARS_WEIGHTS=data/output/models/imitation/case1/runs/<run_id>/best.pt \
   uv run --directory backend python -m pipeline.imitation.case1.evaluation.eval_vs_baseline \
   --episodes 300 --seed 0
 # 結果を JSON にして dev/vast-promote に渡せば run.json に local_eval_results が記録される

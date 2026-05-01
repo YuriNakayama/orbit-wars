@@ -6,6 +6,7 @@ placeholder 置換時に shell injection を防ぐため、値は厳格な regex
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,15 +16,32 @@ from typing import Any
 # 英数 + . _ - / : の組合せのみ ( `:` は URL の scheme separator、`/` は path separator)
 # branch slug 内に `/` は出ないが repo URL のために : と / は許容する。
 _VALID_VALUE = re.compile(r"^[A-Za-z0-9._\-/:]+$")
+# CONFIG_ARG は空文字 (case1 で省略) または `--config <path>` の 2 トークンのみ許可。
+# 空白を含むため _VALID_VALUE とは別の regex でバリデーションする。
+_VALID_CONFIG_ARG = re.compile(r"^(|--config [A-Za-z0-9._\-/]+)$")
+# PREPROCESS_CMD は空文字または `module.path[ --config <path>]` 形式のみ許可。
+_VALID_PREPROCESS_CMD = re.compile(
+    r"^(|[A-Za-z0-9._\-/]+( --config [A-Za-z0-9._\-/]+)?)$"
+)
 _TEMPLATE_PLACEHOLDERS = (
     "<COMMIT_SHA>",
     "<RUN_ID>",
     "<STAGE>",
     "<BRANCH>",
     "<REPO_URL>",
+    "<CASE>",
+    "<TRAIN_MODULE>",
+    "<CONFIG_ARG>",
+    "<PREPROCESS_CMD>",
 )
 
-DEFAULT_IMAGE = "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime"
+# ECR の依存焼込み image を使う場合は env で上書きする (terraform apply 後の URL).
+# 例: export ORBIT_WARS_RUNTIME_IMAGE=<acct>.dkr.ecr.ap-northeast-1.amazonaws.com/orbit-wars-runtime:latest
+# 未設定時は upstream の pytorch image にフォールバック (毎回 uv sync 必要).
+DEFAULT_IMAGE = os.environ.get(
+    "ORBIT_WARS_RUNTIME_IMAGE",
+    "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime",
+)
 DEFAULT_DISK_GB = 40
 
 
@@ -41,6 +59,24 @@ def _validate(name: str, value: str) -> None:
         )
 
 
+def _validate_config_arg(value: str) -> None:
+    """空文字 or `--config <safe_path>` のみ許容。"""
+    if not _VALID_CONFIG_ARG.match(value):
+        raise TemplateError(
+            f"invalid config_arg={value!r}; expected '' or '--config <path>' "
+            "with safe characters only"
+        )
+
+
+def _validate_preprocess_cmd(value: str) -> None:
+    """空文字 or `module[ --config <path>]` のみ許容。"""
+    if not _VALID_PREPROCESS_CMD.match(value):
+        raise TemplateError(
+            f"invalid preprocess_cmd={value!r}; expected '' or "
+            "'module.path [--config <path>]' with safe characters only"
+        )
+
+
 def render_onstart(
     template_path: Path,
     *,
@@ -49,16 +85,25 @@ def render_onstart(
     stage: str,
     branch: str,
     repo_url: str,
+    case: str = "case1",
+    train_module: str = "pipeline.imitation.case1.training.train",
+    config_arg: str = "",
+    preprocess_cmd: str = "",
 ) -> str:
-    """テンプレを読み 5 placeholder を置換した script 文字列を返す。
+    """テンプレを読み placeholder を置換した script 文字列を返す。
 
     値は事前に regex でバリデーション。違反したら TemplateError。
+    `case` / `train_module` / `config_arg` / `preprocess_cmd` は新規追加。
     """
     _validate("commit_sha", commit_sha)
     _validate("run_id", run_id)
     _validate("stage", stage)
     _validate("branch", branch)
     _validate("repo_url", repo_url)
+    _validate("case", case)
+    _validate("train_module", train_module)
+    _validate_config_arg(config_arg)
+    _validate_preprocess_cmd(preprocess_cmd)
     text = template_path.read_text(encoding="utf-8")
     substitutions = {
         "<COMMIT_SHA>": commit_sha,
@@ -66,6 +111,10 @@ def render_onstart(
         "<STAGE>": stage,
         "<BRANCH>": branch,
         "<REPO_URL>": repo_url,
+        "<CASE>": case,
+        "<TRAIN_MODULE>": train_module,
+        "<CONFIG_ARG>": config_arg,
+        "<PREPROCESS_CMD>": preprocess_cmd,
     }
     for placeholder, value in substitutions.items():
         text = text.replace(placeholder, value)
@@ -100,22 +149,26 @@ def create_instance(
     disk_gb: int = DEFAULT_DISK_GB,
     label: str,
     runtype: str = "ssh_direc ssh_proxy",
+    volume_info: Mapping[str, Any] | None = None,
 ) -> int:
     """`VastAI().create_instance(...)` を呼び、生成された instance id を返す。
 
     SSH + direct connection 用の `runtype="ssh_direc ssh_proxy"` をデフォルトとする
     (vastai CLI の `--ssh --direct` と等価)。SDK の応答 dict から `new_contract`
     または `id` を抽出する。
+    `volume_info` を渡すと既存 volume の link or 新規作成で /persist mount される.
     """
-    response = sdk.create_instance(
-        offer_id,
-        image=image,
-        disk=float(disk_gb),
-        env=dict(env),
-        label=label,
-        onstart_cmd=onstart_cmd,
-        runtype=runtype,
-    )
+    kwargs: dict[str, Any] = {
+        "image": image,
+        "disk": float(disk_gb),
+        "env": dict(env),
+        "label": label,
+        "onstart_cmd": onstart_cmd,
+        "runtype": runtype,
+    }
+    if volume_info is not None:
+        kwargs["volume_info"] = dict(volume_info)
+    response = sdk.create_instance(offer_id, **kwargs)
     if not isinstance(response, Mapping):
         raise RuntimeError(
             f"unexpected create_instance response: {type(response).__name__}"

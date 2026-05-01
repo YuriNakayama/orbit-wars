@@ -34,7 +34,7 @@
 | 9 | `phase_mid` | 100 ≤ step < 300 |
 | 10 | `phase_late` | step ≥ 300 |
 
-これらは case1 の評価診断 (`docs/competition/20260419_imitation_case1_diagnosis.md`)
+これらは case1 の評価診断 (`docs/experiment/imitation/20260419_case1_diagnosis/result.md`)
 で「target/ships head の精度が頭打ち」だった原因として、序盤・中盤・終盤の
 形勢、空間的脅威、生産密度といった**構造化された戦略文脈**が不足している点を
 補うためのもの。

@@ -21,7 +21,7 @@ data:
   modes: ["1v1"]
   max_episodes: null
   # Phase 1 final: drop group D (threat_pressure_long, col 32) — single ablation
-  # winner. See docs/plans/case2_feature_engineering.md for the comparison.
+  # winner. See docs/experiment/imitation/20260426_case2_feature_engineering/result.md for the comparison.
   ablation:
     planet_cols: [32]
     global_cols: []

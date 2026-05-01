@@ -110,7 +110,7 @@
 | `vast_offer_snapshot` | object | `gpu_name`, `dph_total`, `geolocation` |
 | `gpu_name` | string | `RTX_3090` 等 |
 | `command` | string | 実行した `dvc repro` コマンド全文 |
-| `weights_path` | string | `artifacts/models/imitation/case1/runs/<run_id>/best.pt` |
+| `weights_path` | string | `data/output/models/imitation/case1/runs/<run_id>/best.pt` |
 | `train_metrics` | object | `epochs_run`, `best_val_loss`, `best_epoch` 等 |
 | `local_eval_results` | object | `wins/losses/draws/win_rate` (ローカル評価後に追記) |
 | `status` | enum | `running` / `pushed` / `evaluated` / `adopted` / `failed` |
@@ -140,7 +140,7 @@
 3. **Self-destroy が標準**: onstart の最終ステップで `vastai destroy instance "$VAST_INSTANCE_ID"` を呼ぶ。失敗パスでも必ず destroy するため `trap` を仕込む。
 4. **環境変数は二段渡し**: `--env '-e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... -e AWS_DEFAULT_REGION=ap-northeast-1 -e VAST_API_KEY=... -e ORBIT_WARS_RUN_ID=... -e ORBIT_WARS_GIT_SHA=...'` で渡し、onstart 冒頭で `env >> /etc/environment` を実行（SSH デバッグ時に見える）。
 5. **GPU 選定**: RTX 3090 1 枚（on-demand、$0.13/h〜、reliability ≥ 0.99、cuda_max_good ≥ 12）が DeepSets MLP には十分。`gpu_name={"in": ["RTX_3090", "RTX_4090"]}` で柔軟性を持たせるのが安全。
-6. **Run metadata は run.json（git untracked）+ DVC 管理**: 1 run = 1 ディレクトリ `artifacts/models/imitation/case1/runs/<run_id>/{best.pt, metrics.json, run.json}`。**ディレクトリ全体を DVC stage out として管理** すれば `dvc push` で S3 同期。
+6. **Run metadata は run.json（git untracked）+ DVC 管理**: 1 run = 1 ディレクトリ `data/output/models/imitation/case1/runs/<run_id>/{best.pt, metrics.json, run.json}`。**ディレクトリ全体を DVC stage out として管理** すれば `dvc push` で S3 同期。
 7. **採用フロー**: `dev/promote-weights <run_id>` の bash thin wrapper で run dir → `policy/weights.pt` を `cp` し、`dvc add policy/weights.pt`（既に DVC 管理なので `dvc commit`）→ git commit + push → main merge。
 8. **dvc.yaml の改修方針 (要 Step 5 で議論)**:
    - 案 A: `train_imitation_case1` の outs を runs ディレクトリ全体に変更（既存 `weights.pt` 経路を破壊）
@@ -157,7 +157,7 @@
 
 ### Recommended approach
 
-`dev/vast-train <commit-sha>` (bash thin wrapper) → `backend/src/vast/cli.py` (typer + vastai SDK) → search offers → create instance with `--onstart backend/src/vast/onstart.sh` (sed 置換 tmp) and AWS/VAST_API_KEY env → onstart 内で repo clone + uv sync + dvc pull + 学習 (run dir に書き出し) + dvc push + self-destroy → ローカル `dev/vast-pull <run_id>` で `dvc pull artifacts/.../runs/<run_id>/` → 評価スクリプトで `replay_one_match` 等を回し `docs/experiment/<run_id>.md` に記録 → 採用なら `dev/promote-weights <run_id>` で `policy/weights.pt` 上書き + git commit + PR。
+`dev/vast-train <commit-sha>` (bash thin wrapper) → `backend/src/vast/cli.py` (typer + vastai SDK) → search offers → create instance with `--onstart backend/src/vast/onstart.sh` (sed 置換 tmp) and AWS/VAST_API_KEY env → onstart 内で repo clone + uv sync + dvc pull + 学習 (run dir に書き出し) + dvc push + self-destroy → ローカル `dev/vast-pull <run_id>` で `dvc pull data/output/.../runs/<run_id>/` → 評価スクリプトで `replay_one_match` 等を回し `docs/experiment/<run_id>.md` に記録 → 採用なら `dev/promote-weights <run_id>` で `policy/weights.pt` 上書き + git commit + PR。
 
 ## Sources
 

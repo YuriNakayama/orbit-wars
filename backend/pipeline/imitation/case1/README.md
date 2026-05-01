@@ -92,7 +92,7 @@ uv run pytest tests/pipeline/imitation/case1 -v   # determinism 含む
 ## 評価結果 (2026-04-19)
 
 旧 baseline (10 epoch) は `il_v1` vs `baseline_v1` で win_rate 0.00。
-診断書 [`docs/competition/20260419_imitation_case1_diagnosis.md`](../../../docs/competition/20260419_imitation_case1_diagnosis.md)
+診断書 [`docs/experiment/imitation/20260419_case1_diagnosis/result.md`](../../../docs/experiment/imitation/20260419_case1_diagnosis/result.md)
 の Bug 1/3/4 + 追加バグを以下のとおり修正済み:
 
 - preprocess: 1 フレーム = 1 row、`from_multihot` + `target_per_src` + `ships_per_src`

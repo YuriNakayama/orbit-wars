@@ -14,3 +14,4 @@ variable "resource_prefix" {
   type        = string
   default     = "orbit-wars-dev"
 }
+

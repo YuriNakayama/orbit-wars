@@ -20,7 +20,7 @@ import typer
 
 from dataset.selfplay.runner import RunSpec, run_episodes
 
-DEFAULT_OUT_DIR = Path("docs/experiment/imitation_case1_replays")
+DEFAULT_OUT_DIR = Path("data/output/experiment/imitation_case1_replays")
 
 ReplayLabel = Literal["win", "loss"]
 

@@ -61,14 +61,6 @@ __pycache__/
 .mypy_cache
 backend/tests/coverage/
 
-## artifacts (Vast.ai run outputs; DVC-managed, see artifacts/README.md)
-/artifacts/**
-!/artifacts/**/
-!/artifacts/**/*.dvc
-!/artifacts/**/.gitignore
-!/artifacts/**/*.md
-!/artifacts/**/.gitkeep
-
 # infra
 
 ## terraform
@@ -89,11 +81,15 @@ tfplan.out
 *.db
 
 # data — actual contents are DVC-managed; only stubs / docs land in git.
+# Includes data/output/ (Vast.ai run outputs; see data/output/README.md).
+# `/data` (worktree symlink to main repo's data/) is also untracked.
+/data
 /data/**
 !/data/**/
 !/data/**/*.dvc
 !/data/**/.gitignore
 !/data/**/*.md
+!/data/**/.gitkeep
 # .dvc ディレクトリの自動生成 .gitignore も拾えるようにする
 !/data/.gitignore
 
@@ -114,3 +110,6 @@ kaggle.json
 
 # claude code scheduled tasks (local runtime state)
 .claude/scheduled_tasks.lock
+
+# skill-creator workspaces (per-skill eval outputs / benchmarks; reproducible)
+.claude/skills/*-workspace/

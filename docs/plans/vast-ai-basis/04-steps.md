@@ -4,27 +4,27 @@
 
 ---
 
-## Step 1: artifacts/ ディレクトリと .gitignore セットアップ
+## Step 1: data/output/ ディレクトリと .gitignore セットアップ
 
 **Target**: cross-cutting
 **Dependencies**: None
 
 ### Overview
-新規 run dir 群を git ignore かつ DVC で個別管理できるように、`artifacts/` を gitignore に追加し、その下のディレクトリ構造の README を置く。
+新規 run dir 群を git ignore かつ DVC で個別管理できるように、`data/output/` を gitignore に追加し、その下のディレクトリ構造の README を置く。
 
 ### Work Items
-- [ ] `.gitignore` に `artifacts/` を追加
-- [ ] `artifacts/models/imitation/case1/runs/.gitkeep` で空 dir を git 管理（`.dvc` ファイルだけは後で commit する）
-- [ ] `artifacts/README.md` で「ここは vast ai 学習成果物の置き場、git untracked、DVC 管理」とドキュメント化
+- [ ] `.gitignore` に `data/output/` を追加
+- [ ] `data/output/models/imitation/case1/runs/.gitkeep` で空 dir を git 管理（`.dvc` ファイルだけは後で commit する）
+- [ ] `data/output/README.md` で「ここは vast ai 学習成果物の置き場、git untracked、DVC 管理」とドキュメント化
 
 ### Target Files
 - `.gitignore`
-- `artifacts/README.md`
-- `artifacts/models/imitation/case1/runs/.gitkeep`
+- `data/output/README.md`
+- `data/output/models/imitation/case1/runs/.gitkeep`
 
 ### Acceptance Criteria
-- `git status` で `artifacts/models/imitation/case1/runs/<some_id>/` に書き込んでも tracked にならない
-- `artifacts/README.md` に運用方針が書かれている
+- `git status` で `data/output/models/imitation/case1/runs/<some_id>/` に書き込んでも tracked にならない
+- `data/output/README.md` に運用方針が書かれている
 
 ---
 
@@ -269,7 +269,7 @@ onstart テンプレートの sed 置換と `create_instance` ラッパ。
 DVC pull で run dir をローカルに取得。
 
 ### Work Items
-- [ ] `vast pull <run_id>`: `subprocess.run(["uv", "run", "--directory", "backend", "dvc", "pull", f"artifacts/models/imitation/case1/runs/{run_id}"])` を実行
+- [ ] `vast pull <run_id>`: `subprocess.run(["uv", "run", "--directory", "backend", "dvc", "pull", f"data/output/models/imitation/case1/runs/{run_id}"])` を実行
 - [ ] pull 後、`run.json` を rich で pretty-print
 - [ ] `status` が `pushed` 以外（`failed`/`running` 等）なら警告ログ
 - [ ] `dev/vast-pull` thin wrapper
@@ -375,7 +375,7 @@ candidate weights を canonical に昇格。
 ## Cross-Step Dependencies
 
 ```
-Step 1 (artifacts/)
+Step 1 (data/output/)
   └─> Step 2 (train.py GPU/run-dir)  ────┐
                                          ▼
 Step 3 (run_meta.py) ──────────────────> Step 4 (train.py + run_meta integration)

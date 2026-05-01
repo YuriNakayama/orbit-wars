@@ -41,7 +41,7 @@ train:
     use_target_class_weights: true
     target_class_weight_beta: 0.9999
     # iter8 ships ordinal smoothing was rejected (regressed bucket 2 F1).
-    # Kept disabled by default. See docs/experiment/imitation_case1_iter8_summary.json.
+    # Kept disabled by default. See data/output/experiment/imitation_case1_iter8_summary.json.
     use_ships_class_weights: false
     ships_class_weight_beta: 0.9999
     ships_ordinal_smoothing: 0.0

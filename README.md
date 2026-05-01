@@ -110,7 +110,7 @@ dev/format           # Code formatting (ruff)
 dev/lint             # Static analysis (ruff + mypy)
 dev/test-backend     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
-dev/dvc-setup        # Configure local DVC (cache dir + AWS profile)
+dev/dvc              # DVC operations (setup / pull / repro / push / dag / add)
 ```
 
 ## Data / Model Management (DVC)
@@ -123,19 +123,19 @@ Git はコードと `dvc.yaml` / `dvc.lock` / `params.yaml` を追跡し、実�
 ```bash
 # 1) AWS CLI に orbit-wars プロファイルを用意しておく (infra/environment/dev で作成した IAM user の key)
 # 2) リポジトリ側のローカル設定 (cache 共有 + profile)
-dev/dvc-setup
+dev/dvc setup
 
 # 3) データ取得 (S3 remote から)
-uv run --directory backend dvc pull
+dev/dvc pull
 ```
 
 ### Pipeline 再実行 (`dvc repro`)
 
 ```bash
-uv run --directory backend dvc repro                            # 全 stage 依存グラフで差分再実行
-uv run --directory backend dvc repro preprocess_imitation_case1 # 単 stage
-uv run --directory backend dvc dag                              # DAG 描画
-uv run --directory backend dvc status                           # 差分一覧
+dev/dvc repro                            # 全 stage 依存グラフで差分再実行
+dev/dvc repro preprocess_imitation_case1 # 単 stage
+dev/dvc dag                              # DAG 描画
+dev/dvc status                           # 差分一覧
 ```
 
 変更した成果物を S3 に共有:

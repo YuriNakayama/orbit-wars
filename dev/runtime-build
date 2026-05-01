@@ -1,0 +1,9 @@
+#!/bin/bash
+# Vast.ai runtime image を ECR に build & push する dev wrapper.
+#
+# Usage:
+#   dev/runtime-build               # tag=latest
+#   dev/runtime-build --tag v2      # 任意 tag
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec infra/runtime/build_and_push.sh "$@"

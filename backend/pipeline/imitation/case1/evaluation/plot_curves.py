@@ -6,7 +6,7 @@ case1-specific diagnostic: plot title and head names assume the case1 schema
 
 Usage:
     uv run python -m pipeline.imitation.case1.evaluation.plot_curves \\
-        --log /tmp/train_iter6.log --out docs/experiment/curves.png
+        --log /tmp/train_iter6.log --out data/output/experiment/curves.png
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 import typer
 
 DEFAULT_LOG = Path("/tmp/train_iter6.log")
-DEFAULT_OUT = Path("docs/experiment/imitation_case1_learning_curves.png")
+DEFAULT_OUT = Path("data/output/experiment/imitation_case1_learning_curves.png")
 DEFAULT_LABEL = "iter6 (focal α=0.25, canonical)"
 COLOR = "#1f77b4"
 

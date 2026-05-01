@@ -1,4 +1,4 @@
-"""提出履歴を data/submissions/<case>/submissions.jsonl に追記する。"""
+"""提出履歴を data/output/submit/<case>/submissions.jsonl に追記する。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def record(
     """submissions.jsonl に 1 行追記する。
 
     Args:
-        base_dir: `data/submissions` のルート。
+        base_dir: `data/output/submit` のルート。
         case: case 名。
         message: 提出メッセージ。
         archive: 生成ファイル（ローカル）。

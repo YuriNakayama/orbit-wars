@@ -44,7 +44,7 @@
 │    ▼                                  │            │
 │  dev/vast-pull <run_id>               │            │
 │    │ uv run -m vast pull ...          │            │
-│    │ -> dvc pull artifacts/.../runs/<run_id>/      │
+│    │ -> dvc pull data/output/.../runs/<run_id>/      │
 │    │ <-- run.json + best.pt + metrics.json         │
 │    ▼                                               │
 │  Local evaluation:                                 │
@@ -91,7 +91,7 @@ dev/
   vast-promote                       # NEW (renamed from promote-weights for consistency)
   vast-cost-report                   # NEW
 
-artifacts/                           # NEW directory (gitignored, DVC managed via stage outs or `dvc add`)
+data/output/                           # NEW directory (gitignored, DVC managed via stage outs or `dvc add`)
   models/
     imitation/
       case1/
@@ -139,9 +139,9 @@ def cost_report(month: str | None = None) -> None: ...
   7. `instance.build_env_string(aws_creds, vast_api_key, run_id, ...)`
   8. `instance.create_instance(...)` を呼び、結果を表示
   9. ユーザーへ `vastai logs <id>` でモニタリング案内
-- `pull` の流れ: `subprocess.run(["uv", "run", "--directory", "backend", "dvc", "pull", f"artifacts/.../runs/{run_id}"])` → `run.json` 表示
+- `pull` の流れ: `subprocess.run(["uv", "run", "--directory", "backend", "dvc", "pull", f"data/output/.../runs/{run_id}"])` → `run.json` 表示
 - `promote` の流れ: F6 の通り `cp` + `dvc commit` + git status 表示（自動 commit はしない）
-- `cost-report`: `glob artifacts/.../runs/*/run.json` → 月単位集計 → markdown 出力
+- `cost-report`: `glob data/output/.../runs/*/run.json` → 月単位集計 → markdown 出力
 
 ### `backend/src/vast/offers.py`
 
@@ -265,10 +265,10 @@ echo "[onstart] step=dvc_pull"
 uv run --directory backend dvc pull
 
 echo "[onstart] step=mkdir_run"
-mkdir -p artifacts/models/imitation/case1/runs/<RUN_ID>
+mkdir -p data/output/models/imitation/case1/runs/<RUN_ID>
 
 echo "[onstart] step=dvc_repro"
-ORBIT_WARS_RUN_DIR=artifacts/models/imitation/case1/runs/<RUN_ID> \
+ORBIT_WARS_RUN_DIR=data/output/models/imitation/case1/runs/<RUN_ID> \
   ORBIT_WARS_RUN_ID=<RUN_ID> \
   ORBIT_WARS_GIT_SHA=<COMMIT_SHA> \
   ORBIT_WARS_GIT_BRANCH=<BRANCH> \
@@ -276,7 +276,7 @@ ORBIT_WARS_RUN_DIR=artifacts/models/imitation/case1/runs/<RUN_ID> \
   uv run --directory backend dvc repro <STAGE>
 
 echo "[onstart] step=dvc_push_runs"
-uv run --directory backend dvc push artifacts/models/imitation/case1/runs/<RUN_ID>
+uv run --directory backend dvc push data/output/models/imitation/case1/runs/<RUN_ID>
 
 echo "[onstart] step=done"
 ```
@@ -390,7 +390,7 @@ if write_run_metadata:
     "cuda_max_good": 12.4
   },
   "command": "uv run --directory backend dvc repro train_imitation_case1",
-  "weights_path": "artifacts/models/imitation/case1/runs/<run_id>/best.pt",
+  "weights_path": "data/output/models/imitation/case1/runs/<run_id>/best.pt",
   "train_metrics": {
     "epochs_run": 15,
     "best_epoch": 9,
@@ -409,8 +409,8 @@ if write_run_metadata:
 
 ### DVC Tracking
 
-- `artifacts/` ディレクトリは **`.gitignore` に追加**。
-- run dir 全体は **`dvc add artifacts/models/imitation/case1/runs/<run_id>/`** で 1 個の `.dvc` ファイル化（onstart 末尾で実行）。または、shared `runs/` 全体を 1 つの `.dvc` で管理する案もあるが、複数 run を独立に push/pull するため **run dir 単位で `.dvc`** を推奨。
+- `data/output/` ディレクトリは **`.gitignore` に追加**。
+- run dir 全体は **`dvc add data/output/models/imitation/case1/runs/<run_id>/`** で 1 個の `.dvc` ファイル化（onstart 末尾で実行）。または、shared `runs/` 全体を 1 つの `.dvc` で管理する案もあるが、複数 run を独立に push/pull するため **run dir 単位で `.dvc`** を推奨。
 - DVC remote (S3) には自動同期。`dvc.lock` 内で `train_imitation_case1` stage の outs 自体は変えない（依然 `policy/weights.pt`）ため、stage repro の hash 影響なし。
 
 ### `params.yaml`
@@ -458,7 +458,7 @@ if write_run_metadata:
 | `dev/vast-pull` | create | bash thin wrapper |
 | `dev/vast-promote` | create | bash thin wrapper |
 | `dev/vast-cost-report` | create | bash thin wrapper |
-| `.gitignore` | edit | `artifacts/` 追加 |
+| `.gitignore` | edit | `data/output/` 追加 |
 | `params.yaml` | unchanged | – |
 | `dvc.yaml` | unchanged | – |
 | `infra/` | unchanged | – |

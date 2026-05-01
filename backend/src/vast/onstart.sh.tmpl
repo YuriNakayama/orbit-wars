@@ -1,7 +1,10 @@
 #!/bin/bash
 # Vast.ai onstart for Orbit Wars GPU training.
 # Placeholders are substituted by vast.instance.render_onstart before upload:
-#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>,
+#   <CASE> (e.g. case1 / case3), <TRAIN_MODULE> (python -m target),
+#   <CONFIG_ARG> ('' or '--config <path>'),
+#   <PREPROCESS_MODULE> ('' or python -m target for preprocess)
 set -euo pipefail
 exec > >(tee -a /var/log/onstart.log) 2>&1
 
@@ -43,6 +46,21 @@ trap cleanup_destroy EXIT
 echo "[onstart] step=env_persist"
 env >> /etc/environment
 
+# Persistent volume が /persist にマウントされている場合、uv cache / DVC cache /
+# 中間 mart データを symlink で永続化する。volume が無いとき (=未マウント) は
+# 通常通りローカルディスクに置く。冪等な mkdir/ln を使う。
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_setup mount=/persist"
+  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/uv" 2>/dev/null || true
+  ln -sfn /persist/uv-cache "$HOME/.cache/uv"
+  export UV_CACHE_DIR="$HOME/.cache/uv"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache"
+else
+  echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
+fi
+
 echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
 mkdir -p /workspace
 cd /workspace
@@ -57,6 +75,18 @@ cd orbit-wars
 git fetch origin "<COMMIT_SHA>" || true
 git checkout "<COMMIT_SHA>"
 
+# Repo 内の .dvc/cache と data/mart を /persist に symlink. 既存のクリーンな
+# ディレクトリを退避してから ln -sfn で張り替え (冪等).
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_link_repo"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn /persist/dvc-cache .dvc/cache
+  mkdir -p data
+  rm -rf data/mart 2>/dev/null || true
+  ln -sfn /persist/data-mart data/mart
+fi
+
 echo "[onstart] step=install_uv"
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -64,9 +94,17 @@ fi
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 echo "[onstart] step=uv_sync"
+# ECR の焼込み image (/opt/orbit-wars/backend/.venv) があるなら symlink で
+# venv を流用し、新規 wheel ダウンロードを回避する.
+PREBUILT_VENV="/opt/orbit-wars/backend/.venv"
+if [ -d "$PREBUILT_VENV" ] && [ ! -e backend/.venv ]; then
+  echo "[onstart] uv_sync: reusing prebuilt venv from $PREBUILT_VENV"
+  ln -sfn "$PREBUILT_VENV" backend/.venv
+fi
 # 大型 wheel (nvidia-* 数百 MB) で connection reset が起きやすいため retry。
+# image 焼込み済の場合は実体 download なしで lockfile だけ照合される (~30秒).
 for attempt in 1 2 3; do
-  if uv sync --locked --all-extras --dev --directory backend; then
+  if uv sync --locked --no-dev --directory backend; then
     break
   fi
   echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
@@ -81,33 +119,56 @@ echo "[onstart] step=install_vastai_cli_for_self_destroy"
 uv pip install --project backend vastai >/dev/null 2>&1 || true
 
 echo "[onstart] step=dvc_pull"
+# Image (/opt/orbit-wars/.dvc/cache) に焼き込んだ DVC cache を流用するため、
+# clone 先の .dvc/cache を image cache に symlink する.
+PREBUILT_DVC_CACHE="/opt/orbit-wars/.dvc/cache"
+if [ -d "$PREBUILT_DVC_CACHE" ]; then
+  echo "[onstart] dvc_pull: reusing prebuilt cache from $PREBUILT_DVC_CACHE"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn "$PREBUILT_DVC_CACHE" .dvc/cache
+fi
 # .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
-# boto3 default credential chain がそのまま拾う。.dvc/config.local は git
-# untracked なので Vast 側には存在せず、profile 上書きの必要は無い。
-# DVC コマンドは dvc.yaml がある repo root で実行する必要がある (--directory
-# backend だと backend/dvc.yaml を探しに行って失敗する)。
+# boto3 default credential chain がそのまま拾う。
+# 焼込み済の場合は dvc pull が cache hit でほぼゼロ秒で完了する.
+uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 uv run --project backend dvc pull
 
 echo "[onstart] step=mkdir_run"
-mkdir -p "artifacts/models/imitation/case1/runs/<RUN_ID>"
+mkdir -p "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
-echo "[onstart] step=train_direct stage=<STAGE>"
+# Preprocess: parquet が既に存在すれば skip する.
+# - dvc pull で data/mart/imitation/<CASE>/*.parquet が取得済み (S3 に push 済み)
+#   なら preprocess を 100% skip
+# - 永続化 volume (/persist/data-mart) に cache がある場合も同様
+# - どちらも無いなら preprocess を実行
+if [ -n "<PREPROCESS_CMD>" ]; then
+  if [ -d "data/mart/imitation/<CASE>" ] && \
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (parquet already present)"
+  else
+    echo "[onstart] step=preprocess case=<CASE>"
+    uv run --directory backend python -m <PREPROCESS_CMD>
+  fi
+fi
+
+echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
 # dvc repro は outs (policy/weights.pt) を厳密チェックするため、ORBIT_WARS_RUN_DIR
 # で出力先を run dir に切り替えると DVC が canonical の不在を検出してエラーになる。
 # Vast 側では dvc.yaml を bypass し、train.py を直接実行する (preprocess は cache
 # hit で skip される前提のため repro は使わない)。
-ORBIT_WARS_RUN_DIR="artifacts/models/imitation/case1/runs/<RUN_ID>" \
+ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_VAST_INSTANCE_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_COMMAND="uv run --directory backend python -m pipeline.imitation.case1.training.train" \
-  uv run --directory backend python -m pipeline.imitation.case1.training.train
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 
 echo "[onstart] step=dvc_add_run"
-uv run --project backend dvc add "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project backend dvc push "artifacts/models/imitation/case1/runs/<RUN_ID>"
+uv run --project backend dvc push "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=done run_id=<RUN_ID>"
