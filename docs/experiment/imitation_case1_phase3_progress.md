@@ -160,7 +160,7 @@ target head の weight 調整で小さな改善はあるが、ships focal / mino
 
 ## 精度面での比較 (val metrics, q30 val.parquet) — 2026-04-23
 
-iter9/11/13/14/15 の val metrics を `dev/eval_imitation_metrics.py` で再計算。
+iter9/11/13/14/15 の val metrics を `python -m pipeline.imitation.case1.scripts.eval_imitation_metrics` で再計算。
 
 ### 総合指標
 

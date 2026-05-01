@@ -58,7 +58,9 @@ def _load_model() -> DeepSetsPolicy:
     return model
 
 
-def _collect(model: DeepSetsPolicy, val_ds: CaseThreeDataset) -> tuple[np.ndarray, np.ndarray]:
+def _collect(
+    model: DeepSetsPolicy, val_ds: CaseThreeDataset
+) -> tuple[np.ndarray, np.ndarray]:
     loader = DataLoader(val_ds, batch_size=256, shuffle=False, collate_fn=collate)
     logits_all: list[np.ndarray] = []
     gt_all: list[np.ndarray] = []

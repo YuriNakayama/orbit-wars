@@ -1,8 +1,10 @@
 """Replay a single il_v1 vs baseline_v1 match for a given seed with save_replay=True.
 
-Usage:
-    uv run python dev/replay_one_match.py --seed 19 --label win
-    uv run python dev/replay_one_match.py --seed 0  --label loss
+Usage (run from backend/):
+    uv run python -m pipeline.imitation.case1.scripts.replay_one_match \
+        --seed 19 --label win
+    uv run python -m pipeline.imitation.case1.scripts.replay_one_match \
+        --seed 0  --label loss
 
 Uses the canonical selfplay runner (same code path as eval_vs_baseline) so the
 outcome matches the original 100-game batch. Writes a short trace to stdout.
@@ -16,7 +18,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# backend/pipeline/imitation/case1/scripts/<this>.py
+# parents[4] = backend/, backend/src を import path に追加.
+ROOT = Path(__file__).resolve().parents[4]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -42,8 +46,12 @@ def run_one(seed: int, label: str, data_root: Path) -> None:
     print(f"match_id    : {rec.match_id}")
     print(f"winner idx  : {rec.winner}  (0=il_v1, 1=baseline_v1)  draw={rec.draw}")
     print(f"turns played: {rec.turns}")
-    print(f"scores      : il_v1={rec.agent_scores[0]}  baseline_v1={rec.agent_scores[1]}")
-    print(f"timings p50 : il_v1={rec.agent_timings[0].p50:.3f}s  base={rec.agent_timings[1].p50:.3f}s")
+    print(
+        f"scores      : il_v1={rec.agent_scores[0]}  baseline_v1={rec.agent_scores[1]}"
+    )
+    print(
+        f"timings p50 : il_v1={rec.agent_timings[0].p50:.3f}s  base={rec.agent_timings[1].p50:.3f}s"
+    )
 
     replay_path = Path(rec.replay_path) if rec.replay_path else None
     if not replay_path or not replay_path.exists():
@@ -59,7 +67,9 @@ def run_one(seed: int, label: str, data_root: Path) -> None:
 
     il_act = Counter[int]()
     base_act = Counter[int]()
-    rows: list[tuple[int, int, int, int, int]] = []  # turn, il_ships, base_ships, il_p, base_p
+    rows: list[
+        tuple[int, int, int, int, int]
+    ] = []  # turn, il_ships, base_ships, il_p, base_p
     for t, step in enumerate(steps):
         if t == 0:
             continue
@@ -87,19 +97,33 @@ def run_one(seed: int, label: str, data_root: Path) -> None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"iter9_{label}_seed{seed}.json"
-    out.write_text(json.dumps({
-        "seed": seed, "label": label,
-        "match_id": rec.match_id,
-        "winner_idx": rec.winner, "draw": rec.draw, "turns": rec.turns,
-        "scores": list(rec.agent_scores),
-        "replay_path": str(replay_path),
-        "actions_per_turn_il": dict(il_act),
-        "actions_per_turn_base": dict(base_act),
-        "trace": [
-            {"turn": t, "il_ships": a, "base_ships": b, "il_planets": c, "base_planets": d}
-            for t, a, b, c, d in rows
-        ],
-    }, indent=2))
+    out.write_text(
+        json.dumps(
+            {
+                "seed": seed,
+                "label": label,
+                "match_id": rec.match_id,
+                "winner_idx": rec.winner,
+                "draw": rec.draw,
+                "turns": rec.turns,
+                "scores": list(rec.agent_scores),
+                "replay_path": str(replay_path),
+                "actions_per_turn_il": dict(il_act),
+                "actions_per_turn_base": dict(base_act),
+                "trace": [
+                    {
+                        "turn": t,
+                        "il_ships": a,
+                        "base_ships": b,
+                        "il_planets": c,
+                        "base_planets": d,
+                    }
+                    for t, a, b, c, d in rows
+                ],
+            },
+            indent=2,
+        )
+    )
     print(f"\nsaved summary: {out}")
 
 

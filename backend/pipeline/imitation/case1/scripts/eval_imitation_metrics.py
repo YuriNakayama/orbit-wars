@@ -111,15 +111,9 @@ def _gather_preds(model: DeepSetsPolicy, val_ds: CaseThreeDataset) -> dict:
                 target_logits_all.append(
                     output.target_logits[b_idx, s_idx].cpu().numpy()
                 )
-                target_gt_all.append(
-                    batch.target_per_src[b_idx, s_idx].cpu().numpy()
-                )
-                ships_logits_all.append(
-                    output.ships_logits[b_idx, s_idx].cpu().numpy()
-                )
-                ships_gt_all.append(
-                    batch.ships_per_src[b_idx, s_idx].cpu().numpy()
-                )
+                target_gt_all.append(batch.target_per_src[b_idx, s_idx].cpu().numpy())
+                ships_logits_all.append(output.ships_logits[b_idx, s_idx].cpu().numpy())
+                ships_gt_all.append(batch.ships_per_src[b_idx, s_idx].cpu().numpy())
 
     return {
         "from_logits": np.concatenate(from_logits_all),
@@ -146,7 +140,11 @@ def _from_metrics(data: dict) -> dict:
     p, r, f1, _ = precision_recall_fscore_support(
         gt_v, pred_v, average="binary", zero_division=0
     )
-    prauc = float(average_precision_score(gt_v, probs_v)) if gt_v.sum() > 0 else float("nan")
+    prauc = (
+        float(average_precision_score(gt_v, probs_v))
+        if gt_v.sum() > 0
+        else float("nan")
+    )
     rocauc = (
         float(roc_auc_score(gt_v, probs_v))
         if 0 < gt_v.sum() < len(gt_v)

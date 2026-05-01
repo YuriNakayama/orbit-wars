@@ -38,9 +38,18 @@ def main() -> None:
 
     train_total = [r["train_total"] for r in rows]
     val_total = [r["val_total"] for r in rows]
-    ax_loss.plot(epochs, train_total, color=COLOR, linestyle="--", alpha=0.6, label="train")
+    ax_loss.plot(
+        epochs, train_total, color=COLOR, linestyle="--", alpha=0.6, label="train"
+    )
     ax_loss.plot(epochs, val_total, color=COLOR, linewidth=2, label="val")
-    ax_loss.scatter([best["epoch"]], [best["val_total"]], color="red", zorder=5, s=80, label=f"best epoch={best['epoch']}")
+    ax_loss.scatter(
+        [best["epoch"]],
+        [best["val_total"]],
+        color="red",
+        zorder=5,
+        s=80,
+        label=f"best epoch={best['epoch']}",
+    )
     ax_loss.set_title("Total loss")
     ax_loss.set_xlabel("epoch")
     ax_loss.set_ylabel("loss")
@@ -50,7 +59,14 @@ def main() -> None:
     from_acc = [r["val_from_acc"] for r in rows]
     ax_from.plot(epochs, from_acc, color=COLOR, linewidth=2, label="val_from_acc")
     ax_from.axhline(0.5, color="k", linestyle=":", alpha=0.4, label="random (0.5)")
-    ax_from.scatter([best["epoch"]], [best["val_from_acc"]], color="red", zorder=5, s=80, label=f"best={best['val_from_acc']:.3f}")
+    ax_from.scatter(
+        [best["epoch"]],
+        [best["val_from_acc"]],
+        color="red",
+        zorder=5,
+        s=80,
+        label=f"best={best['val_from_acc']:.3f}",
+    )
     ax_from.set_title("val_from_acc (multi-label)")
     ax_from.set_xlabel("epoch")
     ax_from.set_ylabel("acc")
@@ -60,9 +76,20 @@ def main() -> None:
 
     target_acc = [r["val_target_acc"] for r in rows]
     ax_target.plot(epochs, target_acc, color=COLOR, linewidth=2, label="val_target_acc")
-    ax_target.axhline(0.125, color="k", linestyle=":", alpha=0.4, label="random (0.125)")
-    ax_target.axhline(0.40, color="red", linestyle=":", alpha=0.5, label="ceiling ≈0.40")
-    ax_target.scatter([best["epoch"]], [best["val_target_acc"]], color="red", zorder=5, s=80, label=f"best={best['val_target_acc']:.3f}")
+    ax_target.axhline(
+        0.125, color="k", linestyle=":", alpha=0.4, label="random (0.125)"
+    )
+    ax_target.axhline(
+        0.40, color="red", linestyle=":", alpha=0.5, label="ceiling ≈0.40"
+    )
+    ax_target.scatter(
+        [best["epoch"]],
+        [best["val_target_acc"]],
+        color="red",
+        zorder=5,
+        s=80,
+        label=f"best={best['val_target_acc']:.3f}",
+    )
     ax_target.set_title("val_target_acc (8-class) — BOTTLENECK")
     ax_target.set_xlabel("epoch")
     ax_target.set_ylabel("acc")
@@ -73,7 +100,14 @@ def main() -> None:
     ships_acc = [r["val_ships_acc"] for r in rows]
     ax_ships.plot(epochs, ships_acc, color=COLOR, linewidth=2, label="val_ships_acc")
     ax_ships.axhline(0.25, color="k", linestyle=":", alpha=0.4, label="random (0.25)")
-    ax_ships.scatter([best["epoch"]], [best["val_ships_acc"]], color="red", zorder=5, s=80, label=f"best={best['val_ships_acc']:.3f}")
+    ax_ships.scatter(
+        [best["epoch"]],
+        [best["val_ships_acc"]],
+        color="red",
+        zorder=5,
+        s=80,
+        label=f"best={best['val_ships_acc']:.3f}",
+    )
     ax_ships.set_title("val_ships_acc (4-class)")
     ax_ships.set_xlabel("epoch")
     ax_ships.set_ylabel("acc")
@@ -92,7 +126,9 @@ def main() -> None:
     fig.savefig(out, dpi=120, bbox_inches="tight")
     print(f"saved: {out}")
     print(f"best epoch={best['epoch']}  val_total={best['val_total']:.4f}")
-    print(f"  from_acc={best['val_from_acc']:.4f}  target_acc={best['val_target_acc']:.4f}  ships_acc={best['val_ships_acc']:.4f}")
+    print(
+        f"  from_acc={best['val_from_acc']:.4f}  target_acc={best['val_target_acc']:.4f}  ships_acc={best['val_ships_acc']:.4f}"
+    )
 
 
 if __name__ == "__main__":

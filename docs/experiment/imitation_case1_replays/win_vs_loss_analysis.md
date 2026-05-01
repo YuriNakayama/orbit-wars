@@ -15,7 +15,7 @@
 
 ### 過去 "win" ファイル (iter9_win_seed19.json) の実態
 
-`dev/replay_one_match.py --seed 19 --label win` で保存されたファイル (3.4MB、全 steps 保存) をデコードした結果:
+`python -m pipeline.imitation.case1.scripts.replay_one_match --seed 19 --label win` で保存されたファイル (3.4MB、全 steps 保存) をデコードした結果:
 
 | フィールド | 値 |
 |---|---|
