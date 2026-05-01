@@ -1,7 +1,7 @@
 # Orbit Wars 模倣学習 — 特徴量設計メモ
 
 > 作成日: 2026-04-22
-> 関連: `20260420_imitation_learning_baseline.md`（IL ベースライン全体設計）
+> 関連: `docs/experiment/imitation/20260420_case1_baseline/plan.md`（IL ベースライン全体設計）
 > スコープ: IL モデルへ与える特徴量の設計と過去コンペ事例ベースのバリデーション
 
 過去 Kaggle Simulation IL 解法を web search + writeup で裏取りし、Orbit Wars に転用可能な

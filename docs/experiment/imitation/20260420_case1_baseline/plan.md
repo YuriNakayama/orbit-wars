@@ -2,7 +2,7 @@
 
 > 作成日: 2026-04-20
 > 作業ブランチ: `feature/orbit-wars-imitation`（research リポジトリ側）
-> 関連: `20260418_baseline.md`, `20260419_imitation_case1_diagnosis.md`
+> 関連: `docs/competition/20260418_baseline.md`, `docs/experiment/imitation/20260419_case1_diagnosis/result.md`
 
 本文書は、Orbit Wars コンペへ **模倣学習 (Imitation Learning, IL)** を適用する際の
 ベースライン設計と、過去 Kaggle Simulation コンペから抽出した適用可能手法をまとめる。
@@ -57,7 +57,7 @@
 ### 判断根拠
 
 - **既存ベースライン (`20260418_baseline.md`) に対する上積み**: ルールベースに IL ヘッドを足す形で差分投入しやすい。
-- **case1 診断 (`20260419_imitation_case1_diagnosis.md`) の示唆**: 序盤の艦隊配分で損をしており、上位 bot の「先手発射判断」を真似ることで即効性がある。
+- **case1 診断 (`docs/experiment/imitation/20260419_case1_diagnosis/result.md`) の示唆**: 序盤の艦隊配分で損をしており、上位 bot の「先手発射判断」を真似ることで即効性がある。
 - **Kaggle のクロック**: LB でランク確認しながら改善を回す前提では、学習ループが短い IL が適合する。
 
 ---

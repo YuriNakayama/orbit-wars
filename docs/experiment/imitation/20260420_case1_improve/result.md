@@ -4,7 +4,7 @@
 - ブランチ: `feature/imitation-case1-improve`
 - 対象: `pipeline/imitation/case1/` (Imitation Learning Baseline)
 - 出発点: `il_v1` vs `baseline_v1` (1v1, 100戦) で **win_rate = 0.00**
-  ([20260419_imitation_case1_diagnosis.md](../competition/20260419_imitation_case1_diagnosis.md))
+  ([20260419_case1_diagnosis/result.md](../20260419_case1_diagnosis/result.md))
 - 結果: 3 段階の修正を実施したが **win_rate = 0.00 のまま**。
   ただし発射数は 1 → 217 に回復し、ボトルネックは「fire しない問題」から
   「target 多様性の欠如」へシフトした。
@@ -297,6 +297,6 @@ collapse とも違う。
 
 ## 関連ドキュメント
 
-- 出発点の診断: [20260419_imitation_case1_diagnosis.md](../competition/20260419_imitation_case1_diagnosis.md)
-- ベースライン仕様: [pipeline/imitation/case1/README.md](../../pipeline/imitation/case1/README.md)
-- baseline_v1 (対戦相手) 詳細: [20260418_baseline.md](../competition/20260418_baseline.md)
+- 出発点の診断: [20260419_case1_diagnosis/result.md](../20260419_case1_diagnosis/result.md)
+- ベースライン仕様: [pipeline/imitation/case1/README.md](../../../../backend/pipeline/imitation/case1/README.md)
+- baseline_v1 (対戦相手) 詳細: [20260418_baseline.md](../../../competition/20260418_baseline.md)

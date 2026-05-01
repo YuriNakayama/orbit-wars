@@ -6,8 +6,8 @@
 - 目的: `il_v1` (純粋 IL) が `baseline_v1` (rulebase/case1) に勝てるようにする
 - 出発点: `il_v1` vs `baseline_v1` (1v1, 100戦) で **win_rate = 0.00**
 - 関連:
-  - 出発点の診断: [`20260419_imitation_case1_diagnosis.md`](../competition/20260419_imitation_case1_diagnosis.md)
-  - 直前の改善試行 (試行 1-3): [`20260420_imitation_case1_improve_result.md`](20260420_imitation_case1_improve_result.md)
+  - 出発点の診断: [`20260419_case1_diagnosis/result.md`](../20260419_case1_diagnosis/result.md)
+  - 直前の改善試行 (試行 1-3): [`20260420_case1_improve/result.md`](../20260420_case1_improve/result.md)
 
 ---
 
@@ -52,7 +52,7 @@
 
 ### iter 1: 1355 replays で再 preprocess + 学習 (基準点)
 
-**目的**: 直前の試行 3 (`20260420_imitation_case1_improve_result.md`) と同条件で再現確認。
+**目的**: 直前の試行 3 (`20260420_case1_improve/result.md`) と同条件で再現確認。
 
 **変更点**: なし (再 preprocess + 再学習のみ)
 
@@ -257,7 +257,7 @@ target head 入出力の改良では 0.40 を超えられない。ラベル空�
 
 | 項目 | 状態 | 必要作業 |
 |------|------|---------|
-| diagnosis.md 追記 | 未対応 | `20260419_imitation_case1_diagnosis.md` の補遺に iter 1-6 の追加知見を記載 |
+| diagnosis result 追記 | 未対応 | `20260419_case1_diagnosis/result.md` の補遺に iter 1-6 の追加知見を記載 |
 | MEMORY.md 更新 | 未対応 | 「BC 単独では baseline 超え不可、val_target_acc ≈ 0.40 が天井」 |
 | コミット分割 | 未対応 | iter ごとに分けて意味のあるコミット履歴に |
 
@@ -322,7 +322,7 @@ template label 分布 (train, NUM_TEMPLATES=8):
 
 ## 関連ドキュメント
 
-- 出発点の診断: [`20260419_imitation_case1_diagnosis.md`](../competition/20260419_imitation_case1_diagnosis.md)
-- 直前の改善試行 (試行 1-3): [`20260420_imitation_case1_improve_result.md`](20260420_imitation_case1_improve_result.md)
+- 出発点の診断: [`20260419_case1_diagnosis/result.md`](../20260419_case1_diagnosis/result.md)
+- 直前の改善試行 (試行 1-3): [`20260420_case1_improve/result.md`](../20260420_case1_improve/result.md)
 - pipeline 提出ルール: `.claude/rules/pipeline.md`
-- baseline_v1 仕様: [`20260418_baseline.md`](../competition/20260418_baseline.md)
+- baseline_v1 仕様: [`20260418_baseline.md`](../../../competition/20260418_baseline.md)

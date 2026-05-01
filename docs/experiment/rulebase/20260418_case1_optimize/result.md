@@ -309,7 +309,7 @@ a9074a5 :sparkles: 1-ply lookahead (self-play 反撃予測) を追加 (default O
 
 ## 📚 参照
 
-- 提案 plan: `docs/competition/20260418_optimize_case1_plan.md`
+- 提案 plan: `docs/experiment/rulebase/20260418_case1_optimize/plan.md`
 - 評価基盤: `docs/competition/20260418_evaluation.md`
 - コンペ仕様: `docs/competition/abstract.md`
 - Memory: `memory/project_case2_ablation.md`, `memory/project_om_finding.md`
