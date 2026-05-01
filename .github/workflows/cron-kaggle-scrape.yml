@@ -61,16 +61,6 @@ jobs:
         # 探してしまうため (`workspace not found` + `matches.dvc does not exist`) NG。
         run: uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 
-      - name: Snapshot before scrape
-        run: |
-          echo "=== CWD ==="; pwd
-          echo "=== ls data/lake/kaggle_episodes ==="; ls -la data/lake/kaggle_episodes/ || true
-          echo "=== ls data/lake/kaggle_episodes/matches ==="; ls -la data/lake/kaggle_episodes/matches/ || true
-          echo "=== count parquet files ==="; find data/lake/kaggle_episodes -name "*.parquet" 2>/dev/null | wc -l
-          echo "=== count replay files ==="; find data/lake/kaggle_episodes -name "*.json.gz" 2>/dev/null | wc -l
-          echo "=== matches.dvc hash ==="; git hash-object data/lake/kaggle_episodes/matches.dvc 2>/dev/null || echo "missing"
-          echo "=== matches.dvc content ==="; cat data/lake/kaggle_episodes/matches.dvc 2>/dev/null || echo "missing"
-
       - name: Scrape kaggle episodes
         run: |
           uv run --project backend python -m dataset kaggle scrape \
@@ -80,23 +70,12 @@ jobs:
             --dvc-add \
             2>&1 | tee /tmp/scrape.log
 
-      - name: Snapshot after scrape
-        run: |
-          echo "=== CWD ==="; pwd
-          echo "=== ls data/lake/kaggle_episodes/matches ==="; ls -la data/lake/kaggle_episodes/matches/ || true
-          echo "=== count parquet files (repo root) ==="; find data/lake/kaggle_episodes -name "*.parquet" 2>/dev/null | wc -l
-          echo "=== count replay files (repo root) ==="; find data/lake/kaggle_episodes -name "*.json.gz" 2>/dev/null | wc -l
-          echo "=== count parquet files (backend/) ==="; find backend/data -name "*.parquet" 2>/dev/null | wc -l
-          echo "=== count replay files (backend/) ==="; find backend/data -name "*.json.gz" 2>/dev/null | wc -l
-          echo "=== anywhere else? ==="; find / -name "kaggle_ep_*.json.gz" 2>/dev/null | head -5
-          echo "=== matches.dvc hash ==="; git hash-object data/lake/kaggle_episodes/matches.dvc 2>/dev/null || echo "missing"
-          echo "=== matches.dvc content ==="; cat data/lake/kaggle_episodes/matches.dvc 2>/dev/null || echo "missing"
-          echo "=== git status data/ ==="; git status data/ -s
-
       - name: Detect data changes
         id: diff
         run: |
-          if git diff --quiet -- data/lake/kaggle_episodes/matches.dvc; then
+          # `dvc add` は内部で `git add` まで実行するため、変更は staged 側に
+          # 載る。`git diff` (unstaged のみ) では検出できないので HEAD と比較する。
+          if git diff --quiet HEAD -- data/lake/kaggle_episodes/matches.dvc; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
