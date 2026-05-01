@@ -407,6 +407,16 @@ def pull(
     if runs_root is None:
         runs_root = _runs_root_for(case)
     relative = runs_root / run_id
+    repo_root = _repo_root()
+    dvc_meta = repo_root / f"{relative}.dvc"
+    if not dvc_meta.is_file():
+        console.print(
+            f"[yellow]missing:[/] {dvc_meta.relative_to(repo_root)} — "
+            "Vast onstart should have committed it back to origin. Try "
+            "`git fetch origin && git pull --rebase` on the training branch, "
+            "then retry `dev/vast pull`."
+        )
+        raise typer.Exit(code=1)
     cmd = [
         "uv",
         "run",
@@ -417,7 +427,7 @@ def pull(
         str(relative),
     ]
     console.print(f"[dim]$ {' '.join(cmd)}[/]")
-    result = subprocess.run(cmd, cwd=str(_repo_root()))
+    result = subprocess.run(cmd, cwd=str(repo_root))
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
     run_json_path = _repo_root() / relative / "run.json"

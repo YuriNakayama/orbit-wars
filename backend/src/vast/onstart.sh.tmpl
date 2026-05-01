@@ -171,4 +171,36 @@ uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_
 echo "[onstart] step=dvc_push_runs"
 uv run --project backend dvc push "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
+# Push the generated <RUN_ID>.dvc back to origin so dev/vast pull can resolve
+# the run via `dvc pull <path>` locally. Failure here must not fail the run —
+# the artifacts are already in S3 and the .dvc can be reconstructed by hand.
+echo "[onstart] step=git_push_dvc_meta"
+RUN_DVC_FILE="data/output/models/imitation/<CASE>/runs/<RUN_ID>.dvc"
+if [ -f "${RUN_DVC_FILE}" ]; then
+  git config user.email "vast-bot@orbit-wars.local"
+  git config user.name "vast-bot"
+  TARGET_BRANCH="<BRANCH>"
+  git fetch origin "${TARGET_BRANCH}" || true
+  # Detach -> branch with rebased history so we don't drag training-time HEAD
+  # state. We only commit the .dvc file; nothing else is staged.
+  git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+  git add -- "${RUN_DVC_FILE}"
+  git commit --no-verify -m ":robot: vast: add <CASE>/runs/<RUN_ID>.dvc" || {
+    echo "[onstart] git_push_dvc_meta: nothing to commit (already tracked?)"
+  }
+  for attempt in 1 2 3; do
+    if git push origin "HEAD:${TARGET_BRANCH}"; then
+      echo "[onstart] git_push_dvc_meta: pushed to ${TARGET_BRANCH}"
+      break
+    fi
+    echo "[onstart] git_push_dvc_meta: attempt=${attempt} rejected; rebasing"
+    git pull --rebase origin "${TARGET_BRANCH}" || true
+    if [ "${attempt}" -eq 3 ]; then
+      echo "[onstart] git_push_dvc_meta: exhausted retries; .dvc stays in S3 only"
+    fi
+  done
+else
+  echo "[onstart] git_push_dvc_meta: ${RUN_DVC_FILE} not found (dvc add failed?)"
+fi
+
 echo "[onstart] step=done run_id=<RUN_ID>"
