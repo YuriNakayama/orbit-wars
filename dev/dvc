@@ -1,0 +1,48 @@
+#!/bin/bash
+# DVC operations: setup / pull / repro / push / dag / add.
+#
+# Usage:
+#   dev/dvc setup                       # Configure local DVC (cache dir + AWS profile)
+#   dev/dvc pull [<targets>...]         # Fetch real data from S3 remote
+#   dev/dvc repro [<targets>...]        # Re-run pipeline on diffs
+#   dev/dvc push [<targets>...]         # Upload artifacts to S3
+#   dev/dvc dag [<target>]              # Print stage dependency graph
+#   dev/dvc add <path>                  # Track a path with DVC
+#   dev/dvc <subcommand> [args...]      # Pass-through to `dvc <subcommand>`
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: dev/dvc <subcommand> [args...]" >&2
+    echo "Subcommands: setup | pull | repro | push | dag | add | <any dvc subcommand>" >&2
+    exit 1
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    setup)
+        # Idempotent local DVC setup (.dvc/config.local).
+        # - cache.dir → shared directory under the main repo
+        # - AWS profile for the S3 remote
+        # .dvc/config.local is gitignored; run once per developer machine.
+        CACHE_DIR="${DVC_CACHE_DIR:-/Users/user/project/orbit-wars/.dvc/cache}"
+        AWS_PROFILE="${ORBIT_WARS_AWS_PROFILE:-orbit-wars}"
+
+        mkdir -p "$CACHE_DIR"
+
+        echo "== DVC: setting shared cache dir =="
+        uv run --directory backend dvc cache dir --local "$CACHE_DIR"
+
+        echo "== DVC: setting AWS profile for remote 's3' =="
+        uv run --directory backend dvc remote modify --local s3 profile "$AWS_PROFILE"
+
+        echo
+        echo "Local DVC config written to .dvc/config.local (gitignored):"
+        cat .dvc/config.local 2>/dev/null || true
+        ;;
+    *)
+        exec uv run --directory backend dvc "$subcommand" "$@"
+        ;;
+esac
