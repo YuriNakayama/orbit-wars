@@ -36,7 +36,7 @@ _TEMPLATE_PLACEHOLDERS = (
 )
 
 # ECR の依存焼込み image を使う場合は env で上書きする (terraform apply 後の URL).
-# 例: export ORBIT_WARS_RUNTIME_IMAGE=<acct>.dkr.ecr.ap-northeast-1.amazonaws.com/orbit-wars-runtime:latest
+# 例: export ORBIT_WARS_RUNTIME_IMAGE=<acct>.dkr.ecr.ap-northeast-1.amazonaws.com/orbit-wars-runtime:latest  # noqa: E501
 # 未設定時は upstream の pytorch image にフォールバック (毎回 uv sync 必要).
 DEFAULT_IMAGE = os.environ.get(
     "ORBIT_WARS_RUNTIME_IMAGE",

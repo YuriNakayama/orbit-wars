@@ -88,7 +88,7 @@ def _collect_fired(
 def _softmax(x: np.ndarray) -> np.ndarray:
     x = x - x.max(axis=-1, keepdims=True)
     e = np.exp(x)
-    return e / e.sum(axis=-1, keepdims=True)
+    return e / e.sum(axis=-1, keepdims=True)  # type: ignore[no-any-return]
 
 
 def _nll(logits: np.ndarray, gt: np.ndarray, T: float) -> float:
@@ -116,7 +116,7 @@ def _ece(probs: np.ndarray, gt: np.ndarray, n_bins: int = 15) -> float:
     return float(ece)
 
 
-def _sweep(logits: np.ndarray, gt: np.ndarray) -> dict:
+def _sweep(logits: np.ndarray, gt: np.ndarray) -> dict[str, object]:
     Ts = [round(0.5 + 0.1 * i, 2) for i in range(26)]  # 0.5..3.0
     rows = []
     for T in Ts:
@@ -154,10 +154,10 @@ def main() -> None:
     REPORT_PATH.write_text(json.dumps(report, indent=2))
     print(f"saved: {REPORT_PATH}")
 
-    t_best = report["target_head"]["best_by_nll"]
-    t_base = report["target_head"]["baseline_T1"]
-    s_best = report["ships_head"]["best_by_nll"]
-    s_base = report["ships_head"]["baseline_T1"]
+    t_best = report["target_head"]["best_by_nll"]  # type: ignore[index]
+    t_base = report["target_head"]["baseline_T1"]  # type: ignore[index]
+    s_best = report["ships_head"]["best_by_nll"]  # type: ignore[index]
+    s_base = report["ships_head"]["baseline_T1"]  # type: ignore[index]
     print(
         f"target: T*={t_best['T']}  NLL {t_base['nll']:.4f} → {t_best['nll']:.4f}  "
         f"ECE {t_base['ece']:.4f} → {t_best['ece']:.4f}"
