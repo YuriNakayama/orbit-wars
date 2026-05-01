@@ -36,7 +36,7 @@ from pipeline.imitation.case1.training.dataset import (
 
 CONFIG_PATH = Path("pipeline/imitation/case1/configs/il_baseline.yaml")
 WEIGHTS_PATH = Path("pipeline/imitation/case1/policy/weights.pt")
-REPORT_PATH = Path("docs/experiment/imitation_case1_val_metrics.json")
+REPORT_PATH = Path("data/output/experiment/imitation_case1_val_metrics.json")
 SHIPS_BUCKETS = 4
 
 

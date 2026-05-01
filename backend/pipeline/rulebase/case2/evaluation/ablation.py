@@ -13,7 +13,7 @@ import typer
 app = typer.Typer(add_completion=False)
 
 CONFIG_PATH = Path("pipeline/rulebase/case2/baseline/core/config.py")
-DATA_ROOT = Path("data")
+DATA_ROOT = Path("data/output")
 
 
 def _set_flag(name: str, value: bool) -> None:

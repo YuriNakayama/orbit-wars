@@ -27,7 +27,7 @@ if str(SRC) not in sys.path:
 
 from dataset.selfplay.runner import RunSpec, run_episodes  # noqa: E402
 
-OUT_DIR = Path("docs/experiment/imitation_case1_replays")
+OUT_DIR = Path("data/output/experiment/imitation_case1_replays")
 
 
 def run_one(seed: int, label: str, data_root: Path) -> None:

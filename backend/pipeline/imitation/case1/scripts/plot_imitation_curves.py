@@ -121,7 +121,7 @@ def main() -> None:
     )
     fig.tight_layout()
 
-    out = Path("docs/experiment/imitation_case1_learning_curves.png")
+    out = Path("data/output/experiment/imitation_case1_learning_curves.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=120, bbox_inches="tight")
     print(f"saved: {out}")

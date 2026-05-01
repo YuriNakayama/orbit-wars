@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dataset import list_matches, load_replay
 
-DATA_ROOT = Path("data")
+DATA_ROOT = Path("data/output")
 
 # %%
 df = list_matches(DATA_ROOT, mode="1v1", limit=10)

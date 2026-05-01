@@ -113,14 +113,14 @@ def _round_or_none(value: Any, ndigits: int) -> float | None:
 
 
 def _build_run_dir(case: str, seed: int) -> Path:
-    """artifacts/models/imitation/<case>/runs/<run_id>/ を生成する.
+    """data/output/models/imitation/<case>/runs/<run_id>/ を生成する.
 
     run_id 形式: <YYYYMMDD-HHMMSS>__<branch_slug>__<sha7>__seed<N>
-    (artifacts/README.md の規約に準拠)
+    (data/output/README.md の規約に準拠)
     """
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_id = f"{ts}__{_git_branch_slug()}__{_git_sha()}__seed{seed}"
-    return Path("artifacts/models/imitation") / case / "runs" / run_id
+    return Path("data/output/models/imitation") / case / "runs" / run_id
 
 
 def _resolve_run_dir(cfg_run_dir: str | None, case: str, seed: int) -> Path:
