@@ -82,6 +82,8 @@ tfplan.out
 
 # data — actual contents are DVC-managed; only stubs / docs land in git.
 # Includes data/output/ (Vast.ai run outputs; see data/output/README.md).
+# `/data` (worktree symlink to main repo's data/) is also untracked.
+/data
 /data/**
 !/data/**/
 !/data/**/*.dvc
