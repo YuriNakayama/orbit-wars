@@ -110,3 +110,6 @@ kaggle.json
 
 # claude code scheduled tasks (local runtime state)
 .claude/scheduled_tasks.lock
+
+# skill-creator workspaces (per-skill eval outputs / benchmarks; reproducible)
+.claude/skills/*-workspace/
