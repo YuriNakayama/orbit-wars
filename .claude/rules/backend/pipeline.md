@@ -5,6 +5,8 @@ paths:
 
 # Pipeline (backend/pipeline/<category>/case*) Submission Rules
 
+General Python rules (type hints, logging, naming, etc.) and backend library Module Architecture live in `.claude/rules/python.md`. This file focuses on **case-directory-specific submit structure conventions**.
+
 Conventions for keeping `backend/pipeline/<category>/case*/` directories runnable **both locally and on Kaggle after submission**. `<category>` currently has two families: `rulebase/` (case0–case2) and `imitation/` (case1). Case numbers are assigned **independently per category** starting from 1 (rulebase/case1 and imitation/case1 are unrelated).
 
 Path notation below uses `backend/` as the anchor (`pipeline/<category>/case<N>/...`). `uv run ...` / `dev/submit ...` are expected to execute with `backend/` as the working directory.

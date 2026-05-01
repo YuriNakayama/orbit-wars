@@ -1,29 +1,18 @@
 ---
 paths:
-  - "backend/src/**"
-  - "backend/tests/**"
+  - "**/*.py"
+  - "**/*.ipynb"
 ---
 
-# Backend Rules
+# Python Rules
 
-Python の実装は `backend/` 配下に集約されています。`pyproject.toml` / `uv.lock` / `.python-version` は `backend/` 直下にあり、`uv run ...` 系のコマンドは `backend/` で実行することを前提にします。
+**General Python rules** for editing `.py` / `.ipynb` files in this repository. Auto-loaded across every region that contains Python code (`backend/`, `pipeline/`, tests, notebooks, etc.).
 
-## General Principles
+For case-directory submit structure see `.claude/rules/backend/pipeline.md`. For pytest conventions see `.claude/rules/backend/tests.md`.
 
-- Comply with PEP 8 and write Pythonic code
-- Methods should have referential transparency and idempotency
-- Return early and keep nesting shallow
-- Follow the Single Responsibility Principle
-- Keep third-party libraries to a minimum
-- Always import at the top of the file
-- No backward compatibility concerns — remove unnecessary code
-- Minimize lines of code
-- Avoid excessive commenting and logging
-- Don't implement temporary measures — make fundamental changes
-- 200-400 lines per file typical, 800 max
-- NEVER mutate objects — always create new instances
+`pyproject.toml` / `uv.lock` / `.python-version` sit at `backend/` root, and `uv run ...` commands are expected to execute from `backend/`.
 
-## Module Architecture
+## Backend Module Architecture (`backend/src/**`)
 
 The shared library for Orbit Wars agents follows the module layout below:
 
@@ -42,6 +31,21 @@ backend/src/
 - Express inter-module dependencies via explicit imports
 - Keep feature extraction and policies loosely coupled so they can be swapped
 - Minimize dependencies in the submission entrypoint (`src/agents/main.py`); avoid heavy imports unavailable in the Kaggle runtime
+
+## General Principles
+
+- Comply with PEP 8 and write Pythonic code
+- Methods should have referential transparency and idempotency
+- Return early and keep nesting shallow
+- Follow the Single Responsibility Principle
+- Keep third-party libraries to a minimum
+- Always import at the top of the file
+- No backward compatibility concerns — remove unnecessary code
+- Minimize lines of code
+- Avoid excessive commenting and logging
+- Don't implement temporary measures — make fundamental changes
+- 200-400 lines per file typical, 800 max
+- NEVER mutate objects — always create new instances
 
 ## Type Hints & Naming
 
@@ -105,44 +109,11 @@ uv run ruff check . --fix
 uv run mypy .
 ```
 
-## Testing
+## Notebooks (`.ipynb`)
 
-### Frameworks
-
-- **Unit/Integration**: Pytest + pytest-asyncio
-- Tests mirror `src/` structure in `tests/`
-
-### Test Guidelines
-
-- Write in AAA pattern (Arrange, Act, Assert)
-- Use Fixtures for common setup
-- Minimize use of mock and patch — keep close to actual behavior
-- Each test should be executable independently
-- Tests live under `backend/tests/`, mirroring the `backend/src/` layout
-- For agent tests, build scenarios with `kaggle_environments.make("orbit_wars")`
-
-```python
-import pytest
-from kaggle_environments import make
-
-@pytest.fixture
-def env():
-    return make("orbit_wars", debug=True)
-
-def test_agent_does_nothing_is_legal(env):
-    def noop(obs):
-        return []
-
-    env.run([noop, noop])
-    assert env.state[0]["status"] in {"DONE", "ACTIVE"}
-```
-
-### Test-Driven Development
-
-1. Write test first (RED) — test should FAIL
-2. Write minimal implementation (GREEN) — test should PASS
-3. Refactor (IMPROVE)
-4. Verify coverage (80%+)
+- Notebooks follow the same rules above. Even for EDA / experimentation, prefer `logging` over `print()`, or use the cell's last-expression evaluation for inline display
+- Extract finished logic into `.py` modules. Do not let business logic linger long in notebooks
+- Clear cell outputs before committing; do not push large execution results into git
 
 ## Code Quality Checklist
 
