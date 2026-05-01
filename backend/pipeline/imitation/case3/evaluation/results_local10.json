@@ -1,0 +1,16 @@
+{
+  "episodes": 10.0,
+  "wins": 0.0,
+  "losses": 10.0,
+  "draws": 0.0,
+  "win_rate": 0.0,
+  "non_draw_win_rate": 0.0,
+  "win_rate_ci95_lo": 0.0,
+  "win_rate_ci95_hi": 0.2775401687666166,
+  "challenger": "il_v3",
+  "baseline": "baseline_v1",
+  "mode": "1v1",
+  "seed_start": 0.0,
+  "seed_end_exclusive": 10.0,
+  "label": "local-10ep"
+}
