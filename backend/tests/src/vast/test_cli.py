@@ -162,7 +162,7 @@ def test_train_cost_limit_aborts_when_declined(
 
 def test_pull_runs_dvc_pull(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     repo_root = tmp_path
-    runs_root = repo_root / "artifacts/models/imitation/case1/runs"
+    runs_root = repo_root / "data/output/models/imitation/case1/runs"
     run_dir = runs_root / "test_run"
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(
@@ -188,7 +188,7 @@ def test_pull_warns_on_failed_status(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     repo_root = tmp_path
-    runs_root = repo_root / "artifacts/models/imitation/case1/runs"
+    runs_root = repo_root / "data/output/models/imitation/case1/runs"
     run_dir = runs_root / "test_run"
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(
@@ -210,7 +210,7 @@ def test_promote_copies_and_updates_status(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     repo_root = tmp_path
-    runs_root_rel = Path("artifacts/models/imitation/case1/runs")
+    runs_root_rel = Path("data/output/models/imitation/case1/runs")
     canonical_rel = Path("backend/pipeline/imitation/case1/policy/weights.pt")
     run_dir = repo_root / runs_root_rel / "test_run"
     run_dir.mkdir(parents=True)
@@ -281,7 +281,7 @@ def test_cost_report_writes_markdown(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     repo_root = tmp_path
-    runs_rel = Path("artifacts/models/imitation/case1/runs")
+    runs_rel = Path("data/output/models/imitation/case1/runs")
     run_dir = repo_root / runs_rel / "r-1"
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(

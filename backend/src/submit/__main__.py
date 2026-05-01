@@ -28,7 +28,7 @@ app = typer.Typer(
 console = Console()
 
 DEFAULT_PIPELINE_DIR = Path("pipeline")
-DEFAULT_OUTPUT_DIR = Path("data/submissions")
+DEFAULT_OUTPUT_DIR = Path("data/output/submit")
 
 
 def _resolve_case(case: str, *, pipeline_dir: Path) -> Path:

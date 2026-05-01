@@ -46,7 +46,7 @@ def _aws_get(profile: str, key: str) -> str:
     except subprocess.CalledProcessError as exc:
         raise CredentialsError(
             f"aws configure get {key} --profile {profile} failed. "
-            "Run `dev/dvc-setup` and confirm `~/.aws/credentials` has "
+            "Run `dev/dvc setup` and confirm `~/.aws/credentials` has "
             f"a [{profile}] entry."
         ) from exc
     value = result.stdout.strip()

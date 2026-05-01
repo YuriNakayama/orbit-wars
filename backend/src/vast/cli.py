@@ -56,7 +56,7 @@ console = Console()
 
 DEFAULT_CASE = "case1"
 DEFAULT_STAGE = "train_imitation_case1"
-DEFAULT_RUNS_ROOT = Path("artifacts/models/imitation/case1/runs")
+DEFAULT_RUNS_ROOT = Path("data/output/models/imitation/case1/runs")
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent / "onstart.sh.tmpl"
 DEFAULT_CANONICAL_WEIGHTS = Path("backend/pipeline/imitation/case1/policy/weights.pt")
 DEFAULT_COST_REPORT_DIR = Path("docs/experiment")
@@ -91,7 +91,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
 
 
 def _runs_root_for(case: str) -> Path:
-    return Path(f"artifacts/models/imitation/{case}/runs")
+    return Path(f"data/output/models/imitation/{case}/runs")
 
 
 def _case_defaults(case: str) -> dict[str, str]:

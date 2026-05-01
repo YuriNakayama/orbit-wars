@@ -135,7 +135,7 @@ uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 uv run --project backend dvc pull
 
 echo "[onstart] step=mkdir_run"
-mkdir -p "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
+mkdir -p "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
 # Preprocess: parquet が既に存在すれば skip する.
 # - dvc pull で data/mart/imitation/<CASE>/*.parquet が取得済み (S3 に push 済み)
@@ -157,7 +157,7 @@ echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
 # で出力先を run dir に切り替えると DVC が canonical の不在を検出してエラーになる。
 # Vast 側では dvc.yaml を bypass し、train.py を直接実行する (preprocess は cache
 # hit で skip される前提のため repro は使わない)。
-ORBIT_WARS_RUN_DIR="artifacts/models/imitation/<CASE>/runs/<RUN_ID>" \
+ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
@@ -166,9 +166,9 @@ ORBIT_WARS_RUN_DIR="artifacts/models/imitation/<CASE>/runs/<RUN_ID>" \
   uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 
 echo "[onstart] step=dvc_add_run"
-uv run --project backend dvc add "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
+uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project backend dvc push "artifacts/models/imitation/<CASE>/runs/<RUN_ID>"
+uv run --project backend dvc push "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
 echo "[onstart] step=done run_id=<RUN_ID>"
