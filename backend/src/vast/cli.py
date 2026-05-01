@@ -293,7 +293,7 @@ def train(
             if not v_offers:
                 console.print(
                     "[red]No network volume offers matched. Aborting.[/]\n"
-                    "  Try `dev/vast-volume search` to inspect offers."
+                    "  Try `dev/vast volume search` to inspect offers."
                 )
                 raise typer.Exit(code=1)
             v_chosen = pick_volume_offer(v_offers, console=console)
@@ -378,8 +378,8 @@ def train(
     console.print(f"  Monitor logs: [cyan]vastai logs {instance_id}[/]")
     console.print(f"  Stop manually: [cyan]vastai destroy instance {instance_id}[/]")
     console.print(
-        f"  After completion: [cyan]dev/vast-pull {run_id} --case {case}[/] then "
-        f"[cyan]dev/vast-promote {run_id} --case {case}[/] to adopt"
+        f"  After completion: [cyan]dev/vast pull {run_id} --case {case}[/] then "
+        f"[cyan]dev/vast promote {run_id} --case {case}[/] to adopt"
     )
 
 

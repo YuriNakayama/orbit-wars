@@ -70,10 +70,10 @@ dev/lint              # Static analysis (ruff + mypy)
 dev/test-backend      # CI (format check → lint → type check → pytest)
 dev/create-worktree   # Create git worktree with .env copy
 dev/dvc-setup         # Configure local DVC (cache dir + AWS profile)
-dev/vast-train        # Vast.ai 上で GPU 学習を起動 (commit-sha 引数)
-dev/vast-pull         # 生成物を DVC pull でローカル取得 (run_id 引数)
-dev/vast-promote      # 候補 weights を canonical に昇格 (run_id 引数)
-dev/vast-cost-report  # 月次コストレポートを生成
+dev/vast train        # Vast.ai 上で GPU 学習を起動 (commit-sha 引数)
+dev/vast pull         # 生成物を DVC pull でローカル取得 (run_id 引数)
+dev/vast promote      # 候補 weights を canonical に昇格 (run_id 引数)
+dev/vast cost-report  # 月次コストレポートを生成
 ```
 
 ### DVC コマンド
@@ -94,19 +94,19 @@ uv run --directory backend dvc dag            # stage 依存グラフ
 ```bash
 # 1) commit & push してから Vast 起動
 git push origin <branch>
-dev/vast-train <commit-sha> [--stage train_imitation_case1]
+dev/vast train <commit-sha> [--stage train_imitation_case1]
 
 # 2) 完了したらローカル取得
-dev/vast-pull <run_id>
+dev/vast pull <run_id>
 
 # 3) 採用なら canonical weights に昇格
-dev/vast-promote <run_id>
+dev/vast promote <run_id>
 
 # コスト確認
-dev/vast-cost-report --month 2026-04
+dev/vast cost-report --month 2026-04
 ```
 
-候補 weights は `artifacts/models/imitation/case1/runs/<run_id>/best.pt` に保存され DVC/S3 で管理される。`policy/weights.pt` (Kaggle submit 正本) は `dev/vast-promote` を実行した時のみ更新される。`VAST_API_KEY` は `backend/.env` に記述。詳細は [`docs/plans/vast-ai-basis/`](../docs/plans/vast-ai-basis/) を参照。
+候補 weights は `artifacts/models/imitation/case1/runs/<run_id>/best.pt` に保存され DVC/S3 で管理される。`policy/weights.pt` (Kaggle submit 正本) は `dev/vast promote` を実行した時のみ更新される。`VAST_API_KEY` は `backend/.env` に記述。詳細は [`docs/plans/vast-ai-basis/`](../docs/plans/vast-ai-basis/) を参照。
 
 ## Kaggle Submission Policy
 
