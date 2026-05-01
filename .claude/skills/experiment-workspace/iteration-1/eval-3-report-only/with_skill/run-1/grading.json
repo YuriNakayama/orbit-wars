@@ -1,0 +1,39 @@
+{
+  "expectations": [
+    {
+      "text": "Skips Phase 1 hypothesis questions and Phase 2 git status checks (no need for them in report-only mode)",
+      "passed": true,
+      "evidence": "response.md: 'experiment skill の Phase 1 (仮説確認) / Phase 2 (git 事前チェック) はスキップして、`experimenter` サブエージェントを **eval / report-only モード** で起動します。' Also handoff: 'Phases 1 (hypothesis clarification) and 2 (git reality check) of the experiment skill are intentionally skipped.'"
+    },
+    {
+      "text": "Agent handoff prompt is in eval/report-only mode with run_id=run_20260501_abc123, family=imitation, case=case1, iter=iter4",
+      "passed": true,
+      "evidence": "agent_handoff_prompt.txt: 'Mode: **eval / report-only**', 'Family: imitation', 'Case: existing case1 (extend, not new case)', 'Iteration: iter4', 'Run id: run_20260501_abc123 (Vast.ai)'"
+    },
+    {
+      "text": "Plans to use dev/vast pull <run_id> to fetch artifacts before evaluation",
+      "passed": true,
+      "evidence": "handoff: '`dev/vast pull run_20260501_abc123` → fetch artifacts to data/output/models/imitation/case1/runs/run_20260501_abc123/. Confirm best.pt and metrics JSON actually exist'. response.md: '`dev/vast pull run_20260501_abc123` でアーティファクトを ... に取得。'"
+    },
+    {
+      "text": "Uses iter4_result.md naming (not new directory) under the existing experiment directory",
+      "passed": true,
+      "evidence": "response.md: '既存の case1 ディレクトリ (おそらく `docs/experiment/imitation/20260422_case1_phase3/`) 内に **`iter4_result.md`** を追記。' handoff: 'Do NOT create a new dated experiment directory; the user said iter4 of an existing case1 dir.' and 'Write `iter4_result.md` in the chosen directory'"
+    },
+    {
+      "text": "Mentions that local match outcomes (>=300 episodes for fragile claims) are the success metric, NOT Kaggle publicScore",
+      "passed": true,
+      "evidence": "response.md: '≥300 episodes でローカル勝率を測定 (n<300 はノイズという既知メモあり)' and '評価指標は **ローカル対戦成績のみ**。Kaggle publicScore / skill rating は判定根拠に使いません'. handoff: 'Use ≥300 episodes — this project's memory ... explicitly says n<300 self-play results are not trustworthy' and 'Do NOT cite Kaggle publicScore or skill rating as evidence — local match outcomes only.'"
+    },
+    {
+      "text": "User-facing output is in Japanese",
+      "passed": true,
+      "evidence": "response.md is written in Japanese throughout: '了解しました。`run_20260501_abc123` の結果を imitation/case1 の **iter4** として ... まとめる作業ですね。'"
+    }
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 6,
+    "total": 6
+  }
+}

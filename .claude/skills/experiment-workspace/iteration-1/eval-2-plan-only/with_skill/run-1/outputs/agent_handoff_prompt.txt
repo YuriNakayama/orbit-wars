@@ -1,0 +1,48 @@
+User wants to start a new experiment iterating on rulebase/case2 by adding a harass policy that taunts opponents around comet spawns.
+
+Hypothesis (from user, verbatim Japanese paraphrase):
+「rulebase/case2 を改良したい。harass policy を加えて、comet (turn 50/150/250/350/450 で出現する 4 惑星クラスタ) 周辺で対戦相手を挑発する戦術を試す。狙いは comet 取得競争での主導権を奪い、case2 baseline 比で 1v1 win-rate を改善すること。」
+
+Scope confirmed in main session:
+- Family: rulebase
+- Case: existing case2 (extend, not new case). harass policy は case2 内に新モジュール (例: policy_harass.py) として追加し、既存 baseline と比較できる形を保つ。
+- Compute target: NONE this round. The user explicitly scoped this invocation to "plan.md だけ書いてレビューさせてほしい。実装と vast はまだ動かさないで".
+- This invocation is plan-only (Phase 2 of your workflow). Do NOT proceed to Phase 3 (implementation) or Phase 4 (Vast.ai launch).
+
+Branch context:
+- Branch: feature/reinforcement-learning-conversion
+- Recent HEAD commit: 057b19c (README/docs update)
+- Working tree has only `M .gitignore` (clean enough for plan-only work; no push needed since we are not launching Vast).
+
+Existing experiment dirs under docs/experiment/rulebase/:
+- 20260418_case1_optimize
+- 20260420_case3_rollout_ablation
+There is no existing case2 harass directory, so create a new one. Today is 2026-05-01, so use:
+  docs/experiment/rulebase/20260501_case2_harass_policy/plan.md
+(topic = harass_policy, snake_case).
+
+Existing rulebase cases on disk: case0, case1, case2, case3, case4, case5. case2 already exists — confirm by reading its current `main.py` / policy modules and reflect the actual baseline structure in plan.md.
+
+Plan.md must include (per `.claude/agents/experimenter.md` Phase 2 checklist):
+- Hypothesis (1 sentence) + why the harass-around-comet idea should help.
+- Scope: which files under `backend/pipeline/rulebase/case2/` will be added/changed (prefer adding `policy_harass.py` rather than rewriting `policy.py` in-place, to preserve a comparable baseline).
+- Implementation steps: short numbered list with file paths.
+- Local validation: pytest paths under `backend/tests/pipeline/rulebase/case2/` (confirm what exists; add new test file path if needed).
+- Remote training: rulebase は学習なしなので Vast 不要。明示的に「Vast.ai は使用しない (rule-based, no training)」と書く。
+- Evaluation: opponent (case2 baseline 必須、case4/case5 や LB1224 ベースラインも候補)、episode count ≥300 (memory `project_imitation_case1_phase3` の知見に従い fragile claim は 300 戦)、primary metric は 1v1 win-rate uplift、threshold (例: +3pp 以上 with 統計的有意性確認)。
+- Risks / known unknowns: harass による自軍 ship 浪費、comet タイミング外での誤発火、case2 ablation メモ (`project_case2_ablation`) で Harass+HALF_STEP は 300戦 +3.7pp 非有意だった件への言及。
+
+Non-goals (do NOT do these in this invocation):
+- Do NOT implement any code under backend/pipeline/rulebase/case2/.
+- Do NOT run `dev/test-backend` or any pytest.
+- Do NOT push to remote.
+- Do NOT launch `dev/vast train`.
+- Do NOT submit to Kaggle, do NOT run `dev/vast promote`.
+- Do NOT create result.md or iterN_*.md (this is iter1 starting fresh; plain plan.md is appropriate).
+
+What to return to the main session:
+1. Absolute path of the plan.md you wrote.
+2. A 3-5 line Japanese summary of the hypothesis + scope + evaluation plan so the user can review without opening the file.
+3. An explicit "次のステップ" line: 「plan.md レビュー OK が出たら Phase 3 (実装) に進む。Vast は不要、ローカル評価のみ」。
+
+Language: 全てのユーザー向け出力は日本語で。

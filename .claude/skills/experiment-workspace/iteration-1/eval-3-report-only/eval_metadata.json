@@ -1,0 +1,13 @@
+{
+  "eval_id": 3,
+  "eval_name": "report-only-vast-run-writeup",
+  "prompt": "さっき vast.ai で回した run_20260501_abc123 の結果を docs にまとめてほしい。imitation/case1 の iter4 として記録したい。",
+  "assertions": [
+    {"text": "Skips Phase 1 hypothesis questions and Phase 2 git status checks (no need for them in report-only mode)", "type": "qualitative"},
+    {"text": "Agent handoff prompt is in eval/report-only mode with run_id=run_20260501_abc123, family=imitation, case=case1, iter=iter4", "type": "qualitative"},
+    {"text": "Plans to use dev/vast pull <run_id> to fetch artifacts before evaluation", "type": "qualitative"},
+    {"text": "Uses iter4_result.md naming (not new directory) under the existing experiment directory", "type": "qualitative"},
+    {"text": "Mentions that local match outcomes (>=300 episodes for fragile claims) are the success metric, NOT Kaggle publicScore", "type": "qualitative"},
+    {"text": "User-facing output is in Japanese", "type": "qualitative"}
+  ]
+}

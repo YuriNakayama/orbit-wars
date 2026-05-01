@@ -1,0 +1,39 @@
+{
+  "expectations": [
+    {
+      "text": "Skill recognizes scope = plan.md only and skips the Vast.ai confirmation question entirely",
+      "passed": true,
+      "evidence": "実装と Vast.ai 起動はまだ行わず、レビュー用の plan.md のみに絞ります。... rulebase/case2 は学習を伴わないため Vast.ai は使わない。ローカル selfplay のみで評価する。 — no Vast.ai confirmation question is asked"
+    },
+    {
+      "text": "Agent handoff prompt includes explicit non-goals: 'do not implement code', 'do not run dev/vast train'",
+      "passed": false,
+      "evidence": "Output is a direct response to the user (not an agent handoff prompt). It states '実装と Vast.ai 起動はまだ行わず' and 'plan.md の段階では `backend/pipeline/rulebase/case2/` には触りません', but there is no explicit handoff prompt to a sub-agent listing non-goals like 'do not implement code' / 'do not run dev/vast train'."
+    },
+    {
+      "text": "Recognizes this is a new experiment under rulebase family (extending case2, not making case3)",
+      "passed": true,
+      "evidence": "ディレクトリ名: `{yyyymmdd}_case{N}_{topic}` = `20260501_case2_harass_comet`(今日 2026-05-01、case2、topic は harass_comet) — uses case2, not case3"
+    },
+    {
+      "text": "Uses correct docs path docs/experiment/rulebase/{yyyymmdd}_case2_<topic>/plan.md",
+      "passed": true,
+      "evidence": "パス: `docs/experiment/rulebase/20260501_case2_harass_comet/plan.md`"
+    },
+    {
+      "text": "Does NOT propose running dev/vast train, dev/test-backend, or any code edits in the case directory",
+      "passed": false,
+      "evidence": "次のアクション lists '2. 実装(`backend/pipeline/rulebase/case2/baseline/missions/harass.py` ほか)' and '3. `dev/test-backend` でローカル検証' as future steps after review approval. While gated behind review-OK, dev/test-backend and case-directory code edits are explicitly proposed in the rollout plan."
+    },
+    {
+      "text": "User-facing output is in Japanese",
+      "passed": true,
+      "evidence": "了解しました。`rulebase/case2` をベースに harass policy を加えて comet 周辺で挑発する新しい実験の plan.md を作成します。 — entire response is in Japanese"
+    }
+  ],
+  "summary": {
+    "pass_rate": 0.6666666666666666,
+    "passed": 4,
+    "total": 6
+  }
+}

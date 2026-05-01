@@ -1,0 +1,44 @@
+{
+  "expectations": [
+    {
+      "text": "Skill flow is invoked: response references the experiment skill or experimenter agent by name (or shows the agent handoff prompt structure)",
+      "passed": true,
+      "evidence": "response.md: 'Simulated Main-Session Response (`experiment` skill loaded)' and 'Phase 3 — Hand off to the `experimenter` agent' with `subagent_type: \"experimenter\"`."
+    },
+    {
+      "text": "Asks at most 1-2 clarifying questions before delegating (Phase 1 budget)",
+      "passed": true,
+      "evidence": "Phase 1 contains a single `AskUserQuestion` ('質問 1: Vast.ai GPU 学習の opt-in と評価規模') with options A–D — exactly 1 question."
+    },
+    {
+      "text": "Runs git status / branch check before any Vast launch (Phase 2 reality check)",
+      "passed": true,
+      "evidence": "Phase 2 lists 'git status --short', 'git rev-parse --abbrev-ref HEAD', 'git rev-parse --short HEAD' before any `dev/vast train` call."
+    },
+    {
+      "text": "Confirms Vast.ai GPU spend with the user before launching (risk gate)",
+      "passed": true,
+      "evidence": "Phase 1 question explicitly notes 'Vast.ai の GPU 学習 (~$0.5–1.5 / 1 run, ETA 30–90 分想定)' and option C is 'Vast 学習はスキップ'; handoff says 'User has pre-approved the GPU spend for this single launch.'"
+    },
+    {
+      "text": "Includes branch+SHA, family=imitation, case=case1, hypothesis verbatim, and explicit non-goals (no Kaggle submit, no dev/vast promote) in the agent handoff prompt",
+      "passed": true,
+      "evidence": "Handoff prompt: 'Branch: feature/reinforcement-learning-conversion / HEAD SHA: 057b19c', 'Family: imitation / Case: existing case1', verbatim Japanese hypothesis quoted, and Non-goals section explicitly lists 'Do NOT submit to Kaggle' and 'Do NOT run `dev/vast promote <run_id>`'."
+    },
+    {
+      "text": "Uses correct docs path scheme docs/experiment/imitation/{yyyymmdd}_case1_<topic>/iterN_*.md or plan.md",
+      "passed": true,
+      "evidence": "'Use `docs/experiment/imitation/20260501_case1_dropout_sweep/plan.md`' — matches yyyymmdd_caseN_<topic>/plan.md scheme."
+    },
+    {
+      "text": "User-facing output is in Japanese",
+      "passed": true,
+      "evidence": "response.md user-facing sections in Japanese ('内部推論は英語、ユーザー向け出力は日本語で行います', '質問 1', '`git status` に `.gitignore` の未コミット変更が 1 件あります...')."
+    }
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 7,
+    "total": 7
+  }
+}

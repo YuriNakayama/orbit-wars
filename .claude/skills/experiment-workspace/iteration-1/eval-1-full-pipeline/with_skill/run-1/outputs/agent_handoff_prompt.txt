@@ -1,0 +1,97 @@
+User wants to run an experiment iterating on imitation/case1.
+
+Hypothesis (verbatim from user, Japanese):
+  「imitation/case1 で dropout を 0.2 から 0.3 に上げて再学習する実験をやりたい。
+   LB1235 baseline 相手の win-rate 改善を狙う。plan.md を書いてコードを変更し、
+   ローカルで pytest を回してから vast.ai で学習を走らせて、結果を result.md
+   にまとめてほしい。」
+
+Translated success metric: dropout 0.2 → 0.3 で imitation/case1 のモデルを再学習し、
+LB1235 baseline 相手の self-play win-rate がベースライン (現行 dropout 0.2 の最新
+チェックポイント) に対し有意に改善することを示す。
+
+Scope confirmed in main session (Phase 1):
+- Family: imitation
+- Case: existing case1 (extend, do NOT create a new case)
+- Compute target: full pipeline including Vast.ai GPU training
+- Evaluation: LB1235 baseline 相手, 300 エピソード (n<300 は noise というプロジェクト
+  ルールに従う)
+- New module-or-edit-in-place: prefer adding a new training config / module
+  (e.g. `training/config_dropout03.yaml` or `policy_v2.py`) so the dropout=0.2
+  baseline remains comparable. Do NOT silently rewrite the existing 0.2 config.
+
+Branch / commit context (from Phase 2):
+- Branch: feature/reinforcement-learning-conversion
+- HEAD SHA: 057b19c
+- Working tree: dirty (.gitignore has 1 uncommitted change). User authorized
+  committing the .gitignore change as part of your push-before-vast step.
+  If the change is unrelated to this experiment, give it its own commit
+  (e.g. ":wrench: gitignore tweak") separate from the dropout-experiment commit.
+
+Experiment directory naming (per `.claude/rules/docs.md` and your Phase 2):
+- Today's date: 20260501 (use this, do NOT call `date`).
+- Use `docs/experiment/imitation/20260501_case1_dropout_sweep/plan.md`.
+- This is the first iteration of this hypothesis directory, so plain
+  `plan.md` / `result.md` (no `iter1_` prefix) is fine. Only switch to
+  `iterN_*.md` if you discover an existing directory for the same hypothesis.
+
+Plan.md must include (see your Phase 2 spec):
+- Hypothesis: dropout 0.2 → 0.3, target = improved win-rate vs LB1235.
+- Scope: which files under backend/pipeline/imitation/case1/ change
+  (config / training script). Confirm rules/backend/pipeline.md compliance
+  (relative imports, .submitignore, agents.py registration unchanged for
+  existing case).
+- Implementation steps with explicit paths.
+- Local validation: list pytest paths covering case1.
+- Remote training: stage `train_imitation_case1`, expected duration,
+  checkpoint path under `data/output/models/imitation/case1/runs/<run_id>/best.pt`.
+- Evaluation: vs LB1235, 300 episodes, primary metric win-rate, decision threshold
+  (e.g. ≥ +3pp absolute over current 0.2 baseline, with confidence note that even
+  300 episodes carries seed variance — see project memory
+  `project_imitation_case1_phase3` and `project_case2_ablation`).
+- Risks: dropout 0.3 may underfit on small imitation dataset; evaluation seed
+  variance; LB1235 opponent-pool drift (intra-baseline only — do NOT cite
+  Kaggle publicScore as evidence per project rule).
+
+Phases to execute (your standard workflow):
+- Phase 2: write plan.md.
+- Phase 3: implement (prefer additive new config/module), `dev/test-backend`
+  must pass before Phase 4. If it fails for an unrelated lint/type reason,
+  delegate to `python-build-resolver` via Task; do not bypass.
+- Phase 4: commit (.gitignore in its own commit, experiment changes in another),
+  push to origin, then `dev/vast train 057b19c... --stage train_imitation_case1`
+  (use the SHA you actually push, not 057b19c if you added new commits on top —
+  capture the new SHA after push). User has pre-approved the GPU spend for this
+  single launch.
+- Phase 5: capture run_id, surface ETA to the main session, then return control.
+  Do NOT busy-wait in this run.
+- Phase 6: after the run, `dev/vast pull <run_id>`, run case1 evaluation script
+  vs LB1235 for 300 episodes, write `docs/experiment/imitation/20260501_case1_dropout_sweep/result.md`
+  with the result.md sections from your spec (Summary / Numbers / Diagnosis /
+  Decision / Artifacts).
+
+Non-goals (explicit):
+- Do NOT submit to Kaggle. (`dev/submit submit`, `kaggle competitions submit`,
+  cd-kaggle-submit workflow_dispatch all out of scope.)
+- Do NOT run `dev/vast promote <run_id>`. Even if the result is great,
+  promotion requires a separate explicit user approval.
+- Do NOT cite Kaggle publicScore or skill rating as evidence in result.md;
+  use only local match outcomes (project rule).
+- Do NOT create a new case directory. Extend imitation/case1.
+- Do NOT delete or rewrite the existing dropout 0.2 baseline config in place;
+  add a new config alongside so the comparison stays clean.
+- Do NOT touch `policy/weights.pt`. Vast artifacts go under data/output and
+  are DVC-tracked; do not commit binary weights to git.
+
+Return to the main session:
+- Path of `plan.md`.
+- Summary of code changes (files added/edited).
+- `dev/test-backend` pass/fail summary (and SHA at which it passed).
+- Pushed commit SHA.
+- Vast `run_id`, stage, start time, rough ETA.
+- One-paragraph next-step recommendation (e.g. "ETA ~50min, ping me on
+  wakeup or call me back when run completes; I will then pull artifacts,
+  run 300-ep eval vs LB1235, and write result.md").
+
+Language: write all user-facing output (the messages you surface back to me)
+in Japanese, per project policy.
