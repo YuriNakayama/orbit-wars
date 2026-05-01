@@ -102,9 +102,7 @@ def test_train_happy_path(
     sdk = MagicMock()
     monkeypatch.setattr("vast.cli._build_sdk", lambda _key: sdk)
     monkeypatch.setattr("vast.cli.list_volumes", lambda _sdk: [])
-    monkeypatch.setattr(
-        "vast.cli.search_offers", lambda _sdk, **_kwargs: [mock_offer]
-    )
+    monkeypatch.setattr("vast.cli.search_offers", lambda _sdk, **_kwargs: [mock_offer])
     monkeypatch.setattr("vast.cli.pick_offer", lambda offers, console=None: offers[0])
     monkeypatch.setattr(
         "vast.cli.create_instance",

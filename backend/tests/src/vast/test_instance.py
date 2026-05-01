@@ -16,8 +16,9 @@ from vast.instance import (
     render_onstart,
 )
 
-# テンプレ実体は src/vast/onstart.sh.tmpl
-TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "src/vast/onstart.sh.tmpl"
+# テンプレ実体は backend/src/vast/onstart.sh.tmpl
+# (this file: backend/tests/src/vast/test_instance.py → parents[3] = backend/)
+TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "src/vast/onstart.sh.tmpl"
 
 
 def _valid_kwargs() -> dict[str, str]:
