@@ -23,6 +23,7 @@ from dataset.kaggle.types import ScrapeSpec
 from dataset.selfplay import report
 from dataset.selfplay.runner import RunSpec, run_episodes
 from dataset.storage import loader
+from utils.repo_root import absolute_under_repo
 
 app = typer.Typer(add_completion=False, help="Orbit Wars dataset CLI.")
 kaggle_app = typer.Typer(add_completion=False, help="Kaggle episode scraper.")
@@ -30,8 +31,13 @@ app.add_typer(kaggle_app, name="kaggle")
 
 console = Console()
 
-DEFAULT_DATA_ROOT = Path("data/lake/selfplay")
-DEFAULT_KAGGLE_ROOT = Path("data/lake/kaggle_episodes")
+# Anchor defaults to the repo root so `uv run --directory backend ...` does not
+# silently write to `backend/data/...`. CWD-relative overrides via `--data-root`
+# still work (typer keeps the user-supplied path unchanged).
+DEFAULT_DATA_ROOT = absolute_under_repo("data/lake/selfplay", start=Path(__file__))
+DEFAULT_KAGGLE_ROOT = absolute_under_repo(
+    "data/lake/kaggle_episodes", start=Path(__file__)
+)
 
 
 def _parse_agents(value: str) -> tuple[str, ...]:
