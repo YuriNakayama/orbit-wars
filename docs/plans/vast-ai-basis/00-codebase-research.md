@@ -55,7 +55,7 @@
   - 関数は純粋（cfg in / report out）。state は `train_loader` 経由でしか持たない。
   - `_abspath()` でリポジトリルート解決 → どこから呼んでも壊れない。
 - **Coupling & side effects**:
-  - 出力先は `params.yaml: train.weights_out` で完全に決まる。Vast 側で別パス `artifacts/models/imitation/case1/runs/<run_id>/best.pt` に書く場合、`params.yaml` を上書きするか、`train()` に override パラメータを渡す形が必要。
+  - 出力先は `params.yaml: train.weights_out` で完全に決まる。Vast 側で別パス `data/output/models/imitation/case1/runs/<run_id>/best.pt` に書く場合、`params.yaml` を上書きするか、`train()` に override パラメータを渡す形が必要。
   - `weights.pt` のパスは `policy/agent.py` の `_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights.pt"` でハードコード参照されており、Kaggle submit 時の正本になっている。
 - **Test coverage**:
   - `backend/tests/pipeline/imitation/case1/training/` に collate / loss / determinism テスト。
@@ -72,7 +72,7 @@
   - `submit_cmd` の **Step 0** で `ensure_dvc_artifacts(case_dir)` を必ず呼び、`dvc.yaml` の outs から case_dir 配下の欠損ファイルだけを抽出して `uv run --directory backend dvc pull <rels>` を実行。
   - 該当パスは現在 `pipeline/imitation/case1/policy/weights.pt` 1 個 (preprocess の出力 parquet は case_dir 外なので対象外)。
 - **接続戦略**: Vast 学習で生成された候補 weights を「採用」するときは、まず `dvc pull` で **DVC 経由のローカル復元** を行い、その後 `dev/promote-weights` 等で `policy/weights.pt` にコピー → submit 時は ensure_dvc_artifacts が変更検知して整合性をチェックする、という運用が可能。
-- **Gap**: candidate run dir (`artifacts/models/imitation/case1/runs/<run_id>/best.pt`) は **submit パッケージに含まれない**（policy/ 配下のみ tar.gz に同梱）。Vast → submit 直結はできず、必ず昇格ステップを経由する設計が前提となる。
+- **Gap**: candidate run dir (`data/output/models/imitation/case1/runs/<run_id>/best.pt`) は **submit パッケージに含まれない**（policy/ 配下のみ tar.gz に同梱）。Vast → submit 直結はできず、必ず昇格ステップを経由する設計が前提となる。
 
 ### Area 3: Submit パイプラインと weights.pt の正本性
 
@@ -92,11 +92,11 @@
   - canonical model = `policy/weights.pt` という単一固定パス。
   - 候補モデルとの差は「採用したら policy/ にコピーする」運用。
 - **Coupling & side effects**:
-  - 任意の Vast 学習 run が直接 `policy/weights.pt` を上書きすると、**未検証モデルで Kaggle に submit してしまうリスク**。「Vast は候補ディレクトリ `artifacts/models/.../runs/<run_id>/best.pt` に書き、採用後に手動で `policy/weights.pt` に昇格」という分離が必要。
+  - 任意の Vast 学習 run が直接 `policy/weights.pt` を上書きすると、**未検証モデルで Kaggle に submit してしまうリスク**。「Vast は候補ディレクトリ `data/output/models/.../runs/<run_id>/best.pt` に書き、採用後に手動で `policy/weights.pt` に昇格」という分離が必要。
 - **Test coverage**:
   - 提出パッケージング / 相対 import / `Path.cwd()` の挙動は dry-run でカバー。weights.pt の差し替え経路自体はテスト無し。
 - **Gaps identified**:
-  - 「候補 weights を保存するディレクトリ」が DVC stage out に未定義。新しい stage out (例: `artifacts/models/imitation/case1/runs/<run_id>/`) を `dvc.yaml` に追加すると、`dvc.yaml` の stage 構造を大きく変える必要がある（後述の検討事項）。
+  - 「候補 weights を保存するディレクトリ」が DVC stage out に未定義。新しい stage out (例: `data/output/models/imitation/case1/runs/<run_id>/`) を `dvc.yaml` に追加すると、`dvc.yaml` の stage 構造を大きく変える必要がある（後述の検討事項）。
   - 採用フローを CLI 化する余地（例: `dev/promote-weights <run_id>` で run dir → policy/weights.pt をコピー）。
 
 ### Area 4: AWS / Terraform / DVC remote
@@ -147,7 +147,7 @@
   - 既存 `training.config` (YAML path) → 新 `params_hash` (params.yaml の hash) と `git_sha`
   - 既存 `vs_baseline_v1_100ep` → 新フォーマットの `local_eval_results`（同等構造を保持）
   - 既存 `iter` フィールド → 新 `run_id` の suffix にエイリアスとして含める設計が可能（手動運用との混在期に有用）
-- **方針**: 旧 iter6〜iter15 の summary はそのまま残置。新 Vast run は別命名空間 (`docs/experiment/<run_id>.json` または `artifacts/.../runs/<run_id>/run.json` を正本) で管理し、iter 番号は付けない。
+- **方針**: 旧 iter6〜iter15 の summary はそのまま残置。新 Vast run は別命名空間 (`docs/experiment/<run_id>.json` または `data/output/.../runs/<run_id>/run.json` を正本) で管理し、iter 番号は付けない。
 
 ### Area 6: docs/experiment / docs/plans の運用
 
@@ -160,7 +160,7 @@
 - **Patterns used**:
   - 学習成果物は 1 iter ごとに `policy/weights_iter*.pt` (git 管理) として保存し、`docs/experiment/imitation_case1_iter*_summary.json` で対応付け。
 - **Gaps identified**:
-  - `weights_iter*.pt` を **git にコミット** している既存運用と、新方針「DVC 管理の `artifacts/models/.../runs/<run_id>/best.pt`」がコンフリクト。移行方針の明示が必要（既存 iter9〜iter15 はそのまま git 残置、新規 run のみ DVC 経路）。
+  - `weights_iter*.pt` を **git にコミット** している既存運用と、新方針「DVC 管理の `data/output/models/.../runs/<run_id>/best.pt`」がコンフリクト。移行方針の明示が必要（既存 iter9〜iter15 はそのまま git 残置、新規 run のみ DVC 経路）。
 
 ## Technical Constraints
 
@@ -176,7 +176,7 @@
 
 直接 feature 設計に効く findings：
 
-- **canonical 単一パス問題**: `policy/weights.pt` は git untracked + DVC 管理 + Kaggle submit の正本という三役を兼ねている。Vast 学習の出力先は別ディレクトリ (`artifacts/models/imitation/case1/runs/<run_id>/best.pt`) に分離し、採用時のみ昇格する方針が安全。
+- **canonical 単一パス問題**: `policy/weights.pt` は git untracked + DVC 管理 + Kaggle submit の正本という三役を兼ねている。Vast 学習の出力先は別ディレクトリ (`data/output/models/imitation/case1/runs/<run_id>/best.pt`) に分離し、採用時のみ昇格する方針が安全。
 - **train.py の GPU 対応**: `device` 引数の追加と batch/model `.to(device)` の埋め込みが必須。CUDA seed 設定 (`torch.cuda.manual_seed_all`) と `pin_memory=True` も合わせて入れる。
 - **DVC stage 拡張の選択肢**: 「`train_imitation_case1` の outs に run dir を追加する」 vs 「DVC 管理外の独立アーティファクト保存パスを作る」 の 2 択。前者は DVC のハッシュ駆動再実行と整合するが `dvc.yaml` 改修が大きい。後者は実装が薄いが run の lineage が DVC で追えない。要決定事項。
 - **新規 stage `train_imitation_case1_run` を分岐**: 現状の `train_imitation_case1` (canonical weights.pt 出力) は維持し、Vast での候補生成は別 stage または直接 `python -m` で走らせ run dir に書く、という三本立ても候補。
