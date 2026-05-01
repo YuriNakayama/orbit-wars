@@ -143,7 +143,7 @@ You: this needs a read of remote vs local. Run `backend/.venv/bin/dvc status --c
 ## Failure modes to handle
 
 - **`dvc: command not found`** — fall back to `uv run --directory backend dvc ...`. If that also fails, tell the user `dev/setup` (uv sync) is needed.
-- **`Unable to locate credentials`** — point the user at `dev/dvc-setup` to wire up the AWS profile and `~/.aws/credentials`.
+- **`Unable to locate credentials`** — point the user at `dev/dvc setup` to wire up the AWS profile and `~/.aws/credentials`.
 - **`failed to commit - ... is outside of git repository`** — the worktree's `data/` is still a symlink to the main repo. Suggest the migration steps documented in `docs/plans/dvc-data-control/03-architecture.md` rather than improvising.
 - **lock contention** (`Unable to acquire lock`) — another DVC process (probably another worktree) is running. Don't retry blindly; tell the user, suggest waiting or `ps -ef | grep dvc`.
 

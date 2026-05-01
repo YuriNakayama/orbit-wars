@@ -4,17 +4,11 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) competition 
 
 ## Agent Pipeline
 
-```
-observation (planets, fleets, comets, player, ...)
-  ↓
-Feature Extraction    (orbit prediction / threat assessment / production potential)
-  ↓
-Policy                (rule-based / learned model)
-  ↓
-Action Selection      [[from_planet_id, angle, num_ships], ...]
-  ↓
-kaggle_environments   env.step()
-```
+1. observation (planets, fleets, comets, player, ...)
+2. Feature Extraction (orbit prediction / threat assessment / production potential)
+3. Policy (rule-based / learned model)
+4. Action Selection [[from_planet_id, angle, num_ships], ...]
+5. kaggle_environments env.step()
 
 ## Technology Stack
 
@@ -66,9 +60,9 @@ docs/
 
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
-| `.claude/rules/python.md` | `**/*.py`, `**/*.ipynb` | Python language general rules (General Principles, Type Hints, Numerics, Async, Logging, Lint, Notebooks, Code Quality Checklist) and `backend/src/**` Module Architecture / Module Design Principles |
-| `.claude/rules/backend/pipeline.md` | `backend/pipeline/**` | Submit structure for case directories (main.py + relative imports + sys.path) |
-| `.claude/rules/backend/tests.md` | `backend/tests/**` | Pytest conventions (AAA, Fixtures, TDD, coverage 80%) |
+| `.claude/rules/python.md` | `**/*.py`, `**/*.ipynb` | Python language general rules |
+| `.claude/rules/backend/pipeline.md` | `backend/pipeline/**` | Submit structure for case directories |
+| `.claude/rules/backend/tests.md` | `backend/tests/**` | Pytest conventions |
 | `.claude/rules/infra.md` | `infra/**` | Terraform / cloud infrastructure (AWS, etc.) |
 | `.claude/rules/data.md` | `data/**` | data/ 4-layer structure (lake/processed/mart/output), DVC management, worktree symlink rules |
 | `.claude/rules/command.md` | `dev/**` | Command catalog (`dev/*`, DVC, Vast.ai, Kaggle submission policy). Read on demand when running commands |
