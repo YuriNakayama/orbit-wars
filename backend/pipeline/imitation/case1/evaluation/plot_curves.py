@@ -1,22 +1,33 @@
-"""Plot training curves for imitation/case1 best iter (iter6, canonical)."""
+"""Plot training curves for imitation/case1 best iter (iter6, canonical).
+
+Reads JSON-line training logs and emits a 2x2 PNG of loss + per-head accuracy.
+case1-specific diagnostic: plot title and head names assume the case1 schema
+(`val_from_acc`, `val_target_acc`, `val_ships_acc`).
+
+Usage:
+    uv run python -m pipeline.imitation.case1.evaluation.plot_curves \\
+        --log /tmp/train_iter6.log --out data/output/experiment/curves.png
+"""
 
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
+from typing import Any
 
-import matplotlib.pyplot as plt
+import typer
 
-LOG_PATH = Path("/tmp/train_iter6.log")
-LABEL = "iter6 (focal α=0.25, canonical)"
+DEFAULT_LOG = Path("/tmp/train_iter6.log")
+DEFAULT_OUT = Path("data/output/experiment/imitation_case1_learning_curves.png")
+DEFAULT_LABEL = "iter6 (focal α=0.25, canonical)"
 COLOR = "#1f77b4"
 
 JSON_RE = re.compile(r"(\{.*\})\s*$")
 
 
-def parse_log(path: Path) -> list[dict[str, float]]:
-    rows: list[dict[str, float]] = []
+def parse_log(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for line in path.read_text().splitlines():
         m = JSON_RE.search(line)
         if not m:
@@ -26,8 +37,10 @@ def parse_log(path: Path) -> list[dict[str, float]]:
     return rows
 
 
-def main() -> None:
-    rows = parse_log(LOG_PATH)
+def render(log: Path, out: Path, label: str) -> tuple[Path, dict[str, float]]:
+    import matplotlib.pyplot as plt
+
+    rows = parse_log(log)
     epochs = [r["epoch"] for r in rows]
 
     best_idx = min(range(len(rows)), key=lambda i: rows[i]["val_total"])
@@ -116,20 +129,34 @@ def main() -> None:
     ax_ships.legend(fontsize=9, loc="lower right")
 
     fig.suptitle(
-        f"imitation/case1 — {LABEL} (vs baseline_v1: 0/100)",
+        f"imitation/case1 — {label} (vs baseline_v1: 0/100)",
         fontsize=13,
     )
     fig.tight_layout()
 
-    out = Path("data/output/experiment/imitation_case1_learning_curves.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=120, bbox_inches="tight")
-    print(f"saved: {out}")
-    print(f"best epoch={best['epoch']}  val_total={best['val_total']:.4f}")
-    print(
-        f"  from_acc={best['val_from_acc']:.4f}  target_acc={best['val_target_acc']:.4f}  ships_acc={best['val_ships_acc']:.4f}"
+    return out, best
+
+
+app = typer.Typer(add_completion=False, help=__doc__)
+
+
+@app.command()
+def main(
+    log: Path = typer.Option(DEFAULT_LOG, "--log", "-l"),  # noqa: B008
+    out: Path = typer.Option(DEFAULT_OUT, "--out", "-o"),  # noqa: B008
+    label: str = typer.Option(DEFAULT_LABEL, "--label"),
+) -> None:
+    out_path, best = render(log, out, label)
+    typer.echo(f"saved: {out_path}")
+    typer.echo(
+        f"best epoch={best['epoch']}  val_total={best['val_total']:.4f}  "
+        f"from_acc={best['val_from_acc']:.4f}  "
+        f"target_acc={best['val_target_acc']:.4f}  "
+        f"ships_acc={best['val_ships_acc']:.4f}"
     )
 
 
 if __name__ == "__main__":
-    main()
+    app()

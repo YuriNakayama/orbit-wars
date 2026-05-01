@@ -1,20 +1,25 @@
 """Compute F1 / PR-AUC / ROC-AUC for imitation/case1 saved weights on val set.
 
 Runs inference once over val.parquet with the current weights.pt and emits a
-rich metric report (accuracy, F1, PR-AUC, ROC-AUC, per-class F1, confusion
-matrix, prediction distribution) alongside the training-time accuracies.
+rich metric report alongside the training-time accuracies. case1-specific
+diagnostic: pulls in case1's DeepSetsPolicy + CaseThreeDataset directly.
 
-Does not modify training code.
+Usage:
+    uv run python -m pipeline.imitation.case1.evaluation.diagnose_weights \\
+        --weights pipeline/imitation/case1/policy/weights.pt \\
+        --report data/output/experiment/imitation_case1_val_metrics.json
 """
 
 from __future__ import annotations
 
-import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
+import typer
 import yaml
 from sklearn.metrics import (
     average_precision_score,
@@ -34,24 +39,17 @@ from pipeline.imitation.case1.training.dataset import (
     collate,
 )
 
-CONFIG_PATH = Path("pipeline/imitation/case1/configs/il_baseline.yaml")
-WEIGHTS_PATH = Path("pipeline/imitation/case1/policy/weights.pt")
-REPORT_PATH = Path("data/output/experiment/imitation_case1_val_metrics.json")
+DEFAULT_CONFIG = Path("pipeline/imitation/case1/configs/il_baseline.yaml")
+DEFAULT_WEIGHTS = Path("pipeline/imitation/case1/policy/weights.pt")
+DEFAULT_REPORT = Path("data/output/experiment/imitation_case1_val_metrics.json")
 SHIPS_BUCKETS = 4
 
 
-def _configure_paths(
-    weights: Path | None, report: Path | None, config: Path | None = None
-) -> None:
-    """Override module-level paths from CLI. Module globals are kept for
-    backwards compatibility with any importer that reads them directly."""
-    global WEIGHTS_PATH, REPORT_PATH, CONFIG_PATH
-    if weights is not None:
-        WEIGHTS_PATH = weights
-    if report is not None:
-        REPORT_PATH = report
-    if config is not None:
-        CONFIG_PATH = config
+@dataclass(frozen=True)
+class EvalConfig:
+    weights: Path
+    report: Path
+    config: Path
 
 
 def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
@@ -65,8 +63,8 @@ def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
     )
 
 
-def _load_model() -> DeepSetsPolicy:
-    cfg_yaml = yaml.safe_load(CONFIG_PATH.read_text())
+def _load_model(config: Path, weights: Path) -> DeepSetsPolicy:
+    cfg_yaml = yaml.safe_load(config.read_text())
     mcfg = cfg_yaml.get("model", {})
     model_cfg = ModelConfig(
         planet_in_dim=int(mcfg.get("planet_in_dim", 11)),
@@ -75,24 +73,28 @@ def _load_model() -> DeepSetsPolicy:
         ships_buckets=int(mcfg.get("ships_buckets", SHIPS_BUCKETS)),
     )
     model = DeepSetsPolicy(model_cfg)
-    state = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
+    state = torch.load(weights, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model
 
 
-def _gather_preds(model: DeepSetsPolicy, val_ds: CaseThreeDataset) -> dict:
-    loader = DataLoader(
-        val_ds, batch_size=256, shuffle=False, collate_fn=collate, num_workers=0
+def _gather_preds(
+    model: DeepSetsPolicy, val_ds: CaseThreeDataset
+) -> dict[str, np.ndarray]:
+    loader: DataLoader[BatchedSample] = DataLoader(
+        val_ds,  # type: ignore[arg-type]
+        batch_size=256,
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=0,
     )
 
     from_logits_all: list[np.ndarray] = []
     from_gt_all: list[np.ndarray] = []
     my_mask_all: list[np.ndarray] = []
-
     target_logits_all: list[np.ndarray] = []
     target_gt_all: list[np.ndarray] = []
-
     ships_logits_all: list[np.ndarray] = []
     ships_gt_all: list[np.ndarray] = []
 
@@ -126,7 +128,32 @@ def _gather_preds(model: DeepSetsPolicy, val_ds: CaseThreeDataset) -> dict:
     }
 
 
-def _from_metrics(data: dict) -> dict:
+def _softmax(x: np.ndarray) -> np.ndarray:
+    x = x - x.max(axis=-1, keepdims=True)
+    e = np.exp(x)
+    result: np.ndarray = e / e.sum(axis=-1, keepdims=True)
+    return result
+
+
+def _top_k_accuracy(logits: np.ndarray, gt: np.ndarray, k: int) -> float:
+    topk = np.argpartition(-logits, kth=k - 1, axis=-1)[:, :k]
+    match = (topk == gt[:, None]).any(axis=-1)
+    return float(match.mean())
+
+
+def _macro_ovr_pr_auc(gt: np.ndarray, probs: np.ndarray, labels: list[int]) -> float:
+    if len(labels) < 2:
+        return float("nan")
+    aps = []
+    for c in labels:
+        y = (gt == c).astype(int)
+        if y.sum() == 0 or y.sum() == len(y):
+            continue
+        aps.append(average_precision_score(y, probs[:, c]))
+    return float(np.mean(aps)) if aps else float("nan")
+
+
+def _from_metrics(data: dict[str, np.ndarray]) -> dict[str, Any]:
     logits = data["from_logits"]
     gt = data["from_gt"].astype(bool)
     valid = data["my_mask"].astype(bool)
@@ -184,8 +211,8 @@ def _from_metrics(data: dict) -> dict:
     }
 
 
-def _target_metrics(data: dict) -> dict:
-    logits = data["target_logits"]  # (N, NUM_TEMPLATES)
+def _target_metrics(data: dict[str, np.ndarray]) -> dict[str, Any]:
+    logits = data["target_logits"]
     gt = data["target_gt"]
     n = len(gt)
     if n == 0:
@@ -201,7 +228,7 @@ def _target_metrics(data: dict) -> dict:
         gt, pred, labels=list(range(NUM_TEMPLATES)), average=None, zero_division=0
     )
 
-    labels_present = sorted(set(int(x) for x in gt.tolist()))
+    labels_present = sorted({int(x) for x in gt.tolist()})
     try:
         rocauc_ovr = float(
             roc_auc_score(
@@ -212,9 +239,7 @@ def _target_metrics(data: dict) -> dict:
         rocauc_ovr = float("nan")
 
     prauc_macro = _macro_ovr_pr_auc(gt, probs, labels_present)
-
     top2 = _top_k_accuracy(logits, gt, k=2)
-
     cm = confusion_matrix(gt, pred, labels=list(range(NUM_TEMPLATES))).tolist()
 
     gt_dist = np.bincount(gt, minlength=NUM_TEMPLATES) / n
@@ -239,8 +264,8 @@ def _target_metrics(data: dict) -> dict:
     }
 
 
-def _ships_metrics(data: dict) -> dict:
-    logits = data["ships_logits"]  # (N, SHIPS_BUCKETS)
+def _ships_metrics(data: dict[str, np.ndarray]) -> dict[str, Any]:
+    logits = data["ships_logits"]
     gt = data["ships_gt"]
     n = len(gt)
     if n == 0:
@@ -256,7 +281,7 @@ def _ships_metrics(data: dict) -> dict:
     )
     mae_bucket = float(np.abs(pred.astype(int) - gt.astype(int)).mean())
 
-    labels_present = sorted(set(int(x) for x in gt.tolist()))
+    labels_present = sorted({int(x) for x in gt.tolist()})
     try:
         rocauc_ovr = float(
             roc_auc_score(
@@ -286,53 +311,7 @@ def _ships_metrics(data: dict) -> dict:
     }
 
 
-def _softmax(x: np.ndarray) -> np.ndarray:
-    x = x - x.max(axis=-1, keepdims=True)
-    e = np.exp(x)
-    return e / e.sum(axis=-1, keepdims=True)
-
-
-def _top_k_accuracy(logits: np.ndarray, gt: np.ndarray, k: int) -> float:
-    topk = np.argpartition(-logits, kth=k - 1, axis=-1)[:, :k]
-    match = (topk == gt[:, None]).any(axis=-1)
-    return float(match.mean())
-
-
-def _macro_ovr_pr_auc(gt: np.ndarray, probs: np.ndarray, labels: list[int]) -> float:
-    if len(labels) < 2:
-        return float("nan")
-    aps = []
-    for c in labels:
-        y = (gt == c).astype(int)
-        if y.sum() == 0 or y.sum() == len(y):
-            continue
-        aps.append(average_precision_score(y, probs[:, c]))
-    return float(np.mean(aps)) if aps else float("nan")
-
-
-def main() -> None:
-    cfg_yaml = yaml.safe_load(CONFIG_PATH.read_text())
-    val_parquet = Path(cfg_yaml["data"]["out_val"])
-    val_ds = CaseThreeDataset(val_parquet)
-    model = _load_model()
-    preds = _gather_preds(model, val_ds)
-
-    report = {
-        "weights": str(WEIGHTS_PATH),
-        "val_parquet": str(val_parquet),
-        "n_frames": int(len(val_ds)),
-        "from_head": _from_metrics(preds),
-        "target_head": _target_metrics(preds),
-        "ships_head": _ships_metrics(preds),
-    }
-
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(report, indent=2))
-    print(f"saved: {REPORT_PATH}")
-    print(json.dumps(_summary(report), indent=2))
-
-
-def _summary(report: dict) -> dict:
+def _summary(report: dict[str, Any]) -> dict[str, Any]:
     f = report["from_head"]
     t = report["target_head"]
     s = report["ships_head"]
@@ -362,11 +341,41 @@ def _summary(report: dict) -> dict:
     }
 
 
+def run(cfg: EvalConfig) -> dict[str, Any]:
+    cfg_yaml = yaml.safe_load(cfg.config.read_text())
+    val_parquet = Path(cfg_yaml["data"]["out_val"])
+    val_ds = CaseThreeDataset(val_parquet)
+    model = _load_model(cfg.config, cfg.weights)
+    preds = _gather_preds(model, val_ds)
+
+    report: dict[str, Any] = {
+        "weights": str(cfg.weights),
+        "val_parquet": str(val_parquet),
+        "n_frames": int(len(val_ds)),
+        "from_head": _from_metrics(preds),
+        "target_head": _target_metrics(preds),
+        "ships_head": _ships_metrics(preds),
+    }
+
+    cfg.report.parent.mkdir(parents=True, exist_ok=True)
+    cfg.report.write_text(json.dumps(report, indent=2))
+    return report
+
+
+app = typer.Typer(add_completion=False, help=__doc__)
+
+
+@app.command()
+def main(
+    weights: Path = typer.Option(DEFAULT_WEIGHTS, "--weights", "-w"),  # noqa: B008
+    report: Path = typer.Option(DEFAULT_REPORT, "--report", "-r"),  # noqa: B008
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),  # noqa: B008
+) -> None:
+    cfg = EvalConfig(weights=weights, report=report, config=config)
+    report_data = run(cfg)
+    typer.echo(f"saved: {cfg.report}")
+    typer.echo(json.dumps(_summary(report_data), indent=2))
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", type=Path, default=None)
-    parser.add_argument("--report", type=Path, default=None)
-    parser.add_argument("--config", type=Path, default=None)
-    args = parser.parse_args()
-    _configure_paths(args.weights, args.report, args.config)
-    main()
+    app()

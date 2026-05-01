@@ -32,6 +32,7 @@ from pipeline.imitation.case1.policy.templates import (
     T_NO_OP,
     classify_actual_target,
 )
+from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -283,17 +284,11 @@ def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
 
 
 def _repo_root() -> Path:
-    """Locate the repository root (parent of `backend/`)."""
-    here = Path(__file__).resolve()
-    for p in here.parents:
-        if (p / "backend").is_dir() and (p / ".git").exists():
-            return p
-    raise RuntimeError("repo root not found from " + str(here))
+    return find_repo_root(Path(__file__))
 
 
 def _abspath(rel: str | Path) -> Path:
-    p = Path(rel)
-    return p if p.is_absolute() else (_repo_root() / p).resolve()
+    return absolute_under_repo(rel, start=Path(__file__))
 
 
 def _duplicate_minority_frames(

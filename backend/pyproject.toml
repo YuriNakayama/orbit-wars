@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/submit", "src/dataset", "src/vast", "pipeline"]
+packages = ["src/submit", "src/dataset", "src/vast", "src/evaluation", "src/utils", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -92,12 +92,16 @@ unfixable = []
 max-complexity = 5
 
 [tool.ruff.lint.per-file-ignores]
-"pipeline/rulebase/case1/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/rulebase/case1/evaluation/**/*.py" = ["B008"]
-"pipeline/imitation/case1/policy/geometry.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/imitation/case1/training/preprocess.py" = ["B008"]
 "pipeline/imitation/case1/training/train.py" = ["B008"]
 "pipeline/imitation/case1/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case2/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case2/training/train.py" = ["B008"]
+"pipeline/imitation/case3/training/preprocess.py" = ["B008", "E501", "E731"]
+"pipeline/imitation/case3/training/train.py" = ["B008"]
+# Test fixtures often need long inline literals; readability wins over 88-char limit.
+"tests/pipeline/**/test_*.py" = ["E501"]
 "tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
 "pipeline/rulebase/case2/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/rulebase/case2/evaluation/**/*.py" = ["B008", "E501"]
@@ -105,7 +109,6 @@ max-complexity = 5
 "pipeline/rulebase/case3/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/rulebase/case3/evaluation/**/*.py" = ["B008", "E501"]
 "tests/pipeline/rulebase/case3/snapshots/**" = ["ALL"]
-"pipeline/rulebase/case4/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915"]
 "pipeline/rulebase/case4/evaluation/**/*.py" = ["B008", "E501"]
 "tests/pipeline/rulebase/case4/snapshots/**" = ["ALL"]
 "pipeline/rulebase/case5/baseline/**/*.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915", "B905"]
@@ -166,6 +169,19 @@ module = [
     "tests.pipeline.rulebase.case5.test_core_world_helpers",
 ]
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+# Pre-existing strict-mode violations (calibrate_heads is ad-hoc tooling and
+# train.py uses # type: ignore for torch stub drift). Refactor of these is
+# tracked separately from the directory-level work — see
+# docs/plans/refactor-directory/05-risks.md for the rationale.
+module = [
+    "pipeline.imitation.case2.scripts.calibrate_heads",
+    "pipeline.imitation.case3.scripts.calibrate_heads",
+    "pipeline.imitation.case2.training.train",
+    "pipeline.imitation.case3.training.train",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 addopts = [
