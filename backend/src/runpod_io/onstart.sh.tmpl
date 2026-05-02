@@ -40,11 +40,10 @@ start_sshd_early() {
 }
 start_sshd_early
 
-# Install minimal tools we depend on (aws cli for S3 progress markers,
+# Install minimal tools we depend on (uv for python pkg mgmt, aws cli via uv,
 # runpodctl for self-destroy, git/curl for clone). pytorch image は小さく
-# これらを持たないので、apt で git/curl、pip で awscli を入れる。
-# Ubuntu 24.04 (noble) では awscli が apt から削除されている (Universe にも
-# 無い) ため、初手で pip を使う。apt-only リトライで 90s 無駄にしないため。
+# uv も awscli も持たないので、まず apt で git/curl/ca-certs を入れて
+# 続けて uv -> uv pip install awscli の順に走らせる。
 install_prereqs() {
   export DEBIAN_FRONTEND=noninteractive
   for attempt in 1 2 3; do
@@ -62,18 +61,35 @@ echo "[onstart] running install_prereqs (apt-get install git curl)"
 install_prereqs || echo "[onstart] install_prereqs apt failed (continuing)"
 echo "[onstart] install_prereqs done"
 
-# aws cli を pip で入れる。pytorch image は python を持つので失敗しないはず。
-# 失敗時に silent でスキップしないよう、stderr を明示的に出す。
+# uv を最初に install する (awscli を uv pip 経由で入れたいため、後段の
+# `step=install_uv` よりここで前倒し)。pytorch image に uv はバンドルされて
+# いないのが普通なので、astral.sh の install script で /root/.local/bin に置く。
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[onstart] installing uv (early — awscli を uv pip で入れるため)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh \
+    || echo "[onstart] uv install script failed" >&2
+fi
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+if command -v uv >/dev/null 2>&1; then
+  echo "[onstart] uv ready: $(uv --version 2>&1 | head -1)"
+else
+  echo "[onstart] WARNING: uv unavailable" >&2
+fi
+
+# aws cli を uv pip --system で入れる。system Python を直接汚すが、
+# pod 内の単発用途なので問題なし (uv tool install だと bin path が別になる)。
+# pytorch image の system python に awscli を install して `aws` コマンドを
+# 提供する。失敗時に silent でスキップしないよう、stderr を明示的に出す。
 if ! command -v aws >/dev/null 2>&1; then
-  echo "[onstart] installing awscli via pip"
-  if pip install --quiet awscli 2>&1 | tail -3; then
-    echo "[onstart] pip install awscli ok"
-  elif python3 -m pip install --quiet awscli 2>&1 | tail -3; then
-    echo "[onstart] python3 -m pip install awscli ok"
-  elif python -m pip install --quiet awscli 2>&1 | tail -3; then
-    echo "[onstart] python -m pip install awscli ok"
+  echo "[onstart] installing awscli via uv pip --system"
+  if command -v uv >/dev/null 2>&1; then
+    if uv pip install --system awscli 2>&1 | tail -3; then
+      echo "[onstart] uv pip install awscli ok"
+    else
+      echo "[onstart] uv pip install awscli FAILED (S3 markers will be skipped)" >&2
+    fi
   else
-    echo "[onstart] pip install awscli FAILED (S3 markers will be skipped)" >&2
+    echo "[onstart] uv unavailable; cannot install awscli" >&2
   fi
 fi
 # install 完了後の sanity check: aws version と AWS env の有無を log する
@@ -218,11 +234,13 @@ if [ -d /persist ]; then
 fi
 
 mark "20_clone_done"
-echo "[onstart] step=install_uv"
-if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-fi
+# uv は冒頭で前倒し install 済みのはず。万一 PATH が落ちていれば再 export。
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[onstart] step=install_uv (early install missed; fallback)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+fi
 
 mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
