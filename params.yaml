@@ -20,7 +20,7 @@ model:
 
 train:
   batch_size: 256
-  epochs: 15
+  epochs: 2  # e2e smoke test: 15 → 2 (本コミットは e2e 完了後に revert)
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
