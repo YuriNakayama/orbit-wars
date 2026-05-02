@@ -182,6 +182,40 @@ def _build_sdk(api_key: str) -> Any:
     return runpod_sdk
 
 
+def _pull_from_s3(
+    repo_root: Path, relative: Path, run_id: str, aws_profile: str
+) -> None:
+    """`s3://.../runpod_artifacts/<run_id>/` から成果物を `repo_root/relative/` に
+    download する。pull の DVC 経路 fallback。
+    """
+    from runpod_io import progress as progress_mod
+
+    target_dir = repo_root / relative
+    target_dir.mkdir(parents=True, exist_ok=True)
+    files = progress_mod.list_artifacts(run_id, profile=aws_profile)
+    if not files:
+        console.print(
+            f"[red]no artifacts in s3://.../runpod_artifacts/{run_id}/[/] — "
+            "onstart did not reach early_artifact_upload step"
+        )
+        raise typer.Exit(code=1)
+    downloaded: list[str] = []
+    for fname in files:
+        dest = target_dir / fname
+        ok = progress_mod.download_artifact(run_id, fname, dest, profile=aws_profile)
+        if ok:
+            downloaded.append(fname)
+            console.print(f"[green]pulled[/] {fname} -> {dest}")
+        else:
+            console.print(f"[yellow]skip[/] {fname} (download failed)")
+    if not downloaded:
+        raise typer.Exit(code=1)
+    console.print(
+        "\n[cyan]NOTE:[/] artifacts pulled from S3 fallback (not DVC). "
+        "Re-run `dev/runpod pull --from dvc` later if dvc.lock catches up."
+    )
+
+
 @app.command()
 def train(
     commit_sha: str = typer.Argument(..., help="must be pushed to origin"),
@@ -450,26 +484,58 @@ def pull(
     run_id: str = typer.Argument(..., help="run_id from runpod train"),
     case: str = typer.Option(DEFAULT_CASE, "--case"),
     runs_root: Path | None = typer.Option(None, "--runs-root"),
+    source: str = typer.Option(
+        "auto",
+        "--from",
+        help="auto / dvc / s3 — auto は dvc を試して失敗時 s3 にフォールバック",
+    ),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 fallback 用 AWS profile"
+    ),
 ) -> None:
-    """`dvc pull` で run dir をローカルに取得し、run.json を表示する。"""
+    """`dvc pull` で run dir を取得し run.json を表示する。
+
+    `--from s3` または DVC 経路失敗時に S3 artifacts prefix
+    (`s3://.../runpod_artifacts/<run_id>/`) から best.pt 等を直接 download する。
+    onstart の dvc push 完了前に pod kill された run でも、artifacts prefix に
+    ある成果物は救出可能。
+    """
+    if source not in ("auto", "dvc", "s3"):
+        raise typer.BadParameter(f"--from must be auto/dvc/s3, got {source!r}")
     if runs_root is None:
         runs_root = _runs_root_for(case)
     relative = runs_root / run_id
     repo_root = _repo_root()
     dvc_meta = repo_root / f"{relative}.dvc"
+
+    if source == "s3":
+        _pull_from_s3(repo_root, relative, run_id, aws_profile)
+        return
+
     if not dvc_meta.is_file():
+        if source == "dvc":
+            console.print(
+                f"[red]missing:[/] {dvc_meta.relative_to(repo_root)} "
+                "— DVC meta not committed to origin"
+            )
+            raise typer.Exit(code=1)
+        # auto: fall back to s3
         console.print(
-            f"[yellow]missing:[/] {dvc_meta.relative_to(repo_root)} — "
-            "RunPod onstart should have committed it back to origin. Try "
-            "`git fetch origin && git pull --rebase` on the training branch, "
-            "then retry `dev/runpod pull`."
+            f"[yellow]missing:[/] {dvc_meta.relative_to(repo_root)} "
+            "— falling back to s3 artifacts prefix"
         )
-        raise typer.Exit(code=1)
+        _pull_from_s3(repo_root, relative, run_id, aws_profile)
+        return
+
     cmd = ["uv", "run", "--project", "backend", "dvc", "pull", str(relative)]
     console.print(f"[dim]$ {' '.join(cmd)}[/]")
     result = subprocess.run(cmd, cwd=str(repo_root))
     if result.returncode != 0:
-        raise typer.Exit(code=result.returncode)
+        if source == "dvc":
+            raise typer.Exit(code=result.returncode)
+        console.print("[yellow]dvc pull failed; falling back to s3 artifacts prefix[/]")
+        _pull_from_s3(repo_root, relative, run_id, aws_profile)
+        return
     run_json_path = _repo_root() / relative / "run.json"
     if not run_json_path.is_file():
         console.print(
@@ -888,6 +954,150 @@ def watch_cmd(
     )
     if not result.is_success:
         raise typer.Exit(code=1)
+
+
+# ===== TAIL_SOURCES (PR2: live tail via SSH) =====
+# `dev/runpod tail <run_id> --source X` で SSH 経由 tail する対象ファイル定義。
+# pod が RUNNING 中のみ機能する (永続化不要、生中継のみ)。pod terminate 後は
+# `dev/runpod logs --source onstart` (S3 fallback) を使う。
+TAIL_SOURCES: dict[str, str] = {
+    "onstart": "tail -F /var/log/onstart.log",
+    "train": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/train.log"),
+    "gpu": "tail -F data/output/models/imitation/{case}/runs/{run_id}/gpu.log",
+}
+
+
+@app.command("tail")
+def tail_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    source: str = typer.Option(
+        "onstart",
+        "--source",
+        help="onstart / train / gpu — どのログを SSH 経由 tail するか",
+    ),
+    follow: bool = typer.Option(
+        True,
+        "--follow/--no-follow",
+        help="tail -F で続行 (default) か、現状の末尾だけ表示して exit するか",
+    ),
+) -> None:
+    """SSH 経由で pod 内のログをリアルタイム tail する。
+
+    `--source onstart`: /var/log/onstart.log (立ち上げ + 全体)
+    `--source train`:   run_dir/train.log (学習プロセスの stdout のみ)
+    `--source gpu`:     run_dir/gpu.log (nvidia-smi 10s 周期サンプル)
+
+    pod が RUNNING 中のみ。terminate 後は `dev/runpod logs --source onstart`
+    で S3 fallback を使う。Community Cloud は port 公開仕様が異なる場合あり。
+    """
+    if source not in TAIL_SOURCES:
+        raise typer.BadParameter(
+            f"--source must be one of {sorted(TAIL_SOURCES)}, got {source!r}"
+        )
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]launch.json not found:[/] {run_dir}. "
+            "tail はローカルから launch した run のみ対象です。"
+        )
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+
+    from runpod_io.ssh import SshUnavailable, get_pod_ssh_endpoint
+
+    _ensure_runpod_key()
+    try:
+        endpoint = get_pod_ssh_endpoint(runpod_sdk, pod_id)
+    except SshUnavailable as exc:
+        console.print(f"[red]ssh unavailable:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    remote_cmd = TAIL_SOURCES[source].format(case=case, run_id=run_id)
+    if not follow:
+        # `tail -F` を `tail -n 200` に置き換える
+        remote_cmd = remote_cmd.replace("tail -F", "tail -n 200")
+
+    cmd = endpoint.to_command(remote_cmd)
+    console.print(
+        f"[dim]ssh -> {endpoint.host}:{endpoint.port} run={run_id} "
+        f"source={source} follow={follow}[/]"
+    )
+    # フォアグラウンド実行: ユーザの Ctrl-C で止める想定
+    proc = subprocess.run(cmd, check=False)
+    if proc.returncode != 0 and proc.returncode != 130:  # 130 = SIGINT
+        raise typer.Exit(code=proc.returncode)
+
+
+@app.command("summary")
+def summary_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 marker / artifacts 用"
+    ),
+) -> None:
+    """1 つの run の集約サマリ (status / cost / metrics / artifacts) を表示。
+
+    複数 source (launch.json / run.json / S3 markers / S3 artifacts /
+    DVC meta) を merge する。terminate 後でも S3 経由で参照可能。
+    """
+    from rich.table import Table
+
+    from runpod_io.summary import build_summary
+
+    repo_root = _repo_root()
+    s = build_summary(run_id, repo_root=repo_root, case=case, aws_profile=aws_profile)
+
+    color_by_status = {
+        "succeeded": "green",
+        "failed": "red",
+        "stalled": "yellow",
+        "running": "cyan",
+        "unknown": "white",
+    }
+    color = color_by_status.get(s.status, "white")
+    console.print(
+        f"[bold]run_id:[/] {s.run_id}  "
+        f"[bold]pod_id:[/] {s.pod_id or '(unknown)'}  "
+        f"[{color}]status={s.status}[/]"
+    )
+    if s.last_step:
+        age = (
+            f" ({s.last_step_age_seconds}s ago)"
+            if s.last_step_age_seconds is not None
+            else ""
+        )
+        console.print(f"  last_step: [cyan]{s.last_step}[/]{age}")
+    if s.elapsed_seconds is not None:
+        console.print(f"  elapsed: {s.elapsed_seconds}s")
+    if s.estimated_cost_usd is not None:
+        console.print(f"  estimated_cost: [bold]${s.estimated_cost_usd:.4f}[/]")
+    if s.epochs_completed is not None:
+        console.print(
+            f"  epochs: {s.epochs_completed}  "
+            f"final_train_loss: {s.final_train_loss}  "
+            f"final_val_loss: {s.final_val_loss}"
+        )
+
+    table = Table(title="artifacts")
+    table.add_column("name")
+    table.add_column("local")
+    table.add_column("S3 artifacts")
+    for a in s.artifacts:
+        table.add_row(
+            a.name,
+            "[green]yes[/]" if a.in_run_dir else "[dim]no[/]",
+            "[green]yes[/]" if a.in_s3_artifacts else "[dim]no[/]",
+        )
+    console.print(table)
+    if s.dvc_meta_committed:
+        console.print("[green]DVC meta committed to origin[/]")
+    else:
+        console.print("[yellow]DVC meta NOT committed (use --from s3 for pull)[/]")
 
 
 def _volume_sdk() -> Any:

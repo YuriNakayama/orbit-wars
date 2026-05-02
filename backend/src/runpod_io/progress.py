@@ -16,6 +16,7 @@ import boto3
 
 PROGRESS_BUCKET = "orbit-wars-dvc-286854171013"
 PROGRESS_PREFIX = "runpod_progress"
+ARTIFACT_PREFIX = "runpod_artifacts"
 KEY_PATTERN = re.compile(
     r"^(?P<prefix>.+/)(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)_(?P<step>.+)$"
 )
@@ -112,3 +113,69 @@ def fetch_onstart_log(
     if isinstance(body, bytes):
         body = body.decode("utf-8", errors="replace")
     return OnstartLog(text=body, source="s3")
+
+
+# ===== artifact prefix (PR1: 成果物消失の止血) =====
+# onstart.sh.tmpl が train 完了直後に s3://<bucket>/<ARTIFACT_PREFIX>/<RUN_ID>/
+# 配下に best.pt / metrics.json / run.json / onstart.log を直接 upload する。
+# DVC とは独立した経路で、dvc push が間に合わずに pod kill されたケースの保険。
+
+ARTIFACT_FILES: tuple[str, ...] = (
+    "best.pt",
+    "metrics.json",
+    "run.json",
+    "onstart.log",
+)
+
+
+def list_artifacts(
+    run_id: str,
+    *,
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = ARTIFACT_PREFIX,
+    s3_client: Any | None = None,
+) -> list[str]:
+    """`runpod_artifacts/<RUN_ID>/` 直下にあるファイル名のリスト。"""
+    client = s3_client if s3_client is not None else _build_s3_client(profile)
+    full_prefix = f"{prefix}/{run_id}/"
+    response = client.list_objects_v2(Bucket=bucket, Prefix=full_prefix)
+    contents = response.get("Contents") or []
+    files: list[str] = []
+    for entry in contents:
+        key = entry.get("Key", "")
+        if key.startswith(full_prefix):
+            tail = key[len(full_prefix) :]
+            if tail and "/" not in tail:
+                files.append(tail)
+    files.sort()
+    return files
+
+
+def download_artifact(
+    run_id: str,
+    filename: str,
+    dest: Any,  # Path
+    *,
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = ARTIFACT_PREFIX,
+    s3_client: Any | None = None,
+) -> bool:
+    """`runpod_artifacts/<RUN_ID>/<filename>` を `dest` に保存する。
+
+    成功時 True、見つからなければ False (例外は出さない)。
+    """
+    client = s3_client if s3_client is not None else _build_s3_client(profile)
+    key = f"{prefix}/{run_id}/{filename}"
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except Exception:  # noqa: BLE001
+        return False
+    body = obj["Body"].read()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(body, bytes):
+        dest.write_bytes(body)
+    else:
+        dest.write_text(str(body), encoding="utf-8")
+    return True

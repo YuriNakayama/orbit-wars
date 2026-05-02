@@ -239,12 +239,215 @@ def test_pull_warns_on_failed_status(
     assert "warning" in result.output.lower()
 
 
-def test_pull_missing_dvc_meta(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_pull_missing_dvc_meta_falls_back_to_s3(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """auto モードで .dvc が無い場合、S3 artifacts prefix にフォールバック。"""
     repo_root = tmp_path
     monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
-    result = runner.invoke(app, ["pull", "missing_run"])
+
+    # progress.list_artifacts -> 2 ファイル、download_artifact -> 成功
+    monkeypatch.setattr(
+        "runpod_io.progress.list_artifacts",
+        lambda run_id, profile=None: ["best.pt", "run.json"],
+    )
+
+    def fake_download(
+        run_id: str, fname: str, dest: Path, *, profile: str | None = None
+    ) -> bool:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr("runpod_io.progress.download_artifact", fake_download)
+
+    result = runner.invoke(app, ["pull", "ghost_run"])
+    assert result.exit_code == 0, result.output
+    assert "falling back" in result.output
+    assert "best.pt" in result.output
+    assert "run.json" in result.output
+
+
+def test_pull_from_s3_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--from s3` で DVC をスキップして S3 から直接取得。"""
+    repo_root = tmp_path
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "runpod_io.progress.list_artifacts",
+        lambda run_id, profile=None: ["best.pt"],
+    )
+
+    def fake_download(
+        run_id: str, fname: str, dest: Path, *, profile: str | None = None
+    ) -> bool:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"y")
+        return True
+
+    monkeypatch.setattr("runpod_io.progress.download_artifact", fake_download)
+    result = runner.invoke(app, ["pull", "any_run", "--from", "s3"])
+    assert result.exit_code == 0, result.output
+    assert "best.pt" in result.output
+
+
+def test_pull_from_s3_no_artifacts_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "runpod_io.progress.list_artifacts",
+        lambda run_id, profile=None: [],
+    )
+    result = runner.invoke(app, ["pull", "ghost", "--from", "s3"])
     assert result.exit_code == 1
-    assert "missing" in result.output.lower()
+    assert "no artifacts" in result.output
+
+
+def test_pull_invalid_from(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: tmp_path)
+    result = runner.invoke(app, ["pull", "x", "--from", "wrong"])
+    assert result.exit_code != 0
+    assert "must be auto/dvc/s3" in result.output
+
+
+def test_pull_dvc_only_missing_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--from dvc` で .dvc が無ければ S3 fallback せず exit 1。"""
+    repo_root = tmp_path
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    result = runner.invoke(app, ["pull", "ghost", "--from", "dvc"])
+    assert result.exit_code == 1
+    assert "committed to origin" in result.output
+
+
+def test_tail_invokes_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """tail は launch.json から pod_id を取り、SSH 経由 tail コマンドを呼ぶ。"""
+    from runpod_io.ssh import SshEndpoint
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr(
+        "runpod_io.ssh.get_pod_ssh_endpoint",
+        lambda sdk, pid: SshEndpoint(host="1.2.3.4", port=40000),
+    )
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["tail", "run42", "--source", "onstart"])
+    assert result.exit_code == 0, result.output
+    assert captured
+    assert captured[0][0] == "ssh"
+    # remote_cmd is tail -F /var/log/onstart.log
+    assert any("tail -F /var/log/onstart.log" in arg for arg in captured[0])
+
+
+def test_tail_no_follow_uses_tail_n(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--no-follow` で tail -F が tail -n 200 に置換される。"""
+    from runpod_io.ssh import SshEndpoint
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr(
+        "runpod_io.ssh.get_pod_ssh_endpoint",
+        lambda sdk, pid: SshEndpoint(host="h", port=1),
+    )
+    captured: list[list[str]] = []
+
+    def fake_run(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        captured.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["tail", "run42", "--source", "train", "--no-follow"])
+    assert result.exit_code == 0, result.output
+    assert any("tail -n 200" in arg for arg in captured[0])
+    # 該当 run の train.log path も置換されている
+    assert any("runs/run42/train.log" in arg for arg in captured[0])
+
+
+def test_tail_invalid_source_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    result = runner.invoke(app, ["tail", "run42", "--source", "garbage"])
+    assert result.exit_code != 0
+    assert "must be one of" in result.output
+
+
+def test_summary_displays_status_and_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """summary は build_summary の結果を整形して出力。"""
+    from runpod_io.summary import ArtifactStatus, RunSummary
+
+    repo_root = tmp_path
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+
+    fake = RunSummary(
+        run_id="run42",
+        pod_id="pod-x",
+        status="succeeded",
+        last_step="99_done",
+        last_step_age_seconds=60,
+        elapsed_seconds=600,
+        estimated_cost_usd=0.045,
+        artifacts=(
+            ArtifactStatus(name="best.pt", in_run_dir=True, in_s3_artifacts=True),
+            ArtifactStatus(name="run.json", in_run_dir=False, in_s3_artifacts=True),
+        ),
+        final_train_loss=3.0,
+        final_val_loss=3.4,
+        epochs_completed=15,
+        dvc_meta_committed=True,
+    )
+    monkeypatch.setattr("runpod_io.summary.build_summary", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["summary", "run42"])
+    assert result.exit_code == 0
+    assert "succeeded" in result.output
+    assert "99_done" in result.output
+    assert "$0.0450" in result.output
+    assert "best.pt" in result.output
+    assert "DVC meta committed" in result.output
+
+
+def test_tail_ssh_unavailable_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from runpod_io.ssh import SshUnavailable
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+
+    def raise_unavailable(*_: object, **__: object) -> None:
+        raise SshUnavailable("sshd not started yet")
+
+    monkeypatch.setattr("runpod_io.ssh.get_pod_ssh_endpoint", raise_unavailable)
+    result = runner.invoke(app, ["tail", "run42"])
+    assert result.exit_code == 1
+    assert "ssh unavailable" in result.output
 
 
 def test_promote_copies_and_updates_status(

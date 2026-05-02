@@ -9,8 +9,11 @@
 #   dev/runpod cost-report [--month YYYY-MM]
 #   dev/runpod ps [--case caseN] [--all]
 #   dev/runpod status <run_id> [--case caseN]
+#   dev/runpod summary <run_id> [--case caseN]
 #   dev/runpod logs <run_id> [--case caseN] [--source markers|onstart] [--tail N] [--grep PATTERN]
+#   dev/runpod tail <run_id> [--case caseN] [--source onstart|train|gpu] [--no-follow]
 #   dev/runpod watch <run_id> [--case caseN] [--poll-interval 30] [--max-wait 7200]
+#   dev/runpod pull <run_id> [--case caseN] [--from auto|dvc|s3]
 #   dev/runpod volume {list|search|create} [...]
 #
 # `--watch` (or `dev/runpod watch <run_id>`) polls S3 progress markers and pod

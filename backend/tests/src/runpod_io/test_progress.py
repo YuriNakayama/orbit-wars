@@ -111,6 +111,52 @@ def test_fetch_onstart_log_returns_none_when_s3_missing() -> None:
     assert progress.fetch_onstart_log("ghost", s3_client=client) is None
 
 
+def test_list_artifacts_returns_filenames() -> None:
+    """`runpod_artifacts/<run>/` 直下のファイル名のみ返す (subdir は除外)。"""
+    client = MagicMock()
+    client.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "runpod_artifacts/run42/best.pt"},
+            {"Key": "runpod_artifacts/run42/metrics.json"},
+            {"Key": "runpod_artifacts/run42/run.json"},
+            {"Key": "runpod_artifacts/run42/onstart.log"},
+            {"Key": "runpod_artifacts/run42/sub/nested.txt"},  # subdir → 除外
+        ]
+    }
+    files = progress.list_artifacts("run42", s3_client=client)
+    assert files == ["best.pt", "metrics.json", "onstart.log", "run.json"]
+
+
+def test_list_artifacts_empty() -> None:
+    client = MagicMock()
+    client.list_objects_v2.return_value = {}
+    assert progress.list_artifacts("run42", s3_client=client) == []
+
+
+def test_download_artifact_writes_bytes(tmp_path: Path) -> None:
+    client = MagicMock()
+    client.get_object.return_value = {"Body": io.BytesIO(b"binary-blob")}
+    dest = tmp_path / "out" / "best.pt"
+    ok = progress.download_artifact("run42", "best.pt", dest, s3_client=client)
+    assert ok is True
+    assert dest.read_bytes() == b"binary-blob"
+    client.get_object.assert_called_once_with(
+        Bucket=progress.PROGRESS_BUCKET,
+        Key=f"{progress.ARTIFACT_PREFIX}/run42/best.pt",
+    )
+
+
+def test_download_artifact_returns_false_when_missing(tmp_path: Path) -> None:
+    client = MagicMock()
+    client.get_object.side_effect = RuntimeError("NoSuchKey")
+    dest = tmp_path / "missing.pt"
+    assert (
+        progress.download_artifact("run42", "missing.pt", dest, s3_client=client)
+        is False
+    )
+    assert not dest.exists()
+
+
 def test_fetch_onstart_log_handles_bytes_body() -> None:
     """boto3 が bytes を返すケースをそのまま decode する。"""
 

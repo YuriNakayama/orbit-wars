@@ -241,6 +241,23 @@ SNAPSHOT_JSON=""
 if [ -n "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64:-}" ]; then
   SNAPSHOT_JSON="$(echo "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64}" | base64 -d)"
 fi
+# train.log と gpu.log を run_dir 配下に分離して書き出す。これにより
+# `dev/runpod tail <run_id> --source train` / `--source gpu` で SSH 経由
+# リアルタイムに眺められる。onstart.log とは tee で分岐済み (整合性確保)。
+TRAIN_LOG="${RUN_DIR_LOCAL_TRAIN:-data/output/models/imitation/<CASE>/runs/<RUN_ID>}/train.log"
+GPU_LOG="${RUN_DIR_LOCAL_TRAIN:-data/output/models/imitation/<CASE>/runs/<RUN_ID>}/gpu.log"
+mkdir -p "$(dirname "${TRAIN_LOG}")"
+
+# nvidia-smi を background で 10s 周期サンプリング → gpu.log に append
+NVSMI_PID=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  ( nvidia-smi \
+      --query-gpu=timestamp,utilization.gpu,memory.used,memory.total \
+      --format=csv -l 10 > "${GPU_LOG}" 2>&1 ) &
+  NVSMI_PID=$!
+  echo "[onstart] gpu sampler pid=${NVSMI_PID} -> ${GPU_LOG}"
+fi
+
 ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
@@ -248,7 +265,13 @@ ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
   ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
   ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
-  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
+  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG> \
+  2>&1 | tee "${TRAIN_LOG}"
+
+# 学習終了後に gpu sampler を停止
+if [ -n "${NVSMI_PID}" ]; then
+  kill "${NVSMI_PID}" 2>/dev/null || true
+fi
 
 mark "70_train_done"
 # onstart log 全体を run_dir に取り込んで DVC 永久化対象にする。dvc add 直前なので
@@ -258,6 +281,27 @@ RUN_DIR_LOCAL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 if [ -f /var/log/onstart.log ]; then
   cp /var/log/onstart.log "${RUN_DIR_LOCAL}/onstart.log"
   echo "[onstart] copied onstart.log -> ${RUN_DIR_LOCAL}/onstart.log"
+fi
+
+# ===== EARLY ARTIFACT UPLOAD (PR1: 成果物消失の止血) =====
+# dvc push まで到達せずに pod が外部 kill されるケースを想定し、生成された
+# 成果物 (best.pt / metrics.json / run.json / onstart.log) を s3://.../runpod_artifacts/
+# 配下に直接 upload する。これは DVC とは独立した保険経路。dvc push が成功すれば
+# そちらが正本だが、失敗しても artifacts prefix から `dev/runpod pull` で取れる。
+S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/runpod_artifacts/<RUN_ID>"
+echo "[onstart] step=early_artifact_upload prefix=${S3_ARTIFACT_PREFIX}"
+if command -v aws >/dev/null 2>&1; then
+  for f in best.pt metrics.json run.json onstart.log; do
+    src="${RUN_DIR_LOCAL}/${f}"
+    if [ -f "${src}" ]; then
+      aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" 2>/dev/null \
+        && echo "[onstart] uploaded ${f}" \
+        || echo "[onstart] upload ${f} failed (non-fatal)"
+    fi
+  done
+  mark "75_artifacts_uploaded"
+else
+  echo "[onstart] aws cli not available; skipping early artifact upload"
 fi
 
 echo "[onstart] step=dvc_add_run"

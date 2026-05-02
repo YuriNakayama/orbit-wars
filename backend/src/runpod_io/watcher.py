@@ -22,6 +22,7 @@ from runpod_io.notify import notify
 
 DEFAULT_POLL_INTERVAL = 30.0  # seconds
 DEFAULT_MAX_WAIT = 7200  # 2h, onstart の自殺タイムアウトと一致
+DEFAULT_STALL_THRESHOLD = 900  # 15 分 marker 更新なしで stalled 判定
 
 SUCCESS_STEP = "99_done"
 CLEANUP_PREFIX = "90_cleanup_exit_"
@@ -68,6 +69,7 @@ def watch_pod(
     aws_profile: str | None = None,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     max_wait_seconds: float = DEFAULT_MAX_WAIT,
+    stall_threshold_seconds: float = DEFAULT_STALL_THRESHOLD,
     notifier: Any = notify,
     sleep: Any = time.sleep,
     clock: Any = time.monotonic,
@@ -78,9 +80,13 @@ def watch_pod(
 
     依存 (`pod_state_module` / `progress_module` / `notifier` / `sleep` / `clock`)
     はテスト時の差し替え用。本番では default。
+
+    `stall_threshold_seconds`: marker 列の最新ステップが N 秒以上更新されず、
+    かつ pod は RUNNING のときに `outcome="stalled"` で抜ける。0 以下で無効。
     """
     started = clock()
     last_step: str | None = None
+    last_step_changed_at: float = started
 
     while True:
         elapsed = clock() - started
@@ -106,7 +112,10 @@ def watch_pod(
         else:
             marker_err = ""
         steps = [m.step for m in markers]
-        last_step, terminal = _classify_markers(steps)
+        new_last_step, terminal = _classify_markers(steps)
+        if new_last_step != last_step:
+            last_step = new_last_step
+            last_step_changed_at = clock()
 
         # SDK 側 pod 状態 (terminate されたら EXITED に)
         try:
@@ -143,6 +152,31 @@ def watch_pod(
                 detail=detail,
             )
 
+        # stalled: pod は RUNNING だが marker が一定時間更新されていない
+        if (
+            stall_threshold_seconds > 0
+            and pod is not None
+            and pod_status not in DONE_STATUSES
+            and (clock() - last_step_changed_at) > stall_threshold_seconds
+        ):
+            stale_for = clock() - last_step_changed_at
+            detail = (
+                f"no marker progress for {stale_for:.0f}s "
+                f"(threshold {stall_threshold_seconds:.0f}s, "
+                f"last_step={last_step!r}, pod_status={pod_status})"
+            )
+            notifier(
+                f"RunPod {run_id}: STALLED",
+                f"pod={pod_id} last_step={last_step or '(none)'} "
+                f"({stale_for:.0f}s no progress)",
+            )
+            return WatchResult(
+                outcome="stalled",
+                last_step=last_step,
+                elapsed_seconds=elapsed,
+                detail=detail,
+            )
+
         # pod が消えていて success marker も無い → 失敗 (terminate 済 + 99_done 未到達)
         if pod is None or pod_status in DONE_STATUSES:
             detail = (
@@ -166,6 +200,7 @@ def watch_pod(
 __all__ = [
     "DEFAULT_MAX_WAIT",
     "DEFAULT_POLL_INTERVAL",
+    "DEFAULT_STALL_THRESHOLD",
     "WatchResult",
     "watch_pod",
 ]

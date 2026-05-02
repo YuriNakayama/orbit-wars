@@ -223,6 +223,52 @@ def test_watch_pod_timeout() -> None:
     assert "TIMEOUT" in title
 
 
+def test_watch_pod_stalled_when_no_marker_progress() -> None:
+    """marker が更新されない時間が threshold を超えたら stalled で抜ける。"""
+    notifier = MagicMock()
+    # 同じ marker を返し続ける = step 進捗なし
+    progress = _StubProgress([[_marker("30_before_uv_sync")]])
+    pods = _StubPodState([_pod("RUNNING")])
+    # clock: 0 (start), 0 (1回目: last_step 確定), 1000 (2回目: stall threshold 超え)
+    clock = _make_clock([0.0, 0.0, 0.0, 1000.0])
+
+    result = watch_pod(
+        run_id="r1",
+        pod_id="pod-x",
+        notifier=notifier,
+        sleep=lambda _s: None,
+        clock=clock,
+        progress_module=progress,
+        pod_state_module=pods,
+        stall_threshold_seconds=900.0,
+    )
+    assert result.outcome == "stalled"
+    assert result.last_step == "30_before_uv_sync"
+    title = notifier.call_args.args[0]
+    assert "STALLED" in title
+
+
+def test_watch_pod_no_stall_when_threshold_zero() -> None:
+    """stall_threshold_seconds=0 で stall 検知 OFF (既存挙動互換)。"""
+    notifier = MagicMock()
+    progress = _StubProgress([[_marker("30_before_uv_sync")], [_marker("99_done")]])
+    pods = _StubPodState([_pod("RUNNING"), _pod("RUNNING")])
+    clock = _make_clock([0.0, 0.0, 1000.0, 1000.0])
+
+    result = watch_pod(
+        run_id="r1",
+        pod_id="pod-x",
+        notifier=notifier,
+        sleep=lambda _s: None,
+        clock=clock,
+        progress_module=progress,
+        pod_state_module=pods,
+        stall_threshold_seconds=0,
+    )
+    # stall 無効なので 1000s 経過しても success marker が来れば success
+    assert result.outcome == "success"
+
+
 def test_watch_pod_progress_failure_does_not_kill_loop() -> None:
     """boto3 が一時 fail しても poll 継続できる (次回 success 取得)。"""
     notifier = MagicMock()
