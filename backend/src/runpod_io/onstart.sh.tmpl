@@ -113,12 +113,18 @@ if [ -n "<PREPROCESS_CMD>" ]; then
 fi
 
 echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
+# snapshot は引用符を含む JSON なので、RunPod env では base64 で渡されている。
+# 学習プロセス起動時に decode して ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT に再注入する。
+SNAPSHOT_JSON=""
+if [ -n "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64:-}" ]; then
+  SNAPSHOT_JSON="$(echo "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64}" | base64 -d)"
+fi
 ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT:-}" \
+  ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
   ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
   uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 

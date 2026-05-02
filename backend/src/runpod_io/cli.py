@@ -7,6 +7,7 @@ SDK との衝突回避のため、SDK は `import runpod as runpod_sdk` の alia
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -333,7 +334,12 @@ def train(
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
     )
+    # snapshot は JSON 文字列 (引用符を含む) なので、RunPod の GraphQL env エンコード
+    # (`f'value: "{v}"'`) で壊れる。base64 化して安全な ASCII のみにする。
+    # train.py 側 (`pipeline/imitation/case{1,3,4}/training/train.py`) は env から
+    # JSON 文字列を期待するので、onstart で base64 -d して再注入する。
     snapshot_json = json.dumps(chosen.to_snapshot())
+    snapshot_b64 = base64.b64encode(snapshot_json.encode("utf-8")).decode("ascii")
     env = build_env_dict(
         {
             "AWS_ACCESS_KEY_ID": aws_creds.access_key_id,
@@ -344,7 +350,7 @@ def train(
             "ORBIT_WARS_GIT_SHA": commit_sha,
             "ORBIT_WARS_GIT_BRANCH": branch,
             "ORBIT_WARS_CASE": case,
-            "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT": snapshot_json,
+            "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
         }
     )
     pod_id = create_pod(
