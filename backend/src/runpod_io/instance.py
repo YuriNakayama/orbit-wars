@@ -167,8 +167,21 @@ def create_pod(
     # RunPod の dockerArgs は GraphQL 文字列にそのまま挿入されるため、改行や引用符
     # を含む bash script を直接渡すと parse error になる。base64 化してから 1 行の
     # bootstrap で decode + bash 実行する。
+    #
+    # ENTRYPOINT 上書き問題への対処: 公式 runpod/* image は /start.sh で sshd /
+    # jupyter を起動する。docker_args で ENTRYPOINT を上書きするとそれが走らず
+    # SSH 接続不可になる (runpodctl#170, runpod-python answeroverflow より)。
+    # よって以下の順で実行する:
+    #   1. /start.sh が存在すれば background で実行 (sshd 起動を維持)
+    #   2. その後 onstart を foreground で実行
+    # この順なら SSH は早期に開通し、onstart の任意の段階で `tail -F` 接続可能。
     encoded = base64.b64encode(onstart_script.encode("utf-8")).decode("ascii")
-    docker_args = f"bash -c 'echo {encoded} | base64 -d | bash'"
+    docker_args = (
+        "bash -c '"
+        '[ -x /start.sh ] && (/start.sh > /var/log/start.log 2>&1 &); '
+        f"echo {encoded} | base64 -d | bash"
+        "'"
+    )
     kwargs: dict[str, Any] = {
         "name": name,
         "image_name": image,
