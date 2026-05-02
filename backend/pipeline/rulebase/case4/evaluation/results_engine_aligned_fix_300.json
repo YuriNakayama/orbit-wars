@@ -1,0 +1,14 @@
+{
+  "episodes": 300.0,
+  "wins": 208.0,
+  "losses": 92.0,
+  "draws": 0.0,
+  "win_rate": 0.6933333333333334,
+  "non_draw_win_rate": 0.6933333333333334,
+  "win_rate_ci95_lo": 0.6389827786899308,
+  "win_rate_ci95_hi": 0.7427950950442782,
+  "challenger": "baseline_v4",
+  "baseline": "baseline_v1",
+  "mode": "1v1",
+  "label": "engine_aligned_fix_300_2026-05-01"
+}

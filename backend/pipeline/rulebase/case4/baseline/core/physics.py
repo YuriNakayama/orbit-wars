@@ -12,7 +12,6 @@ from .config import (
     CENTER_X,
     CENTER_Y,
     HORIZON,
-    INTERCEPT_TOLERANCE,
     MAX_SPEED,
     ROTATION_LIMIT,
     SAFE_INTERCEPT_HALF_STEP,
@@ -168,6 +167,143 @@ def _iter_candidate_turns(max_turns: int) -> list[float]:
     return [float(t) for t in range(1, max_turns + 1)]
 
 
+def _point_to_segment_distance(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> float:
+    """Mirror of kaggle_environments.envs.orbit_wars.point_to_segment_distance."""
+    l2 = (ax - bx) ** 2 + (ay - by) ** 2
+    if l2 == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2))
+    projx = ax + t * (bx - ax)
+    projy = ay + t * (by - ay)
+    return math.hypot(px - projx, py - projy)
+
+
+_LAUNCH_OFFSET: float = 0.1  # engine starts fleets at planet surface + 0.1
+
+
+def _first_engine_hit_turn(
+    src: Planet,
+    target: Planet,
+    angle: float,
+    ships: int,
+    initial_by_id: dict[int, Planet],
+    ang_vel: float,
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
+    turn_lo: int,
+    turn_hi: int,
+) -> int | None:
+    """Replay fleet over [turn_lo, turn_hi]; return first hit turn or None.
+
+    Mirrors kaggle_environments.envs.orbit_wars per-turn order:
+      1. fleet moves from pos[t-1] to pos[t]
+         collision: seg_dist(planet_at_(t-1), fleet_seg) < planet.radius
+      2. planet moves from pos[t-1] to pos[t]
+         sweep: seg_dist(fleet_at_t, planet_seg) < planet.radius
+
+    Fleet start point is `src.center + (src.radius + 0.1) * direction`,
+    not `src.center` — short-range shots otherwise predict the wrong hit turn.
+    """
+    if turn_hi < turn_lo:
+        return None
+    speed = fleet_speed(max(1, ships))
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    offset = src.radius + _LAUNCH_OFFSET
+    start_x = src.x + cos_a * offset
+    start_y = src.y + sin_a * offset
+
+    start = max(1, turn_lo)
+
+    def fleet_at(t: int) -> tuple[float, float]:
+        return (start_x + cos_a * speed * t, start_y + sin_a * speed * t)
+
+    def target_at(t: int) -> tuple[float, float] | None:
+        return predict_target_position(
+            target, t, initial_by_id, ang_vel, comets, comet_ids
+        )
+
+    fx_prev, fy_prev = fleet_at(start - 1)
+    for t in range(start, turn_hi + 1):
+        fx, fy = fleet_at(t)
+
+        # Step 1: fleet moves; engine compares against planet at (t-1).
+        planet_prev = target_at(t - 1)
+        if planet_prev is not None:
+            d = _point_to_segment_distance(
+                planet_prev[0], planet_prev[1], fx_prev, fy_prev, fx, fy
+            )
+            if d < target.radius:
+                return t
+
+        # Step 2: planet moves; engine sweep checks fleet (already at t)
+        # against planet's (t-1)→t segment.
+        planet_now = target_at(t)
+        if planet_prev is not None and planet_now is not None:
+            d = _point_to_segment_distance(
+                fx, fy, planet_prev[0], planet_prev[1], planet_now[0], planet_now[1]
+            )
+            if d < target.radius:
+                return t
+
+        fx_prev, fy_prev = fx, fy
+    return None
+
+
+# Search half-window around the geometric estimate. Lead-aim error rarely
+# exceeds a few turns for well-conditioned shots, so a tight window keeps
+# the per-aim cost O(window) instead of O(HORIZON).
+_HIT_SEARCH_WINDOW: int = 4
+
+
+def _hit_turn_for_target_position(
+    src: Planet,
+    target: Planet,
+    aim_pos: tuple[float, float],
+    ships: int,
+    initial_by_id: dict[int, Planet],
+    ang_vel: float,
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
+    max_turns: int,
+) -> tuple[float, int] | None:
+    """Try aiming directly at aim_pos; return (angle, hit_turn) if engine hits.
+
+    Uses the geometric arrival estimate to bracket the segment replay rather
+    than walking the full HORIZON.
+    """
+    safe = safe_angle_and_distance(
+        src.x, src.y, src.radius, aim_pos[0], aim_pos[1], target.radius
+    )
+    if safe is None:
+        return None
+    angle, _ = safe
+    est = estimate_arrival(
+        src.x, src.y, src.radius, aim_pos[0], aim_pos[1], target.radius, ships
+    )
+    if est is None:
+        return None
+    est_turn = est[1]
+    lo = max(1, est_turn - _HIT_SEARCH_WINDOW)
+    hi = min(max_turns, est_turn + _HIT_SEARCH_WINDOW)
+    hit = _first_engine_hit_turn(
+        src,
+        target,
+        angle,
+        ships,
+        initial_by_id,
+        ang_vel,
+        comets,
+        comet_ids,
+        lo,
+        hi,
+    )
+    if hit is None:
+        return None
+    return angle, hit
+
+
 def search_safe_intercept(
     src: Planet,
     target: Planet,
@@ -178,10 +314,12 @@ def search_safe_intercept(
     comet_ids: set[int],
 ) -> tuple[float, int, float, float] | None:
     best: tuple[float, int, float, float] | None = None
-    best_score: tuple[float, int, float] | None = None
+    best_score: tuple[int, float] | None = None
     max_turns = HORIZON
     if target.id in comet_ids:
         max_turns = min(max_turns, max(0, comet_remaining_life(target.id, comets) - 1))
+    if max_turns <= 0:
+        return None
 
     for candidate_turns in _iter_candidate_turns(max_turns):
         pos = predict_target_position_fractional(
@@ -189,42 +327,29 @@ def search_safe_intercept(
         )
         if pos is None:
             continue
-        est = estimate_arrival(
-            src.x, src.y, src.radius, pos[0], pos[1], target.radius, ships
+        result = _hit_turn_for_target_position(
+            src,
+            target,
+            pos,
+            ships,
+            initial_by_id,
+            ang_vel,
+            comets,
+            comet_ids,
+            max_turns,
         )
-        if est is None:
+        if result is None:
             continue
-        _, turns = est
-        if abs(turns - candidate_turns) > INTERCEPT_TOLERANCE:
-            continue
-
-        actual_turns = max(turns, int(math.ceil(candidate_turns)))
+        angle, hit_turn = result
         actual_pos = predict_target_position(
-            target, actual_turns, initial_by_id, ang_vel, comets, comet_ids
+            target, hit_turn, initial_by_id, ang_vel, comets, comet_ids
         )
         if actual_pos is None:
             continue
-
-        confirm = estimate_arrival(
-            src.x,
-            src.y,
-            src.radius,
-            actual_pos[0],
-            actual_pos[1],
-            target.radius,
-            ships,
-        )
-        if confirm is None:
-            continue
-
-        delta = abs(confirm[1] - actual_turns)
-        if delta > INTERCEPT_TOLERANCE:
-            continue
-
-        score = (float(delta), confirm[1], candidate_turns)
+        score = (hit_turn, abs(hit_turn - candidate_turns))
         if best is None or best_score is None or score < best_score:
             best_score = score
-            best = (confirm[0], confirm[1], actual_pos[0], actual_pos[1])
+            best = (angle, hit_turn, actual_pos[0], actual_pos[1])
 
     return best
 
@@ -238,6 +363,35 @@ def aim_with_prediction(
     comets: list[dict[str, Any]],
     comet_ids: set[int],
 ) -> tuple[float, int, float, float] | None:
+    max_turns = HORIZON
+    if target.id in comet_ids:
+        max_turns = min(max_turns, max(0, comet_remaining_life(target.id, comets) - 1))
+    if max_turns <= 0:
+        return None
+
+    # First try: aim directly at target's current position. Fast path that
+    # works for static / slowly-moving targets and seeds the lead-aim loop.
+    direct = _hit_turn_for_target_position(
+        src,
+        target,
+        (target.x, target.y),
+        ships,
+        initial_by_id,
+        ang_vel,
+        comets,
+        comet_ids,
+        max_turns,
+    )
+    if direct is not None:
+        angle, hit_turn = direct
+        actual_pos = predict_target_position(
+            target, hit_turn, initial_by_id, ang_vel, comets, comet_ids
+        )
+        if actual_pos is not None:
+            return angle, hit_turn, actual_pos[0], actual_pos[1]
+
+    # Lead-aim refinement: estimate arrival turn, predict target position then,
+    # aim there; iterate until the engine actually intercepts.
     est = estimate_arrival(
         src.x, src.y, src.radius, target.x, target.y, target.radius, ships
     )
@@ -246,34 +400,41 @@ def aim_with_prediction(
             src, target, ships, initial_by_id, ang_vel, comets, comet_ids
         )
 
-    tx, ty = target.x, target.y
+    _, turns_guess = est
     for _ in range(5):
-        _, turns = est
         pos = predict_target_position(
-            target, turns, initial_by_id, ang_vel, comets, comet_ids
+            target, turns_guess, initial_by_id, ang_vel, comets, comet_ids
         )
         if pos is None:
-            return None
-        ntx, nty = pos
+            break
+        attempt = _hit_turn_for_target_position(
+            src,
+            target,
+            pos,
+            ships,
+            initial_by_id,
+            ang_vel,
+            comets,
+            comet_ids,
+            max_turns,
+        )
+        if attempt is not None:
+            angle, hit_turn = attempt
+            actual_pos = predict_target_position(
+                target, hit_turn, initial_by_id, ang_vel, comets, comet_ids
+            )
+            if actual_pos is not None:
+                return angle, hit_turn, actual_pos[0], actual_pos[1]
         next_est = estimate_arrival(
-            src.x, src.y, src.radius, ntx, nty, target.radius, ships
+            src.x, src.y, src.radius, pos[0], pos[1], target.radius, ships
         )
         if next_est is None:
-            return search_safe_intercept(
-                src, target, ships, initial_by_id, ang_vel, comets, comet_ids
-            )
-        if (
-            abs(ntx - tx) < 0.3
-            and abs(nty - ty) < 0.3
-            and abs(next_est[1] - turns) <= INTERCEPT_TOLERANCE
-        ):
-            return next_est[0], next_est[1], ntx, nty
-        tx, ty = ntx, nty
-        est = next_est
+            break
+        new_turns = next_est[1]
+        if new_turns == turns_guess:
+            break
+        turns_guess = new_turns
 
-    final_est = estimate_arrival(src.x, src.y, src.radius, tx, ty, target.radius, ships)
-    if final_est is None:
-        return search_safe_intercept(
-            src, target, ships, initial_by_id, ang_vel, comets, comet_ids
-        )
-    return final_est[0], final_est[1], tx, ty
+    return search_safe_intercept(
+        src, target, ships, initial_by_id, ang_vel, comets, comet_ids
+    )

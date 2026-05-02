@@ -297,3 +297,127 @@ def test_aim_with_prediction_nearby_target_succeeds() -> None:
     angle, turns, _, _ = res
     assert math.isfinite(angle)
     assert turns >= 1
+
+
+# ---------- aim_with_prediction: engine-aligned segment hit ----------
+#
+# `aim_with_prediction` returns (angle, turns) such that, if the agent fires
+# `ships` ships from `src` at `angle`, the engine's continuous-collision
+# detection will catch the fleet on or before the returned `turns`. Verified
+# by replaying the engine's per-turn point-to-segment check.
+
+
+def _engine_segment_distance(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> float:
+    l2 = (ax - bx) ** 2 + (ay - by) ** 2
+    if l2 == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2))
+    projx = ax + t * (bx - ax)
+    projy = ay + t * (by - ay)
+    return math.hypot(px - projx, py - projy)
+
+
+_LAUNCH_OFFSET = 0.1
+
+
+def _engine_replay_hit(
+    src: Planet,
+    tgt: Planet,
+    angle: float,
+    ships: int,
+    ang_vel: float,
+    initial: dict[int, Planet],
+    max_turns: int,
+) -> tuple[bool, int | None]:
+    """Mirror engine per-turn order (fleet move + planet sweep)."""
+    speed = fleet_speed(ships)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    offset = src.radius + _LAUNCH_OFFSET
+    start_x = src.x + cos_a * offset
+    start_y = src.y + sin_a * offset
+    fx_prev, fy_prev = start_x, start_y
+    for t in range(1, max_turns + 1):
+        fx = start_x + cos_a * speed * t
+        fy = start_y + sin_a * speed * t
+        prev_tx, prev_ty = predict_planet_position(tgt, initial, ang_vel, t - 1)
+        d = _engine_segment_distance(prev_tx, prev_ty, fx_prev, fy_prev, fx, fy)
+        if d < tgt.radius:
+            return True, t
+        tx, ty = predict_planet_position(tgt, initial, ang_vel, t)
+        d2 = _engine_segment_distance(fx, fy, prev_tx, prev_ty, tx, ty)
+        if d2 < tgt.radius:
+            return True, t
+        fx_prev, fy_prev = fx, fy
+    return False, None
+
+
+def test_aim_with_prediction_orbital_low_speed_engine_hits() -> None:
+    src = _planet(1, CENTER_X + 45.0, CENTER_Y, radius=2.0)
+    tgt = _planet(2, CENTER_X + 20.0, CENTER_Y, radius=2.0)
+    initial = {1: src, 2: tgt}
+    ang_vel = 0.05
+    ships = 10
+
+    res = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
+    assert res is not None
+    angle, turns, _, _ = res
+    hit, hit_turn = _engine_replay_hit(
+        src, tgt, angle, ships, ang_vel, initial, max_turns=turns + 5
+    )
+    assert hit, (
+        f"engine should hit returned aim (angle={angle:.3f}, turns={turns}, "
+        f"hit_turn={hit_turn})"
+    )
+
+
+def test_aim_with_prediction_orbital_high_speed_engine_hits() -> None:
+    src = _planet(1, CENTER_X + 45.0, CENTER_Y, radius=2.0)
+    tgt = _planet(2, CENTER_X + 20.0, CENTER_Y, radius=2.0)
+    initial = {1: src, 2: tgt}
+    ang_vel = 0.10
+    ships = 500
+
+    res = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
+    assert res is not None
+    angle, turns, _, _ = res
+    hit, hit_turn = _engine_replay_hit(
+        src, tgt, angle, ships, ang_vel, initial, max_turns=turns + 5
+    )
+    assert hit, f"high-speed: engine should hit (turns={turns}, hit_turn={hit_turn})"
+
+
+def test_aim_with_prediction_orbital_fast_orbit_engine_hits() -> None:
+    src = _planet(1, CENTER_X + 40.0, CENTER_Y - 10.0, radius=2.0)
+    tgt = _planet(2, CENTER_X + 25.0, CENTER_Y, radius=2.0)
+    initial = {1: src, 2: tgt}
+    ang_vel = 0.20
+    ships = 50
+
+    res = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
+    assert res is not None
+    angle, turns, _, _ = res
+    hit, hit_turn = _engine_replay_hit(
+        src, tgt, angle, ships, ang_vel, initial, max_turns=turns + 5
+    )
+    assert hit, f"fast-orbit: engine should hit (turns={turns}, hit_turn={hit_turn})"
+
+
+def test_aim_with_prediction_returned_turns_is_first_engine_hit() -> None:
+    """Returned turns should be the engine's first hit turn (no over-shooting)."""
+    src = _planet(1, CENTER_X + 45.0, CENTER_Y, radius=2.0)
+    tgt = _planet(2, CENTER_X + 20.0, CENTER_Y, radius=2.0)
+    initial = {1: src, 2: tgt}
+    ang_vel = 0.05
+    ships = 10
+
+    res = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
+    assert res is not None
+    angle, turns, _, _ = res
+    _, hit_turn = _engine_replay_hit(
+        src, tgt, angle, ships, ang_vel, initial, max_turns=turns + 5
+    )
+    assert hit_turn == turns, (
+        f"returned turns={turns} should equal first engine hit_turn={hit_turn}"
+    )
