@@ -300,7 +300,11 @@ fi
 
 mark "50_dvc_pull_done"
 echo "[onstart] step=mkdir_run"
-mkdir -p "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# 絶対 path で固定: train.py は ORBIT_WARS_RUN_DIR を Path.resolve() するので
+# 相対 path だと cwd (uv run --directory backend) 基準になり backend/data/... に
+# ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
+RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+mkdir -p "${RUN_DIR_ABS}"
 
 if [ -n "<PREPROCESS_CMD>" ]; then
   if [ -d "data/mart/imitation/<CASE>" ] && \
@@ -323,8 +327,8 @@ fi
 # train.log と gpu.log を run_dir 配下に分離して書き出す。これにより
 # `dev/runpod tail <run_id> --source train` / `--source gpu` で SSH 経由
 # リアルタイムに眺められる。onstart.log とは tee で分岐済み (整合性確保)。
-TRAIN_LOG="${RUN_DIR_LOCAL_TRAIN:-data/output/models/imitation/<CASE>/runs/<RUN_ID>}/train.log"
-GPU_LOG="${RUN_DIR_LOCAL_TRAIN:-data/output/models/imitation/<CASE>/runs/<RUN_ID>}/gpu.log"
+TRAIN_LOG="${RUN_DIR_ABS}/train.log"
+GPU_LOG="${RUN_DIR_ABS}/gpu.log"
 mkdir -p "$(dirname "${TRAIN_LOG}")"
 
 # nvidia-smi を background で 10s 周期サンプリング → gpu.log に append
@@ -337,7 +341,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   echo "[onstart] gpu sampler pid=${NVSMI_PID} -> ${GPU_LOG}"
 fi
 
-ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
+ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
@@ -362,11 +366,11 @@ fi
 mark "70_train_done"
 # onstart log 全体を run_dir に取り込んで DVC 永久化対象にする。dvc add 直前なので
 # tee 中の最新行も含めて snapshot される。失敗 path では cleanup_destroy が S3 に
-# 直接アップロードするので、ここでは成功 path のみカバーで十分。
-RUN_DIR_LOCAL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# 直接アップロードするので、ここでは成功 path のみカバーで十分。RUN_DIR_ABS は
+# /workspace/orbit-wars/data/output/... の絶対 path (train.py 出力位置と整合)。
 if [ -f /var/log/onstart.log ]; then
-  cp /var/log/onstart.log "${RUN_DIR_LOCAL}/onstart.log"
-  echo "[onstart] copied onstart.log -> ${RUN_DIR_LOCAL}/onstart.log"
+  cp /var/log/onstart.log "${RUN_DIR_ABS}/onstart.log"
+  echo "[onstart] copied onstart.log -> ${RUN_DIR_ABS}/onstart.log"
 fi
 
 # ===== EARLY ARTIFACT UPLOAD (PR1: 成果物消失の止血) =====
@@ -377,12 +381,16 @@ fi
 S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 echo "[onstart] step=early_artifact_upload prefix=${S3_ARTIFACT_PREFIX}"
 if command -v aws >/dev/null 2>&1; then
-  for f in best.pt metrics.json run.json onstart.log; do
-    src="${RUN_DIR_LOCAL}/${f}"
+  echo "[onstart] artifact dir listing:"
+  ls -la "${RUN_DIR_ABS}" 2>&1 | head -10
+  for f in best.pt metrics.json run.json onstart.log train.log gpu.log; do
+    src="${RUN_DIR_ABS}/${f}"
     if [ -f "${src}" ]; then
-      aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" 2>/dev/null \
+      aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" \
         && echo "[onstart] uploaded ${f}" \
-        || echo "[onstart] upload ${f} failed (non-fatal)"
+        || echo "[onstart] upload ${f} failed (non-fatal)" >&2
+    else
+      echo "[onstart] skip ${f} (not found at ${src})"
     fi
   done
   mark "75_artifacts_uploaded"
@@ -391,20 +399,34 @@ else
 fi
 
 echo "[onstart] step=dvc_add_run"
-uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# dvc add は cwd 基準 path を取る。RUN_DIR_ABS の絶対 path から repo root を
+# 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
+RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+uv run --project backend dvc add "${RUN_DIR_REL}"
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project backend dvc push "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+uv run --project backend dvc push "${RUN_DIR_REL}"
 
 echo "[onstart] step=git_push_dvc_meta"
-RUN_DVC_FILE="data/output/models/imitation/<CASE>/runs/<RUN_ID>.dvc"
+RUN_DVC_FILE="${RUN_DIR_REL}.dvc"
 if [ -f "${RUN_DVC_FILE}" ]; then
   git config user.email "runpod-bot@orbit-wars.local"
   git config user.name "runpod-bot"
   TARGET_BRANCH="<BRANCH>"
+  # GIT_PAT が pod env にあれば https URL に埋め込んで auth (push 用)。clone 経路は
+  # PUBLIC repo なので URL に PAT 不要、ただし push は auth 必須。
+  if [ -n "${GIT_PAT:-}" ]; then
+    PUSH_URL="https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')"
+    git remote set-url origin "${PUSH_URL}" 2>&1 | tail -2
+  else
+    echo "[onstart] WARNING: GIT_PAT not set; git push 経路は失敗する見込み" >&2
+  fi
   git fetch origin "${TARGET_BRANCH}" || true
   git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
-  git add -- "${RUN_DVC_FILE}"
+  # data/ は .gitignore で除外されているが whitelist (`!/data/**/*.dvc`) で
+  # .dvc ファイルだけは戻る。が、新規追加 path が whitelist を完全には
+  # 通らない (parent dir も track されてないため hint が出る) ので明示 -f。
+  git add -f -- "${RUN_DVC_FILE}"
   git commit --no-verify -m ":robot: runpod: add <CASE>/runs/<RUN_ID>.dvc" || {
     echo "[onstart] git_push_dvc_meta: nothing to commit (already tracked?)"
   }

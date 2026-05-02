@@ -25,6 +25,7 @@ __all__ = [
     "AwsCreds",
     "CredentialsError",
     "load_aws_creds",
+    "load_git_pat",
     "load_runpod_api_key",
 ]
 
@@ -52,6 +53,24 @@ def load_runpod_api_key(
         f"{env_path} or export it as an environment variable. "
         "Get a key from https://runpod.io/console/user/settings."
     )
+
+
+def load_git_pat(*, env_path: Path | None = None) -> str | None:
+    """`backend/.env` または環境変数から GIT_PAT (GitHub Personal Access Token)
+    を読む。Pod 内で `git push origin <branch>` する際の auth に使う。
+
+    env file → process env の順に検査。値が無くても例外は投げず None を返す。
+    PAT が無い場合 onstart の git push (`.dvc` メタの永続化) のみ skip される。
+    """
+    if env_path is None:
+        env_path = _default_env_path()
+    if env_path.is_file():
+        values = dotenv_values(env_path)
+        pat = values.get("GIT_PAT")
+        if pat:
+            return pat.strip()
+    fallback = os.environ.get("GIT_PAT", "").strip()
+    return fallback or None
 
 
 def _default_env_path() -> Path:

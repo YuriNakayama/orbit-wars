@@ -26,6 +26,7 @@ from runpod_io.auth import (
     AwsCreds,
     CredentialsError,
     load_aws_creds,
+    load_git_pat,
     load_runpod_api_key,
 )
 from runpod_io.instance import (
@@ -401,19 +402,28 @@ def train(
     # JSON 文字列を期待するので、onstart で base64 -d して再注入する。
     snapshot_json = json.dumps(chosen.to_snapshot())
     snapshot_b64 = base64.b64encode(snapshot_json.encode("utf-8")).decode("ascii")
-    env = build_env_dict(
-        {
-            "AWS_ACCESS_KEY_ID": aws_creds.access_key_id,
-            "AWS_SECRET_ACCESS_KEY": aws_creds.secret_access_key,
-            "AWS_DEFAULT_REGION": aws_creds.region,
-            "RUNPOD_API_KEY": runpod_api_key,
-            "ORBIT_WARS_RUN_ID": run_id,
-            "ORBIT_WARS_GIT_SHA": commit_sha,
-            "ORBIT_WARS_GIT_BRANCH": branch,
-            "ORBIT_WARS_CASE": case,
-            "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
-        }
-    )
+    env_dict: dict[str, str] = {
+        "AWS_ACCESS_KEY_ID": aws_creds.access_key_id,
+        "AWS_SECRET_ACCESS_KEY": aws_creds.secret_access_key,
+        "AWS_DEFAULT_REGION": aws_creds.region,
+        "RUNPOD_API_KEY": runpod_api_key,
+        "ORBIT_WARS_RUN_ID": run_id,
+        "ORBIT_WARS_GIT_SHA": commit_sha,
+        "ORBIT_WARS_GIT_BRANCH": branch,
+        "ORBIT_WARS_CASE": case,
+        "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
+    }
+    # GIT_PAT は onstart の git push (.dvc メタコミット) で必要。.env か shell env
+    # から取得し、無ければ警告して continue (push はスキップされる)。
+    git_pat = load_git_pat()
+    if git_pat:
+        env_dict["GIT_PAT"] = git_pat
+    else:
+        console.print(
+            "[yellow]WARNING:[/] GIT_PAT not set — onstart の git push (.dvc 永続化) "
+            "は skip されます。`backend/.env` に GIT_PAT を追加してください。"
+        )
+    env = build_env_dict(env_dict)
     pod_id = create_pod(
         sdk,
         name=label or run_id,
