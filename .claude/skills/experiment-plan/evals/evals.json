@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment-plan",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/experiment-plan imitation/case1 で dropout を 0.2 から 0.3 に上げて再学習する実験の plan を書きたい",
+      "expected_output": "Step 0 skipped (inline overview provided). Step 1 reads backend/pipeline/imitation/case1/ (main.py, agent.py, training/config), checks docs/experiment/imitation/ for matching prior dirs. Surfaces 3-5 line orientation in Japanese. Step 2 Round 1 covers hypothesis confirmation, primary metric (local win-rate, NEVER Kaggle publicScore), opponent pool from AGENT_REGISTRY, episode count with ⭐推薦 ≥300. Round 2 covers scope (recommend new module over rewrite), local validation (dev/test-backend), compute target (⭐推薦 Vast.ai for IL training), Vast stage. Step 3 asks 'web 調査必要?', user likely says 不要. Step 4 writes plan under existing matching dir as iterN_plan.md, or new {yyyymmdd}_case1_dropout_sweep/plan.md. Reports path in Japanese, offers /experiment-execution. Does NOT run dev/test-backend, dev/vast train, or any code edit.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "実験の plan を書きたい",
+      "expected_output": "Step 0 triggered: AskUserQuestion asks for free-text overview with 2-3 template options + Other. After user provides overview, Step 1 reads relevant pipeline directory and prior experiment docs. Step 2 hearing rounds (R1: hypothesis/metric/opponent/episodes, R2: scope/validation/compute). Step 3 web research opt-in question. Step 4 writes plan.md at appropriate path per docs/rules. Reports in Japanese.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "rulebase/case4 の harass policy 改良の plan を書きたい。Kaggle の Lux S3 や Halite IV で harass 戦術がどう実装されてるか調べて参考にしたい。",
+      "expected_output": "Step 0 skipped (overview clear). Step 1 reads backend/pipeline/rulebase/case4/ and prior rulebase experiment dirs for harass-related work. Step 2 hearing on hypothesis + validation. Step 3 EXPLICITLY runs because user named external research targets — performs WebSearch/WebFetch for Lux S3 + Halite IV harass writeups (2-4 queries, time-boxed to ~5min), captures URLs + 1-line takeaways. Step 4 writes plan.md under docs/experiment/rulebase/{yyyymmdd}_case4_harass_*/ with populated '## 参考 (References)' section. If research depth exceeds 5min, recommends /research-retrieval and stops. Reports path + research summary in Japanese.",
+      "files": []
+    }
+  ]
+}
