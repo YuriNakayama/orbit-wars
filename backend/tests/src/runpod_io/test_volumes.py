@@ -82,44 +82,112 @@ def test_search_volume_offers_unknown_dc_returns_empty() -> None:
     assert offers == []
 
 
-def test_create_volume_returns_id() -> None:
-    sdk = _stub_graphql(
-        {
-            "data": {
-                "createNetworkVolume": {
-                    "id": "vol-new",
-                    "name": "abc",
-                    "size": 15,
-                    "dataCenterId": "US-KS-2",
-                }
+def test_create_volume_returns_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_volume は REST `/v1/networkvolumes` を POST して id を返す。"""
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "id": "vol-new",
+                "name": "abc",
+                "size": 15,
+                "dataCenterId": "US-KS-2",
             }
-        }
+
+        text = ""
+
+    def fake_post(url: str, **kwargs: object) -> FakeResponse:
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse()
+
+    monkeypatch.setattr("runpod_io.volumes.requests.post", fake_post)
+    new_id = create_volume(
+        MagicMock(),
+        name="abc",
+        size_gb=15,
+        data_center_id="US-KS-2",
+        api_key="fake-key",
     )
-    new_id = create_volume(sdk, name="abc", size_gb=15, data_center_id="US-KS-2")
     assert new_id == "vol-new"
-    args, kwargs = sdk.run_graphql_query.call_args
-    assert "createNetworkVolume" in args[0]
-    assert kwargs["variables"]["input"]["name"] == "abc"
-    assert kwargs["variables"]["input"]["size"] == 15
-    assert kwargs["variables"]["input"]["dataCenterId"] == "US-KS-2"
+    assert captured["url"] == "https://rest.runpod.io/v1/networkvolumes"
+    assert captured["json"] == {
+        "name": "abc",
+        "size": 15,
+        "dataCenterId": "US-KS-2",
+    }
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert headers.get("Authorization") == "Bearer fake-key"
 
 
 def test_create_volume_invalid_dc() -> None:
     sdk = _stub_graphql({})
     with pytest.raises(ValueError, match="unknown data_center_id"):
-        create_volume(sdk, name="abc", size_gb=15, data_center_id="FAKE-1")
+        create_volume(
+            sdk, name="abc", size_gb=15, data_center_id="FAKE-1", api_key="fake-key"
+        )
 
 
 def test_create_volume_invalid_name() -> None:
     sdk = _stub_graphql({})
     with pytest.raises(ValueError):
-        create_volume(sdk, name="bad name!", size_gb=15, data_center_id="US-KS-2")
+        create_volume(
+            sdk,
+            name="bad name!",
+            size_gb=15,
+            data_center_id="US-KS-2",
+            api_key="fake-key",
+        )
 
 
-def test_create_volume_missing_id_in_response() -> None:
-    sdk = _stub_graphql({"data": {"createNetworkVolume": {}}})
+def test_create_volume_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REST が 4xx/5xx を返したら RuntimeError。"""
+
+    class FakeResponse:
+        status_code = 500
+        text = "internal error"
+
+    monkeypatch.setattr(
+        "runpod_io.volumes.requests.post", lambda url, **kwargs: FakeResponse()
+    )
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        create_volume(
+            MagicMock(),
+            name="abc",
+            size_gb=15,
+            data_center_id="US-KS-2",
+            api_key="fake-key",
+        )
+
+
+def test_create_volume_missing_id_in_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """200 応答だが id が無い場合は RuntimeError。"""
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"name": "abc"}  # id 欠如
+
+    monkeypatch.setattr(
+        "runpod_io.volumes.requests.post", lambda url, **kwargs: FakeResponse()
+    )
     with pytest.raises(RuntimeError, match="returned no id"):
-        create_volume(sdk, name="abc", size_gb=15, data_center_id="US-KS-2")
+        create_volume(
+            MagicMock(),
+            name="abc",
+            size_gb=15,
+            data_center_id="US-KS-2",
+            api_key="fake-key",
+        )
 
 
 def test_validate_volume_name_accepts_safe_chars() -> None:

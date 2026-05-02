@@ -15,20 +15,35 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import requests
 from rich.console import Console
 from rich.table import Table
 
 # RunPod 公式 docs から拾った代表 DC 一覧。SDK / API 側に list endpoint が
 # 安定して提供されていないため、本基盤では静的リストとして保持する。volume
 # 作成時の入力 hint として使い、誤入力を弾くことが目的。
+# Network volume 対応 DC (RunPod REST API のエラーメッセージで返ってきた最新値)。
+# DC は時々追加/廃止されるため、もし create_volume が "not found" を返した場合は
+# このリストを最新化すること。
 KNOWN_DATA_CENTERS: tuple[str, ...] = (
-    "US-KS-2",
-    "US-CA-1",
-    "EU-RO-1",
+    "AP-JP-1",
+    "CA-MTL-3",
+    "CA-MTL-4",
+    "EU-CZ-1",
     "EU-NL-1",
+    "EU-RO-1",
+    "EU-SE-1",
     "EUR-IS-1",
-    "CA-MTL-1",
-    "SEA-MY-1",
+    "EUR-IS-3",
+    "EUR-NO-1",
+    "US-CA-2",
+    "US-GA-2",
+    "US-IL-1",
+    "US-KS-2",
+    "US-MO-1",
+    "US-MO-2",
+    "US-NC-2",
+    "US-NE-1",
 )
 
 # storage 価格は仕様で固定 ($0.07/GB/月 for first 1TB)。表示用の参考値。
@@ -179,42 +194,50 @@ def create_volume(
     name: str,
     size_gb: int,
     data_center_id: str,
+    api_key: str | None = None,
 ) -> str:
-    """新規 network volume を作成し、id を返す。GraphQL mutation 経由。"""
+    """新規 network volume を作成し、id を返す。REST API 経由。
+
+    `runpod.api.graphql.run_graphql_query` は variables 引数を受け付けない
+    (`(query, api_key=None)` のみ) ため、CreateNetworkVolume mutation を
+    SDK から直接叩けない。代わりに REST API `/v1/networkvolumes` を使う。
+    `api_key` が None なら runpod_sdk.api_key を読む。
+    """
+    import runpod as runpod_sdk
+
     validate_volume_name(name)
     if data_center_id not in KNOWN_DATA_CENTERS:
         raise ValueError(
             f"unknown data_center_id {data_center_id!r}; known: {KNOWN_DATA_CENTERS}"
         )
-    mutation = """
-    mutation CreateVolume($input: CreateNetworkVolumeInput!) {
-      createNetworkVolume(input: $input) {
-        id
-        name
-        size
-        dataCenterId
-      }
-    }
-    """
-    variables = {
-        "input": {
+
+    effective_key = api_key or runpod_sdk.api_key
+    if not effective_key:
+        raise RuntimeError("RUNPOD_API_KEY required for create_volume")
+
+    response = requests.post(
+        "https://rest.runpod.io/v1/networkvolumes",
+        headers={
+            "Authorization": f"Bearer {effective_key}",
+            "Content-Type": "application/json",
+        },
+        json={
             "name": name,
             "size": int(size_gb),
             "dataCenterId": data_center_id,
-        }
-    }
-    response = sdk.run_graphql_query(mutation, variables=variables)
-    if not isinstance(response, Mapping):
+        },
+        timeout=30,
+    )
+    if response.status_code >= 400:
         raise RuntimeError(
-            f"unexpected run_graphql_query response: {type(response).__name__}"
+            f"create_volume failed: HTTP {response.status_code} {response.text[:300]}"
         )
-    data = response.get("data") or {}
-    created = data.get("createNetworkVolume") or {}
-    new_id = created.get("id")
+    data = response.json()
+    if not isinstance(data, Mapping):
+        raise RuntimeError(f"unexpected response type: {type(data).__name__}")
+    new_id = data.get("id")
     if new_id is None:
-        raise RuntimeError(
-            f"createNetworkVolume returned no id: response={dict(response)}"
-        )
+        raise RuntimeError(f"createNetworkVolume returned no id: response={data}")
     return str(new_id)
 
 
