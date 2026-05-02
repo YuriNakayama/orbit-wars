@@ -11,9 +11,10 @@ exec > >(tee -a /var/log/onstart.log) 2>&1
 INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
 
 # Install minimal tools we depend on (aws cli for S3 progress markers,
-# runpodctl for self-destroy, git/curl for clone). The pytorch/pytorch image
-# is small but lacks these. apt-get is invoked once with retry to be robust
-# against transient mirror flakiness.
+# runpodctl for self-destroy, git/curl for clone). pytorch image は小さく
+# これらを持たないので、apt-get + (失敗したら) pip の 2 段で aws cli を確保する。
+# aws cli が確実に入っていれば、その後の任意ステップで失敗しても
+# cleanup_destroy 内で onstart log を S3 にアップロードできる。
 install_prereqs() {
   export DEBIAN_FRONTEND=noninteractive
   for attempt in 1 2 3; do
@@ -22,12 +23,21 @@ install_prereqs() {
          awscli git curl ca-certificates >/dev/null; then
       return 0
     fi
-    echo "[onstart] install_prereqs attempt=${attempt} failed; retrying" >&2
+    echo "[onstart] install_prereqs apt attempt=${attempt} failed; retrying" >&2
     sleep 10
   done
   return 1
 }
-install_prereqs || echo "[onstart] install_prereqs failed (continuing)"
+install_prereqs || echo "[onstart] install_prereqs apt failed (will try pip)"
+
+# aws cli フォールバック: apt が失敗しても pytorch image なら python があるので
+# pip 経由で awscli を入れる (SDK だけで十分、cli wrapper は entry-point)。
+if ! command -v aws >/dev/null 2>&1; then
+  echo "[onstart] aws not found; pip install awscli fallback"
+  pip install --quiet awscli 2>/dev/null || \
+    python -m pip install --quiet awscli 2>/dev/null || \
+    echo "[onstart] pip install awscli failed (S3 upload will be skipped)"
+fi
 
 # runpodctl is the official RunPod cli, used by self-destroy. The pytorch
 # image does not ship it, so we fetch the static binary on-demand.
@@ -52,9 +62,17 @@ mark() {
 }
 mark "00_container_started"
 
-# Hard timeout safety net: even if the trap is bypassed by an unhandled
-# signal, this background job will stop the pod after 2h to bound cost.
-( sleep 7200 && runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true ) &
+# Hard timeout safety net: trap が壊れても 2h で pod を強制 remove する。
+# remove 前に log を S3 へ最終 snapshot として書き出す (cleanup_destroy が
+# 呼ばれない経路の救済 — 例えば `runpodctl remove pod` を外部から叩かれて
+# bash に SIGKILL が届いた場合や、kernel panic 等)。
+(
+  sleep 7200
+  if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
+    aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
+  fi
+  runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true
+) &
 TIMEOUT_GUARD_PID=$!
 
 cleanup_destroy() {
