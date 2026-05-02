@@ -5,7 +5,10 @@
 #   <CASE> (e.g. case1 / case3), <TRAIN_MODULE> (python -m target),
 #   <CONFIG_ARG> ('' or '--config <path>'),
 #   <PREPROCESS_CMD> ('' or 'module.path [--config <path>]')
-set -euo pipefail
+set -uo pipefail  # 注意: -e は外す。install フェーズで疑似的な失敗 (apt の hash mismatch 等)
+                  # が頻発し、過去 4 連続で onstart 序盤に消滅していた。`set -e` を入れない
+                  # 方が早期段階で markers を残せる。trap EXIT は引き続き動く。
+mkdir -p /var/log
 exec > >(tee -a /var/log/onstart.log) 2>&1
 
 INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
@@ -258,8 +261,17 @@ done
 
 mark "40_uv_sync_done"
 echo "[onstart] step=dvc_pull"
-uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
-uv run --project backend dvc pull
+# set -e は外しているので明示的に exit code を確認
+if ! uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc; then
+  echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
+  mark "45_dvc_pull_kaggle_failed"
+  exit 1
+fi
+if ! uv run --project backend dvc pull; then
+  echo "[onstart] dvc pull (full) FAILED" >&2
+  mark "45_dvc_pull_full_failed"
+  exit 1
+fi
 
 mark "50_dvc_pull_done"
 echo "[onstart] step=mkdir_run"
@@ -309,10 +321,17 @@ ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
   uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG> \
   2>&1 | tee "${TRAIN_LOG}"
+TRAIN_EXIT=${PIPESTATUS[0]}
 
 # 学習終了後に gpu sampler を停止
 if [ -n "${NVSMI_PID}" ]; then
   kill "${NVSMI_PID}" 2>/dev/null || true
+fi
+
+if [ "${TRAIN_EXIT}" -ne 0 ]; then
+  echo "[onstart] train exit=${TRAIN_EXIT} FAILED" >&2
+  mark "65_train_failed_exit_${TRAIN_EXIT}"
+  exit "${TRAIN_EXIT}"
 fi
 
 mark "70_train_done"
