@@ -14,8 +14,10 @@ echo "RUNPOD_API_KEY=<your-key>" >> backend/.env
 
 # 3) (推奨) network volume を 1 個作成 — 立ち上げ時間を 5-15 分短縮
 # 永続化対象: uv-cache / dvc-cache / data/lake (raw episodes) / data/mart (preprocessed)
-dev/runpod volume create orbit_wars --size 30 --data-center-id CA-MTL-1
+# 300GB に設定: 学習データ追加 (kaggle_episodes / selfplay matches) と次期 RL モデルを見越した余裕
+dev/runpod volume create orbit_wars --size 300 --data-center-id CA-MTL-3
 # 以降は同じ DC で `dev/runpod train` を叩くと --volume-name で自動再利用される
+# Volume の月額: $0.07/GB × 300 = ~$21/月
 ```
 
 ## 1 サイクルの流れ

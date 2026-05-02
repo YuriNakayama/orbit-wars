@@ -227,7 +227,7 @@ def train(
         "--auto-create-volume",
         help="一致 volume が無ければ --data-center-id で新規作成",
     ),
-    volume_size_gb: int = typer.Option(15, "--volume-size"),
+    volume_size_gb: int = typer.Option(300, "--volume-size"),
     data_center_id: str | None = typer.Option(
         None,
         "--data-center-id",
@@ -932,7 +932,7 @@ def volume_list_cmd() -> None:
 
 @volume_app.command("search")
 def volume_search_cmd(
-    min_size_gb: int = typer.Option(15, "--min-size"),
+    min_size_gb: int = typer.Option(300, "--min-size"),
     data_center_id: str | None = typer.Option(None, "--data-center-id"),
 ) -> None:
     """利用可能な data center 一覧を表示。"""
@@ -948,7 +948,7 @@ def volume_search_cmd(
 @volume_app.command("create")
 def volume_create_cmd(
     name: str = typer.Argument(..., help="volume name"),
-    size_gb: int = typer.Option(15, "--size"),
+    size_gb: int = typer.Option(300, "--size"),
     data_center_id: str = typer.Option(..., "--data-center-id"),
 ) -> None:
     """新規 volume を作成し id を表示。"""
