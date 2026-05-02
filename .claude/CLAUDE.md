@@ -71,6 +71,6 @@ docs/
 
 ## Response Language And Interface
 
-- Internal reasoning should be in English
 - Use the `AskUserQuestion` tool when asking questions to the user
-- All user-facing output must be in Japanese (全てのユーザー向けの出力は日本語で行うこと)
+- Internal reasoning, tool calls, and intermediate notes: English.
+- User-facing output (final replies, reports, summaries): Japanese.(全てのユーザー向けの出力は日本語で行うこと)
