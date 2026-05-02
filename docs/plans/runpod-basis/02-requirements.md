@@ -38,7 +38,7 @@
 7. **F1.7** `run_id = generate_run_id(branch, commit_sha, seed)` (vast.run_meta の関数を share / 同等関数を runpod 側に置く)。
 8. **F1.8** Network volume 解決:
    - `--volume-id` 明示があればそれを使用。
-   - なければ `--volume-name` (デフォルト `orbit_wars_cache_runpod`) で既存 volume を `list_volumes(sdk)` 検索 → 名前一致なら再利用。
+   - なければ `--volume-name` (デフォルト `orbit_wars`) で既存 volume を `list_volumes(sdk)` 検索 → 名前一致なら再利用。
    - `--auto-create-volume` フラグがあり、一致 volume 不在なら `search_volume_offers` → ユーザに choice → `create_volume` で新規作成。
    - どれでもなければ volume なし (uv cache / DVC cache 永続化なし)。
 9. **F1.9** onstart スクリプト構築:

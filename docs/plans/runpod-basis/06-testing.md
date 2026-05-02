@@ -104,7 +104,7 @@
 1. **準備**:
    - `backend/.env` に `RUNPOD_API_KEY` 設定。
    - `~/.aws/credentials` の `orbit-wars` profile が利用可能。
-   - RunPod Web UI で network volume 作成 (DC: US-KS-2, 15GB, name: `orbit_wars_cache_runpod`)。
+   - RunPod Web UI で network volume 作成 (DC: US-KS-2, 15GB, name: `orbit_wars`)。
 2. **commit & push**: `feature/runpod-basis` ブランチで実装を commit & push。
 3. **実行**: `dev/runpod train <sha> --case case1 --cloud-type SECURE --seed 0 --label e2e-test`。
 4. **モニタ**: `runpodctl pod logs <id>` で onstart 進行を 10-15 分監視。

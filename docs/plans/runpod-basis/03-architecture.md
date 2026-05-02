@@ -196,7 +196,7 @@ DEFAULT_GPU_NAMES: tuple[str, ...] = (
     "NVIDIA RTX A6000",
     "NVIDIA A100 80GB PCIe",
 )
-DEFAULT_VOLUME_NAME = "orbit_wars_cache_runpod"
+DEFAULT_VOLUME_NAME = "orbit_wars"
 DEFAULT_MOUNT_PATH = "/persist"
 DEFAULT_PORTS = "22/tcp,8888/http"
 

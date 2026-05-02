@@ -147,17 +147,19 @@ echo "[onstart] step=env_persist"
 env >> /etc/environment
 
 # Persistent network volume (mount path is supplied by RunPod create_pod).
-# When a network volume is attached at /persist we symlink uv cache / DVC
-# cache / data/mart for cross-run reuse. When absent we fall back to local
-# disk. mkdir/ln are idempotent.
+# When a network volume is attached at /persist we symlink:
+#   uv cache, DVC cache, data/lake (raw episodes), data/mart (preprocessed).
+# data/lake は dvc pull で取得する大型 raw データ (kaggle_episodes 等) で、
+# 学習データ追加時に再ダウンロードを避けるため volume に永続化する。
+# When the volume is absent we fall back to ephemeral disk. mkdir/ln are idempotent.
 if [ -d /persist ]; then
   echo "[onstart] step=persist_setup mount=/persist"
-  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart
+  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart /persist/data-lake
   mkdir -p "$HOME/.cache"
   rm -rf "$HOME/.cache/uv" 2>/dev/null || true
   ln -sfn /persist/uv-cache "$HOME/.cache/uv"
   export UV_CACHE_DIR="$HOME/.cache/uv"
-  echo "[onstart] persist: uv cache -> /persist/uv-cache"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache, data-lake/data-mart 用意済み"
 else
   echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
 fi
@@ -185,6 +187,10 @@ if [ -d /persist ]; then
   mkdir -p data
   rm -rf data/mart 2>/dev/null || true
   ln -sfn /persist/data-mart data/mart
+  # data/lake は dvc pull で大型 raw episodes を取る場所。volume に置けば
+  # 2 回目以降は dvc cache hit + symlink で再ダウンロード不要になる。
+  rm -rf data/lake 2>/dev/null || true
+  ln -sfn /persist/data-lake data/lake
 fi
 
 mark "20_clone_done"

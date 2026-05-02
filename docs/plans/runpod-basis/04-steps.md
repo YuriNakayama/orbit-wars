@@ -461,7 +461,7 @@ vast.cli.promote の単純コピー。
 
 ### Work Items
 1. `backend/.env` に `RUNPOD_API_KEY` 設定。
-2. RunPod Web UI で network volume を 1 個作成 (DC: US-KS-2, size: 15GB, name: `orbit_wars_cache_runpod`)。`backend/.env` に `RUNPOD_NETWORK_VOLUME_ID=<id>` を追加 (任意 step、もしくは `dev/runpod volume create` で実装後)。
+2. RunPod Web UI で network volume を 1 個作成 (DC: US-KS-2, size: 15GB, name: `orbit_wars`)。`backend/.env` に `RUNPOD_NETWORK_VOLUME_ID=<id>` を追加 (任意 step、もしくは `dev/runpod volume create` で実装後)。
 3. `feature/runpod-basis` ブランチで実装を commit & push。
 4. `dev/runpod train <sha> --case case1 --cloud-type SECURE --seed 0 --label e2e-test`。
 5. `runpodctl pod logs <id>` で 10-15 分監視。

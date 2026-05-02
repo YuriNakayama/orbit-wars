@@ -12,9 +12,10 @@ dev/dvc setup
 # https://runpod.io/console/user/settings で発行
 echo "RUNPOD_API_KEY=<your-key>" >> backend/.env
 
-# 3) (オプション) network volume を 1 個作成
-dev/runpod volume create orbit_wars_cache_runpod --size 15 --data-center-id US-KS-2
-# 表示された id を覚えておく (もしくは --volume-name で自動再利用)
+# 3) (推奨) network volume を 1 個作成 — 立ち上げ時間を 5-15 分短縮
+# 永続化対象: uv-cache / dvc-cache / data/lake (raw episodes) / data/mart (preprocessed)
+dev/runpod volume create orbit_wars --size 30 --data-center-id CA-MTL-1
+# 以降は同じ DC で `dev/runpod train` を叩くと --volume-name で自動再利用される
 ```
 
 ## 1 サイクルの流れ
