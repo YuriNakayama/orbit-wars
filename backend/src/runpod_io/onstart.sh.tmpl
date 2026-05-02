@@ -1,0 +1,449 @@
+#!/bin/bash
+# RunPod onstart for Orbit Wars GPU training.
+# Placeholders are substituted by runpod_io.instance.render_onstart before upload:
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>,
+#   <CASE> (e.g. case1 / case3), <TRAIN_MODULE> (python -m target),
+#   <CONFIG_ARG> ('' or '--config <path>'),
+#   <PREPROCESS_CMD> ('' or 'module.path [--config <path>]')
+set -uo pipefail  # 注意: -e は外す。install フェーズで疑似的な失敗 (apt の hash mismatch 等)
+                  # が頻発し、過去 4 連続で onstart 序盤に消滅していた。`set -e` を入れない
+                  # 方が早期段階で markers を残せる。trap EXIT は引き続き動く。
+mkdir -p /var/log
+exec > >(tee -a /var/log/onstart.log) 2>&1
+
+INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
+
+echo "[onstart] starting at $(date -u +%Y-%m-%dT%H:%M:%SZ) pod=${INSTANCE_ID}"
+
+# 早期 sshd 起動: docker_args で ENTRYPOINT を上書きしているので image の
+# /start.sh は走らない → デフォルトでは sshd が立ち上がらない。bash の冒頭で
+# 明示起動して、onstart 中の任意のタイミングで `tail -f /var/log/onstart.log`
+# を SSH 経由で読めるようにする。AUTHORIZED_KEYS は pod の env PUBLIC_KEY か
+# RunPod が予め配置してくれるはず。失敗しても onstart 本体は続行。
+start_sshd_early() {
+  # AUTHORIZED_KEYS を env から書き戻す (RunPod が PUBLIC_KEY を渡してくる)
+  if [ -n "${PUBLIC_KEY:-}" ]; then
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    echo "${PUBLIC_KEY}" > /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+  fi
+  # openssh-server は image によって既に入っている / いない両方ある。
+  if ! command -v sshd >/dev/null 2>&1; then
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq --no-install-recommends openssh-server 2>/dev/null || true
+  fi
+  if command -v sshd >/dev/null 2>&1; then
+    mkdir -p /var/run/sshd
+    /usr/sbin/sshd 2>/dev/null && \
+      echo "[onstart] sshd started (port 22 open)" || \
+      echo "[onstart] sshd start failed (continuing without ssh)"
+  else
+    echo "[onstart] sshd not available; skipping"
+  fi
+}
+start_sshd_early
+
+# Install minimal tools we depend on (uv for python pkg mgmt, aws cli via uv,
+# runpodctl for self-destroy, git/curl for clone). pytorch image は小さく
+# uv も awscli も持たないので、まず apt で git/curl/ca-certs を入れて
+# 続けて uv -> uv pip install awscli の順に走らせる。
+install_prereqs() {
+  export DEBIAN_FRONTEND=noninteractive
+  for attempt in 1 2 3; do
+    if apt-get update -qq && \
+       apt-get install -y -qq --no-install-recommends \
+         git curl ca-certificates >/dev/null; then
+      return 0
+    fi
+    echo "[onstart] install_prereqs apt attempt=${attempt} failed; retrying" >&2
+    sleep 10
+  done
+  return 1
+}
+echo "[onstart] running install_prereqs (apt-get install git curl)"
+install_prereqs || echo "[onstart] install_prereqs apt failed (continuing)"
+echo "[onstart] install_prereqs done"
+
+# uv を最初に install する (awscli を uv pip 経由で入れたいため、後段の
+# `step=install_uv` よりここで前倒し)。pytorch image に uv はバンドルされて
+# いないのが普通なので、astral.sh の install script で /root/.local/bin に置く。
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[onstart] installing uv (early — awscli を uv pip で入れるため)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh \
+    || echo "[onstart] uv install script failed" >&2
+fi
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+if command -v uv >/dev/null 2>&1; then
+  echo "[onstart] uv ready: $(uv --version 2>&1 | head -1)"
+else
+  echo "[onstart] WARNING: uv unavailable" >&2
+fi
+
+# aws cli を uv tool install で入れる。Ubuntu 24.04 は PEP 668
+# (externally-managed-environment) で system python への pip install を拒否する
+# ため uv pip --system は失敗する。uv tool install は隔離 venv を作って bin を
+# ~/.local/bin/aws に配置する (PATH に含めれば command -v aws で検出可能)。
+if ! command -v aws >/dev/null 2>&1; then
+  echo "[onstart] installing awscli via uv tool install"
+  if command -v uv >/dev/null 2>&1; then
+    UV_TOOL_OUT=$(uv tool install awscli 2>&1)
+    UV_TOOL_EXIT=$?
+    echo "[onstart] uv tool install output (last 5 lines):"
+    echo "${UV_TOOL_OUT}" | tail -5
+    if [ "${UV_TOOL_EXIT}" -eq 0 ]; then
+      echo "[onstart] uv tool install awscli ok (exit=0)"
+    else
+      echo "[onstart] uv tool install awscli FAILED exit=${UV_TOOL_EXIT}" >&2
+    fi
+    # uv tool は ~/.local/bin に置く。PATH に含める。
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    echo "[onstart] uv unavailable; cannot install awscli" >&2
+  fi
+fi
+# install 完了後の sanity check: aws version と AWS env の有無を log する
+if command -v aws >/dev/null 2>&1; then
+  echo "[onstart] aws cli ready: $(aws --version 2>&1 | head -1)"
+  echo "[onstart] AWS_ACCESS_KEY_ID set=${AWS_ACCESS_KEY_ID:+yes}${AWS_ACCESS_KEY_ID:-no}"
+  echo "[onstart] AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-unset}"
+else
+  echo "[onstart] WARNING: aws cli unavailable; S3 markers/artifacts will be skipped" >&2
+fi
+
+# runpodctl is the official RunPod cli, used by self-destroy. The pytorch
+# image does not ship it, so we fetch the static binary on-demand.
+if ! command -v runpodctl >/dev/null 2>&1; then
+  curl -sSL -o /usr/local/bin/runpodctl \
+    "https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-amd64" \
+    && chmod +x /usr/local/bin/runpodctl \
+    || echo "[onstart] runpodctl install failed"
+fi
+
+# Progress marker — write a tiny file to S3 at each step so we can debug
+# without SSH access. AWS env vars are injected by create_pod.
+S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_progress/<RUN_ID>"
+mark() {
+  local step="$1"
+  local ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local body="ts=${ts} step=${step} pod=${INSTANCE_ID}"
+  echo "[onstart] mark step=${step}"
+  if command -v aws >/dev/null 2>&1; then
+    # 初回 mark のみ stderr を表示する (silent failure を見逃さない)。
+    # 2 回目以降は log を汚さないために suppress。
+    if [ -z "${MARK_DEBUG_DONE:-}" ]; then
+      echo "${body}" | aws s3 cp - "${S3_MARKER_PREFIX}/${ts}_${step}" \
+        || echo "[onstart] mark first-call s3 cp failed (subsequent silent)" >&2
+      export MARK_DEBUG_DONE=1
+    else
+      echo "${body}" | aws s3 cp - "${S3_MARKER_PREFIX}/${ts}_${step}" 2>/dev/null || true
+    fi
+  else
+    echo "[onstart] mark skipped (aws cli not available) step=${step}" >&2
+  fi
+}
+mark "00_container_started"
+
+# Hard timeout safety net: trap が壊れても 2h で pod を強制 remove する。
+# remove 前に log を S3 へ最終 snapshot として書き出す (cleanup_destroy が
+# 呼ばれない経路の救済 — 例えば `runpodctl remove pod` を外部から叩かれて
+# bash に SIGKILL が届いた場合や、kernel panic 等)。
+(
+  sleep 7200
+  if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
+    aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
+  fi
+  runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true
+) &
+TIMEOUT_GUARD_PID=$!
+
+cleanup_destroy() {
+  local exit_code=$?
+  # Stop the timeout guard so it doesn't fire later in the success path.
+  kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
+  echo "[onstart] cleanup status=${exit_code}"
+  mark "90_cleanup_exit_${exit_code}"
+  # 失敗時 (or 成功時の保険) に onstart log 全体を S3 に直接アップロード。
+  # 成功 path では後段で run_dir/onstart.log として DVC 永久化されるが、
+  # 序盤で失敗すると DVC 経路に到達しないので、必ずここで S3 へ最終 snapshot を残す。
+  if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
+    echo "[onstart] uploading log snapshot to s3://${S3_MARKER_PREFIX#s3://}/onstart.log"
+    aws s3 cp /var/log/onstart.log \
+      "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || \
+      echo "[onstart] log upload failed (non-fatal)"
+  fi
+  # RunPod は docker_args の bash プロセスが exit するとコンテナを再起動して
+  # docker_args を再実行する (実 e2e で確認済み: stop pod 後も restart loop)。
+  # `runpodctl stop pod` は storage を残して停止するだけで、RunPod の自動
+  # restart 機構が発動して再実行ループに入る。`runpodctl remove pod` (alias:
+  # delete) なら pod 自体が削除されて確実に止まる。
+  if command -v runpodctl >/dev/null 2>&1; then
+    if [ "${exit_code}" -ne 0 ]; then
+      echo "[onstart] failure path: removing pod (exit=${exit_code})"
+    else
+      echo "[onstart] success path: removing pod=${INSTANCE_ID}"
+    fi
+    runpodctl remove pod "${INSTANCE_ID}" || echo "[onstart] remove pod failed"
+  else
+    echo "[onstart] runpodctl missing; cannot self-destroy."
+  fi
+  # Hang while RunPod tears the pod down. exec で bash 自体を sleep に置換し、
+  # trap 連鎖や set -e による即 exit を抑止する。
+  exec sleep infinity
+}
+trap cleanup_destroy EXIT
+
+echo "[onstart] step=env_persist"
+env >> /etc/environment
+
+# Persistent network volume (mount path is supplied by RunPod create_pod).
+# When a network volume is attached at /persist we symlink:
+#   uv cache, DVC cache, data/lake (raw episodes), data/mart (preprocessed).
+# data/lake は dvc pull で取得する大型 raw データ (kaggle_episodes 等) で、
+# 学習データ追加時に再ダウンロードを避けるため volume に永続化する。
+# When the volume is absent we fall back to ephemeral disk. mkdir/ln are idempotent.
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_setup mount=/persist"
+  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart /persist/data-lake
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/uv" 2>/dev/null || true
+  ln -sfn /persist/uv-cache "$HOME/.cache/uv"
+  export UV_CACHE_DIR="$HOME/.cache/uv"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache, data-lake/data-mart 用意済み"
+else
+  echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
+fi
+
+mark "10_before_clone"
+echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
+mkdir -p /workspace
+cd /workspace
+if [ ! -d orbit-wars ]; then
+  if [ -n "${GIT_PAT:-}" ]; then
+    git clone "https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')" orbit-wars
+  else
+    git clone "<REPO_URL>" orbit-wars
+  fi
+fi
+cd orbit-wars
+git fetch origin "<COMMIT_SHA>" || true
+git checkout "<COMMIT_SHA>"
+
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_link_repo"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn /persist/dvc-cache .dvc/cache
+  # data/ は git tree から復元される (各種 .dvc stub を含む)。
+  # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
+  # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
+  # matches.dvc の path=matches なので data/lake/<src>/matches がそれ。
+  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart/imitation
+  mkdir -p /persist/lake-kaggle-matches /persist/lake-selfplay-matches \
+           /persist/data-mart-imitation
+  # data/lake/<src>/matches だけを symlink で persist 化 (raw episodes の本体)
+  if [ ! -L data/lake/kaggle_episodes/matches ] && [ ! -d data/lake/kaggle_episodes/matches ]; then
+    ln -sfn /persist/lake-kaggle-matches data/lake/kaggle_episodes/matches
+  fi
+  if [ ! -L data/lake/selfplay/matches ] && [ ! -d data/lake/selfplay/matches ]; then
+    ln -sfn /persist/lake-selfplay-matches data/lake/selfplay/matches
+  fi
+  # data/mart/imitation/<case> は dvc 出力なので直接 symlink で OK
+  if [ ! -L data/mart/imitation ] && [ ! -d data/mart/imitation ]; then
+    ln -sfn /persist/data-mart-imitation data/mart/imitation
+  fi
+fi
+
+mark "20_clone_done"
+# uv は冒頭で前倒し install 済みのはず。万一 PATH が落ちていれば再 export。
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[onstart] step=install_uv (early install missed; fallback)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+fi
+
+mark "30_before_uv_sync"
+echo "[onstart] step=uv_sync"
+for attempt in 1 2 3; do
+  if uv sync --locked --no-dev --directory backend; then
+    break
+  fi
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
+  fi
+done
+
+mark "40_uv_sync_done"
+echo "[onstart] step=dvc_pull cwd=$(pwd)"
+# 診断: cwd と repo の dvc-tracked 状態を log に残す
+echo "[onstart] dvc pull diagnostic:"
+ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
+# set -e は外しているので明示的に exit code を確認
+if ! uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc; then
+  echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
+  echo "[onstart] dvc pull diagnostic listing:"
+  ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
+  ls -la 2>&1 | head -10
+  git status --short 2>&1 | head -10
+  git log --oneline -3 2>&1 | head -3
+  mark "45_dvc_pull_kaggle_failed"
+  exit 1
+fi
+if ! uv run --project backend dvc pull; then
+  echo "[onstart] dvc pull (full) FAILED" >&2
+  mark "45_dvc_pull_full_failed"
+  exit 1
+fi
+
+mark "50_dvc_pull_done"
+echo "[onstart] step=mkdir_run"
+# 絶対 path で固定: train.py は ORBIT_WARS_RUN_DIR を Path.resolve() するので
+# 相対 path だと cwd (uv run --directory backend) 基準になり backend/data/... に
+# ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
+RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+mkdir -p "${RUN_DIR_ABS}"
+
+if [ -n "<PREPROCESS_CMD>" ]; then
+  if [ -d "data/mart/imitation/<CASE>" ] && \
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (parquet already present)"
+  else
+    echo "[onstart] step=preprocess case=<CASE>"
+    uv run --directory backend python -m <PREPROCESS_CMD>
+  fi
+fi
+
+mark "60_before_train"
+echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
+# snapshot は引用符を含む JSON なので、RunPod env では base64 で渡されている。
+# 学習プロセス起動時に decode して ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT に再注入する。
+SNAPSHOT_JSON=""
+if [ -n "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64:-}" ]; then
+  SNAPSHOT_JSON="$(echo "${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64}" | base64 -d)"
+fi
+# train.log と gpu.log を run_dir 配下に分離して書き出す。これにより
+# `dev/runpod tail <run_id> --source train` / `--source gpu` で SSH 経由
+# リアルタイムに眺められる。onstart.log とは tee で分岐済み (整合性確保)。
+TRAIN_LOG="${RUN_DIR_ABS}/train.log"
+GPU_LOG="${RUN_DIR_ABS}/gpu.log"
+mkdir -p "$(dirname "${TRAIN_LOG}")"
+
+# nvidia-smi を background で 10s 周期サンプリング → gpu.log に append
+NVSMI_PID=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  ( nvidia-smi \
+      --query-gpu=timestamp,utilization.gpu,memory.used,memory.total \
+      --format=csv -l 10 > "${GPU_LOG}" 2>&1 ) &
+  NVSMI_PID=$!
+  echo "[onstart] gpu sampler pid=${NVSMI_PID} -> ${GPU_LOG}"
+fi
+
+ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
+  ORBIT_WARS_RUN_ID="<RUN_ID>" \
+  ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
+  ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
+  ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
+  ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG> \
+  2>&1 | tee "${TRAIN_LOG}"
+TRAIN_EXIT=${PIPESTATUS[0]}
+
+# 学習終了後に gpu sampler を停止
+if [ -n "${NVSMI_PID}" ]; then
+  kill "${NVSMI_PID}" 2>/dev/null || true
+fi
+
+if [ "${TRAIN_EXIT}" -ne 0 ]; then
+  echo "[onstart] train exit=${TRAIN_EXIT} FAILED" >&2
+  mark "65_train_failed_exit_${TRAIN_EXIT}"
+  exit "${TRAIN_EXIT}"
+fi
+
+mark "70_train_done"
+# onstart log 全体を run_dir に取り込んで DVC 永久化対象にする。dvc add 直前なので
+# tee 中の最新行も含めて snapshot される。失敗 path では cleanup_destroy が S3 に
+# 直接アップロードするので、ここでは成功 path のみカバーで十分。RUN_DIR_ABS は
+# /workspace/orbit-wars/data/output/... の絶対 path (train.py 出力位置と整合)。
+if [ -f /var/log/onstart.log ]; then
+  cp /var/log/onstart.log "${RUN_DIR_ABS}/onstart.log"
+  echo "[onstart] copied onstart.log -> ${RUN_DIR_ABS}/onstart.log"
+fi
+
+# ===== EARLY ARTIFACT UPLOAD (PR1: 成果物消失の止血) =====
+# dvc push まで到達せずに pod が外部 kill されるケースを想定し、生成された
+# 成果物 (best.pt / metrics.json / run.json / onstart.log) を s3://.../runpod_artifacts/
+# 配下に直接 upload する。これは DVC とは独立した保険経路。dvc push が成功すれば
+# そちらが正本だが、失敗しても artifacts prefix から `dev/runpod pull` で取れる。
+S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
+echo "[onstart] step=early_artifact_upload prefix=${S3_ARTIFACT_PREFIX}"
+if command -v aws >/dev/null 2>&1; then
+  echo "[onstart] artifact dir listing:"
+  ls -la "${RUN_DIR_ABS}" 2>&1 | head -10
+  for f in best.pt metrics.json run.json onstart.log train.log gpu.log; do
+    src="${RUN_DIR_ABS}/${f}"
+    if [ -f "${src}" ]; then
+      aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" \
+        && echo "[onstart] uploaded ${f}" \
+        || echo "[onstart] upload ${f} failed (non-fatal)" >&2
+    else
+      echo "[onstart] skip ${f} (not found at ${src})"
+    fi
+  done
+  mark "75_artifacts_uploaded"
+else
+  echo "[onstart] aws cli not available; skipping early artifact upload"
+fi
+
+echo "[onstart] step=dvc_add_run"
+# dvc add は cwd 基準 path を取る。RUN_DIR_ABS の絶対 path から repo root を
+# 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
+RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+uv run --project backend dvc add "${RUN_DIR_REL}"
+
+echo "[onstart] step=dvc_push_runs"
+uv run --project backend dvc push "${RUN_DIR_REL}"
+
+echo "[onstart] step=git_push_dvc_meta"
+RUN_DVC_FILE="${RUN_DIR_REL}.dvc"
+if [ -f "${RUN_DVC_FILE}" ]; then
+  git config user.email "runpod-bot@orbit-wars.local"
+  git config user.name "runpod-bot"
+  TARGET_BRANCH="<BRANCH>"
+  # GIT_PAT が pod env にあれば https URL に埋め込んで auth (push 用)。clone 経路は
+  # PUBLIC repo なので URL に PAT 不要、ただし push は auth 必須。
+  if [ -n "${GIT_PAT:-}" ]; then
+    PUSH_URL="https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')"
+    git remote set-url origin "${PUSH_URL}" 2>&1 | tail -2
+  else
+    echo "[onstart] WARNING: GIT_PAT not set; git push 経路は失敗する見込み" >&2
+  fi
+  git fetch origin "${TARGET_BRANCH}" || true
+  git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+  # data/ は .gitignore で除外されているが whitelist (`!/data/**/*.dvc`) で
+  # .dvc ファイルだけは戻る。が、新規追加 path が whitelist を完全には
+  # 通らない (parent dir も track されてないため hint が出る) ので明示 -f。
+  git add -f -- "${RUN_DVC_FILE}"
+  git commit --no-verify -m ":robot: runpod: add <CASE>/runs/<RUN_ID>.dvc" || {
+    echo "[onstart] git_push_dvc_meta: nothing to commit (already tracked?)"
+  }
+  for attempt in 1 2 3; do
+    if git push origin "HEAD:${TARGET_BRANCH}"; then
+      echo "[onstart] git_push_dvc_meta: pushed to ${TARGET_BRANCH}"
+      break
+    fi
+    echo "[onstart] git_push_dvc_meta: attempt=${attempt} rejected; rebasing"
+    git pull --rebase origin "${TARGET_BRANCH}" || true
+    if [ "${attempt}" -eq 3 ]; then
+      echo "[onstart] git_push_dvc_meta: exhausted retries; .dvc stays in S3 only"
+    fi
+  done
+else
+  echo "[onstart] git_push_dvc_meta: ${RUN_DVC_FILE} not found (dvc add failed?)"
+fi
+
+mark "99_done"
+echo "[onstart] step=done run_id=<RUN_ID>"
