@@ -63,6 +63,15 @@ cleanup_destroy() {
   kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
   echo "[onstart] cleanup status=${exit_code}"
   mark "90_cleanup_exit_${exit_code}"
+  # 失敗時 (or 成功時の保険) に onstart log 全体を S3 に直接アップロード。
+  # 成功 path では後段で run_dir/onstart.log として DVC 永久化されるが、
+  # 序盤で失敗すると DVC 経路に到達しないので、必ずここで S3 へ最終 snapshot を残す。
+  if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
+    echo "[onstart] uploading log snapshot to s3://${S3_MARKER_PREFIX#s3://}/onstart.log"
+    aws s3 cp /var/log/onstart.log \
+      "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || \
+      echo "[onstart] log upload failed (non-fatal)"
+  fi
   # RunPod は docker_args の bash プロセスが exit するとコンテナを再起動して
   # docker_args を再実行する (実 e2e で確認済み: stop pod 後も restart loop)。
   # `runpodctl stop pod` は storage を残して停止するだけで、RunPod の自動
@@ -186,6 +195,15 @@ ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 
 mark "70_train_done"
+# onstart log 全体を run_dir に取り込んで DVC 永久化対象にする。dvc add 直前なので
+# tee 中の最新行も含めて snapshot される。失敗 path では cleanup_destroy が S3 に
+# 直接アップロードするので、ここでは成功 path のみカバーで十分。
+RUN_DIR_LOCAL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+if [ -f /var/log/onstart.log ]; then
+  cp /var/log/onstart.log "${RUN_DIR_LOCAL}/onstart.log"
+  echo "[onstart] copied onstart.log -> ${RUN_DIR_LOCAL}/onstart.log"
+fi
+
 echo "[onstart] step=dvc_add_run"
 uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 

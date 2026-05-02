@@ -743,21 +743,36 @@ def status_cmd(
 def logs_cmd(
     run_id: str = typer.Argument(..., help="run_id from runpod train"),
     case: str = typer.Option(DEFAULT_CASE, "--case"),
+    source: str = typer.Option(
+        "markers",
+        "--source",
+        help="markers (S3 marker 列挙、デフォルト) / onstart (run_dir or S3 の onstart.log 全文)",
+    ),
     tail: int | None = typer.Option(None, "--tail", help="末尾 N 行のみ"),
     grep: str | None = typer.Option(None, "--grep", help="正規表現で行フィルタ"),
     aws_profile: str = typer.Option(
-        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 marker 取得用 AWS profile"
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 アクセス用 AWS profile"
     ),
 ) -> None:
-    """S3 marker を timestamp 順に表示する onstart 進捗ログ。
+    """onstart 進捗ログを表示する。
 
-    RunPod 公式 CLI には `pod logs` サブコマンドが無いため、本実装では
-    `onstart.sh.tmpl` が S3 に書き出した進捗 marker
-    (`s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>/<TS>_<STEP>`)
-    を timestamp 順に表示する。失敗 pod の最終ステップ確認や、進行中 pod の
-    どこまで進んだかの把握に使う。
+    RunPod 公式 CLI には `pod logs` サブコマンドが無いため、本実装は
+    onstart.sh.tmpl が S3 / run_dir に書き出した記録を読む 2 経路を持つ:
+
+    --source markers (default): S3 progress marker
+        (s3://.../runpod_progress/<RUN_ID>/<TS>_<STEP>) を timestamp 順に列挙。
+        どこまで進んだかの粗い把握用。
+    --source onstart: onstart の全文 stdout/stderr (`/var/log/onstart.log`) を
+        表示。run_dir/onstart.log を優先 (DVC pull 後)、無ければ S3 fallback
+        (s3://.../runpod_progress/<RUN_ID>/onstart.log、cleanup_destroy が
+        失敗時に直接 upload した snapshot)。
     """
     from runpod_io import progress as progress_mod
+
+    if source not in ("markers", "onstart"):
+        raise typer.BadParameter(
+            f"--source must be 'markers' or 'onstart', got {source!r}"
+        )
 
     repo_root = _repo_root()
     run_dir = find_run_dir(repo_root, run_id, case)
@@ -773,24 +788,42 @@ def logs_cmd(
         except (FileNotFoundError, json.JSONDecodeError):
             console.print(
                 f"[yellow]launch.json missing in {run_dir}[/] "
-                "(run launched before launch.json wiring; markers still readable)"
+                "(run launched before launch.json wiring; logs still readable)"
             )
 
-    try:
-        markers = progress_mod.list_markers(run_id, profile=aws_profile)
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]failed to list S3 markers:[/] {exc}")
-        raise typer.Exit(code=1) from exc
+    if source == "markers":
+        try:
+            markers = progress_mod.list_markers(run_id, profile=aws_profile)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]failed to list S3 markers:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+        if not markers:
+            console.print(
+                f"[yellow]no S3 markers for run_id={run_id!r}.[/] "
+                "Either onstart never wrote any (image pull failed before bash) "
+                "or AWS credentials don't grant ListBucket on runpod_progress/."
+            )
+            raise typer.Exit(code=1)
+        lines = [f"{m.timestamp}  {m.step}" for m in markers]
+    else:
+        # source == "onstart"
+        try:
+            log = progress_mod.fetch_onstart_log(
+                run_id, run_dir=run_dir, profile=aws_profile
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]failed to fetch onstart log:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+        if log is None:
+            console.print(
+                f"[yellow]no onstart log for run_id={run_id!r}.[/] "
+                "Neither run_dir/onstart.log (try `dev/runpod pull`) nor S3 fallback "
+                "(s3://.../runpod_progress/<run_id>/onstart.log) found."
+            )
+            raise typer.Exit(code=1)
+        console.print(f"[dim]onstart log source: {log.source}[/]")
+        lines = log.text.splitlines()
 
-    if not markers:
-        console.print(
-            f"[yellow]no S3 markers for run_id={run_id!r}.[/] "
-            "Either onstart never wrote any (image pull failed before bash) "
-            "or AWS credentials don't grant ListBucket on runpod_progress/."
-        )
-        raise typer.Exit(code=1)
-
-    lines = [f"{m.timestamp}  {m.step}" for m in markers]
     if grep is not None:
         pattern = re.compile(grep)
         lines = [line for line in lines if pattern.search(line)]

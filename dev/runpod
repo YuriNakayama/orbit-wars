@@ -9,7 +9,7 @@
 #   dev/runpod cost-report [--month YYYY-MM]
 #   dev/runpod ps [--case caseN] [--all]
 #   dev/runpod status <run_id> [--case caseN]
-#   dev/runpod logs <run_id> [--case caseN] [--tail N] [--grep PATTERN]
+#   dev/runpod logs <run_id> [--case caseN] [--source markers|onstart] [--tail N] [--grep PATTERN]
 #   dev/runpod watch <run_id> [--case caseN] [--poll-interval 30] [--max-wait 7200]
 #   dev/runpod volume {list|search|create} [...]
 #

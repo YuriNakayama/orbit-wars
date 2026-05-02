@@ -66,3 +66,49 @@ def latest_step(markers: list[ProgressMarker]) -> ProgressMarker | None:
     if not markers:
         return None
     return markers[-1]
+
+
+@dataclass(frozen=True)
+class OnstartLog:
+    """onstart の全文ログとその出処。"""
+
+    text: str
+    source: str  # "run_dir" / "s3"
+
+
+def fetch_onstart_log(
+    run_id: str,
+    *,
+    run_dir: Any | None = None,  # Path | None
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = PROGRESS_PREFIX,
+    s3_client: Any | None = None,
+) -> OnstartLog | None:
+    """onstart の全文ログを取得する。
+
+    優先順:
+    1. `run_dir/onstart.log` がローカルにあればそれを読む (DVC pull 後の経路)
+    2. なければ `s3://<bucket>/<prefix>/<run_id>/onstart.log` から取得
+       (失敗 pod の cleanup_destroy が直接 upload した snapshot)
+
+    どちらも見つからなければ None。
+    """
+    if run_dir is not None:
+        local_path = run_dir / "onstart.log"
+        if local_path.is_file():
+            return OnstartLog(
+                text=local_path.read_text(encoding="utf-8", errors="replace"),
+                source="run_dir",
+            )
+
+    client = s3_client if s3_client is not None else _build_s3_client(profile)
+    key = f"{prefix}/{run_id}/onstart.log"
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except Exception:  # noqa: BLE001 — boto3 ClientError 全部 catch
+        return None
+    body = obj["Body"].read()
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", errors="replace")
+    return OnstartLog(text=body, source="s3")

@@ -77,6 +77,7 @@ dev/runpod volume create <name> --data-center-id US-KS-2 [--size 15]
 dev/runpod ps                         # 起動中 pod 一覧 (launch.json と突合)
 dev/runpod status <run_id>            # 単一 run の pod state + S3 marker + DVC 状況
 dev/runpod logs <run_id>              # S3 progress marker を timestamp 順に表示
+dev/runpod logs <run_id> --source onstart  # /var/log/onstart.log 全文 (run_dir or S3 fallback)
 dev/runpod logs <run_id> --tail 5     # 末尾のみ
 dev/runpod logs <run_id> --grep done  # 行フィルタ
 dev/runpod watch <run_id>             # 既存 pod の終了まで poll → 完了/失敗で desktop 通知

@@ -583,3 +583,63 @@ def test_logs_works_without_launch_json(
     result = runner.invoke(app, ["logs", "ghost_run"])
     assert result.exit_code == 0
     assert "00_container_started" in result.output
+
+
+def test_logs_source_onstart_returns_full_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--source onstart は run_dir/onstart.log または S3 fallback の全文を返す。"""
+    from runpod_io.progress import OnstartLog
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+
+    captured: dict[str, object] = {}
+
+    def fake_fetch(
+        run_id: str, *, run_dir: Path | None = None, profile: str | None = None
+    ) -> OnstartLog:
+        captured["run_id"] = run_id
+        captured["run_dir"] = run_dir
+        return OnstartLog(
+            text="[onstart] step=00\n[onstart] step=99_done\n", source="run_dir"
+        )
+
+    monkeypatch.setattr("runpod_io.progress.fetch_onstart_log", fake_fetch)
+
+    result = runner.invoke(app, ["logs", "run42", "--source", "onstart"])
+    assert result.exit_code == 0, result.output
+    assert "step=00" in result.output
+    assert "step=99_done" in result.output
+    assert "run_dir" in result.output  # source 表示
+    assert captured["run_id"] == "run42"
+
+
+def test_logs_source_onstart_missing_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--source onstart で run_dir/onstart.log も S3 fallback も無いなら exit 1。"""
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "runpod_io.progress.fetch_onstart_log",
+        lambda run_id, *, run_dir=None, profile=None: None,
+    )
+    result = runner.invoke(app, ["logs", "run42", "--source", "onstart"])
+    assert result.exit_code == 1
+    assert "no onstart log" in result.output
+
+
+def test_logs_invalid_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """typer の --source は 'markers' / 'onstart' 以外を BadParameter。"""
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    result = runner.invoke(app, ["logs", "run42", "--source", "invalid"])
+    assert result.exit_code != 0
+    assert "must be 'markers' or 'onstart'" in result.output

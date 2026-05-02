@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from runpod_io import progress
@@ -70,3 +72,58 @@ def test_latest_step_returns_last() -> None:
 
 def test_latest_step_none_when_empty() -> None:
     assert progress.latest_step([]) is None
+
+
+def test_fetch_onstart_log_prefers_run_dir(tmp_path: Path) -> None:
+    """run_dir/onstart.log があればそれを返し、S3 は触らない。"""
+    run_dir = tmp_path / "run42"
+    run_dir.mkdir()
+    (run_dir / "onstart.log").write_text("hello from run_dir\n", encoding="utf-8")
+    client = MagicMock()  # S3 が呼ばれたら fail
+    result = progress.fetch_onstart_log("run42", run_dir=run_dir, s3_client=client)
+    assert result is not None
+    assert result.text == "hello from run_dir\n"
+    assert result.source == "run_dir"
+    client.get_object.assert_not_called()
+
+
+def test_fetch_onstart_log_falls_back_to_s3(tmp_path: Path) -> None:
+    """run_dir/onstart.log が無ければ S3 から取得。"""
+    run_dir = tmp_path / "missing_run"
+    # run_dir.mkdir() しないので onstart.log も無い
+    client = MagicMock()
+    body_text = "step=00\nstep=99_done\n"
+    client.get_object.return_value = {"Body": io.BytesIO(body_text.encode())}
+    result = progress.fetch_onstart_log("run42", run_dir=run_dir, s3_client=client)
+    assert result is not None
+    assert result.text == body_text
+    assert result.source == "s3"
+    client.get_object.assert_called_once_with(
+        Bucket=progress.PROGRESS_BUCKET,
+        Key=f"{progress.PROGRESS_PREFIX}/run42/onstart.log",
+    )
+
+
+def test_fetch_onstart_log_returns_none_when_s3_missing() -> None:
+    """S3 にも無いなら None。"""
+    client = MagicMock()
+    client.get_object.side_effect = RuntimeError("NoSuchKey")
+    assert progress.fetch_onstart_log("ghost", s3_client=client) is None
+
+
+def test_fetch_onstart_log_handles_bytes_body() -> None:
+    """boto3 が bytes を返すケースをそのまま decode する。"""
+
+    class FakeBody:
+        def __init__(self, b: bytes) -> None:
+            self._b = b
+
+        def read(self) -> bytes:
+            return self._b
+
+    client = MagicMock()
+    client.get_object.return_value = {"Body": FakeBody(b"raw bytes log")}
+    result = progress.fetch_onstart_log("run42", s3_client=client)
+    assert result is not None
+    assert result.text == "raw bytes log"
+    assert result.source == "s3"
