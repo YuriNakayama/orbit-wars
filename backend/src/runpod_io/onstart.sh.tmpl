@@ -233,13 +233,24 @@ if [ -d /persist ]; then
   mkdir -p .dvc
   rm -rf .dvc/cache 2>/dev/null || true
   ln -sfn /persist/dvc-cache .dvc/cache
-  mkdir -p data
-  rm -rf data/mart 2>/dev/null || true
-  ln -sfn /persist/data-mart data/mart
-  # data/lake は dvc pull で大型 raw episodes を取る場所。volume に置けば
-  # 2 回目以降は dvc cache hit + symlink で再ダウンロード不要になる。
-  rm -rf data/lake 2>/dev/null || true
-  ln -sfn /persist/data-lake data/lake
+  # data/ は git tree から復元される (各種 .dvc stub を含む)。
+  # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
+  # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
+  # matches.dvc の path=matches なので data/lake/<src>/matches がそれ。
+  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart/imitation
+  mkdir -p /persist/lake-kaggle-matches /persist/lake-selfplay-matches \
+           /persist/data-mart-imitation
+  # data/lake/<src>/matches だけを symlink で persist 化 (raw episodes の本体)
+  if [ ! -L data/lake/kaggle_episodes/matches ] && [ ! -d data/lake/kaggle_episodes/matches ]; then
+    ln -sfn /persist/lake-kaggle-matches data/lake/kaggle_episodes/matches
+  fi
+  if [ ! -L data/lake/selfplay/matches ] && [ ! -d data/lake/selfplay/matches ]; then
+    ln -sfn /persist/lake-selfplay-matches data/lake/selfplay/matches
+  fi
+  # data/mart/imitation/<case> は dvc 出力なので直接 symlink で OK
+  if [ ! -L data/mart/imitation ] && [ ! -d data/mart/imitation ]; then
+    ln -sfn /persist/data-mart-imitation data/mart/imitation
+  fi
 fi
 
 mark "20_clone_done"
