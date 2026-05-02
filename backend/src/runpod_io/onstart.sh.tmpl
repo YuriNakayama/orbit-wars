@@ -20,16 +20,24 @@ cleanup_destroy() {
   # Stop the timeout guard so it doesn't fire later in the success path.
   kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
   echo "[onstart] cleanup status=${exit_code}"
-  if [ "${exit_code}" -ne 0 ]; then
-    echo "[onstart] failure: leaving pod up for manual inspection"
-    exit "${exit_code}"
-  fi
+  # RunPod は docker_args の bash プロセスが exit するとコンテナを再起動して
+  # docker_args を再実行する。失敗時に bash exit すると無限再実行ループに入り、
+  # 課金と DVC remote の汚染が止まらない。失敗成功とも runpodctl stop pod を
+  # 呼んだあと sleep infinity で hang させ、RunPod 側から pod が止められるのを
+  # 待つ。失敗ケースでも自動停止することで暴走を防ぐ。debug 用に SSH したい
+  # 場合は別途 dev/runpod train --no-self-destroy フラグを足す (将来作業)。
   if command -v runpodctl >/dev/null 2>&1; then
-    echo "[onstart] self-destroy pod=${INSTANCE_ID}"
-    runpodctl stop pod "${INSTANCE_ID}" || echo "[onstart] self-destroy failed"
+    if [ "${exit_code}" -ne 0 ]; then
+      echo "[onstart] failure path: stopping pod (exit=${exit_code})"
+    else
+      echo "[onstart] success path: stopping pod=${INSTANCE_ID}"
+    fi
+    runpodctl stop pod "${INSTANCE_ID}" || echo "[onstart] stop pod failed"
   else
-    echo "[onstart] runpodctl missing; cannot self-destroy. Stop manually."
+    echo "[onstart] runpodctl missing; cannot self-destroy."
   fi
+  echo "[onstart] entering hang state to avoid container restart loop"
+  exec sleep infinity
 }
 trap cleanup_destroy EXIT
 
