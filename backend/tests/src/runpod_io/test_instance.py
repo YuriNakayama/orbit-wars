@@ -130,8 +130,14 @@ def test_create_pod_passes_expected_kwargs() -> None:
     assert kwargs["image_name"] == DEFAULT_IMAGE
     assert kwargs["gpu_type_id"] == "NVIDIA GeForce RTX 3090"
     assert kwargs["cloud_type"] == "SECURE"
-    assert kwargs["docker_args"].startswith("bash -c ")
-    assert "echo hi" in kwargs["docker_args"]
+    assert kwargs["docker_args"].startswith("bash -c 'echo ")
+    assert "base64 -d | bash'" in kwargs["docker_args"]
+    # base64 部分を decode して onstart_script が正しく埋め込まれていること
+    import base64
+
+    b64_part = kwargs["docker_args"].split("echo ")[1].split(" | base64")[0]
+    decoded = base64.b64decode(b64_part).decode("utf-8")
+    assert decoded == "#!/bin/bash\necho hi\n"
     assert kwargs["env"] == {"FOO": "bar"}
     assert kwargs["network_volume_id"] == "vol-1"
     assert kwargs["volume_mount_path"] == "/persist"

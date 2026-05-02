@@ -2,13 +2,19 @@
 
 placeholder 置換時に shell injection を防ぐため、値は厳格な regex でバリデート
 してから単純な文字列置換を行う (vast.instance と同設計)。
+
+RunPod の `docker_args` は GraphQL 文字列にそのまま埋め込まれる
+(`f'dockerArgs: "{docker_args}"'`) ため、改行や `"` を含むスクリプトを直接渡すと
+GraphQL Syntax Error になる。本基盤では onstart スクリプトを base64 エンコードして
+1 行の bootstrap (`bash -c "echo <b64> | base64 -d | bash"`) として渡すことで
+回避する。
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import re
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -155,7 +161,11 @@ def create_pod(
     """
     if cloud_type not in ("SECURE", "COMMUNITY", "ALL"):
         raise ValueError(f"cloud_type must be SECURE/COMMUNITY/ALL, got {cloud_type!r}")
-    docker_args = f"bash -c {shlex.quote(onstart_script)}"
+    # RunPod の dockerArgs は GraphQL 文字列にそのまま挿入されるため、改行や引用符
+    # を含む bash script を直接渡すと parse error になる。base64 化してから 1 行の
+    # bootstrap で decode + bash 実行する。
+    encoded = base64.b64encode(onstart_script.encode("utf-8")).decode("ascii")
+    docker_args = f"bash -c 'echo {encoded} | base64 -d | bash'"
     kwargs: dict[str, Any] = {
         "name": name,
         "image_name": image,
