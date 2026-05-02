@@ -42,15 +42,15 @@ start_sshd_early
 
 # Install minimal tools we depend on (aws cli for S3 progress markers,
 # runpodctl for self-destroy, git/curl for clone). pytorch image は小さく
-# これらを持たないので、apt-get + (失敗したら) pip の 2 段で aws cli を確保する。
-# aws cli が確実に入っていれば、その後の任意ステップで失敗しても
-# cleanup_destroy 内で onstart log を S3 にアップロードできる。
+# これらを持たないので、apt で git/curl、pip で awscli を入れる。
+# Ubuntu 24.04 (noble) では awscli が apt から削除されている (Universe にも
+# 無い) ため、初手で pip を使う。apt-only リトライで 90s 無駄にしないため。
 install_prereqs() {
   export DEBIAN_FRONTEND=noninteractive
   for attempt in 1 2 3; do
     if apt-get update -qq && \
        apt-get install -y -qq --no-install-recommends \
-         awscli git curl ca-certificates >/dev/null; then
+         git curl ca-certificates >/dev/null; then
       return 0
     fi
     echo "[onstart] install_prereqs apt attempt=${attempt} failed; retrying" >&2
@@ -58,20 +58,19 @@ install_prereqs() {
   done
   return 1
 }
-echo "[onstart] running install_prereqs (apt-get install awscli git curl)"
-install_prereqs || echo "[onstart] install_prereqs apt failed (will try pip)"
+echo "[onstart] running install_prereqs (apt-get install git curl)"
+install_prereqs || echo "[onstart] install_prereqs apt failed (continuing)"
 echo "[onstart] install_prereqs done"
 
-# aws cli フォールバック: apt が失敗しても pytorch image なら python があるので
-# pip 経由で awscli を入れる (SDK だけで十分、cli wrapper は entry-point)。
+# aws cli を pip で入れる。pytorch image は python を持つので失敗しないはず。
 # 失敗時に silent でスキップしないよう、stderr を明示的に出す。
 if ! command -v aws >/dev/null 2>&1; then
-  echo "[onstart] aws not found; pip install awscli fallback"
-  if pip install awscli 2>&1 | tail -3; then
+  echo "[onstart] installing awscli via pip"
+  if pip install --quiet awscli 2>&1 | tail -3; then
     echo "[onstart] pip install awscli ok"
-  elif python3 -m pip install awscli 2>&1 | tail -3; then
+  elif python3 -m pip install --quiet awscli 2>&1 | tail -3; then
     echo "[onstart] python3 -m pip install awscli ok"
-  elif python -m pip install awscli 2>&1 | tail -3; then
+  elif python -m pip install --quiet awscli 2>&1 | tail -3; then
     echo "[onstart] python -m pip install awscli ok"
   else
     echo "[onstart] pip install awscli FAILED (S3 markers will be skipped)" >&2
