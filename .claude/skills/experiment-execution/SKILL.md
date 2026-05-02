@@ -1,23 +1,26 @@
 ---
-name: experiment
+name: experiment-execution
 description: >
-  End-to-end runner for Orbit Wars experiments under `backend/pipeline/`. Drives the
-  `experimenter` subagent through the full cycle: capture the hypothesis → write
-  `docs/experiment/{family}/{yyyymmdd}_case{N}_{topic}/plan.md` → implement / extend
-  the case under `backend/pipeline/{rulebase|imitation|reinforce}/case<N>/` → run
-  `dev/test-backend` for local bug detection → push the commit and launch GPU
-  training on Vast.ai via `dev/vast train` → report progress periodically →
+  Execution runner for Orbit Wars experiments under `backend/pipeline/`. Drives
+  the `experimenter` subagent through the full cycle: capture the hypothesis →
+  write `docs/experiment/{family}/{yyyymmdd}_case{N}_{topic}/plan.md` → implement
+  / extend the case under `backend/pipeline/{rulebase|imitation|reinforce}/case<N>/`
+  → run `dev/test-backend` for local bug detection → push the commit and launch
+  GPU training on Vast.ai via `dev/vast train` → report progress periodically →
   evaluate on local match outcomes and write `result.md`. Use whenever the user
-  types `/experiment`, or asks to run / iterate / kick off an experiment, train
-  a new model, launch a Vast.ai run, propose a new case, or write up an
-  experiment result — even if they don't explicitly say "experiment", phrases like
-  "imitation/case1 で dropout を試したい", "rulebase/case2 を改良して回したい",
-  "vast で学習を回して結果まとめて", "新しい case を切って学習させたい" all
-  count. Don't trigger this skill for read-only code review, plain bug fixes, or
-  Kaggle submission requests (those have their own paths).
+  types `/experiment-execution`, or asks to run / execute / iterate / kick off an
+  experiment, train a new model, launch a Vast.ai run, propose a new case, or
+  write up an experiment result — even if they don't explicitly say "execute",
+  phrases like "imitation/case1 で dropout を試したい",
+  "rulebase/case2 を改良して回したい", "vast で学習を回して結果まとめて",
+  "新しい case を切って学習させたい", "plan.md に従って実装して回して" all
+  count. Don't trigger this skill for hypothesis-only discussion / planning
+  conversations (use `experiment-plan`), interactive result interpretation /
+  follow-up analysis after a run finishes (use `experiment-analysis`),
+  read-only code review, plain bug fixes, or Kaggle submission requests.
 ---
 
-# Experiment Skill (Orbit Wars)
+# Experiment Execution Skill (Orbit Wars)
 
 This skill is the front door for any experiment that lives under `backend/pipeline/`. Its job is to translate a user's intent ("imitation/case1 で dropout を上げて回したい") into a clean run of the **`experimenter` subagent**, which owns the heavy lifting (plan.md, case implementation, pytest, Vast.ai launch, status reporting, result.md).
 

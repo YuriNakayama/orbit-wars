@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment-analysis",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "docs/experiment/imitation/20260422_case1_phase3/result.md の結果なんで負けてるのか分析したい。仮説と結果のギャップを整理して、敗因を深掘りして analysis.md にまとめてほしい。",
+      "expected_output": "Skill resolves target to docs/experiment/imitation/20260422_case1_phase3/, reads result.md + plan.md (and prior iter docs if present). Surfaces 3-line orientation in Japanese. Round 1 covers verdict (likely 'rejected' or 'inconclusive'), statistical reliability (flag if n<300 per project memory), opponent-pool. Round 2 drills into action distribution / passive gating / target diversity (drawing from imitation/case1 memory patterns). Writes analysis.md (or iterN_analysis.md per directory's existing scheme) in the SAME directory, NOT a new one. Reports path + 2-3 line verdict in Japanese, offers /experiment-plan as next step for follow-up iter. Does NOT re-train, NOT push, NOT edit backend/pipeline/.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "case2 の ablation の結果 (rulebase/20260418_case1_optimize/result.md) を読んで、harass+half_step を本当に採用していいか相談したい。300戦で +1.4pp 非有意なのが気になる。",
+      "expected_output": "Skill reads result.md, surfaces headline (300戦 50.7%, +1.4pp, 非有意). Round 1 verdict pre-fills ⭐推薦 'inconclusive (variance)' since CI overlaps. References memory project_case2_ablation explicitly (100戦は seed variance、300戦でも非有意). Round 2 drills into seed variance vs. real signal, candidate root causes (構造改修不足など), comparison with prior phases. Writes analysis.md with verdict '実装維持、ON継続は許容だが promote の判断は別問題' and next-experiment hooks (構造改修方向の提案). Recommends /experiment-plan for follow-up. Does NOT auto-run dev/vast promote.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "さっき vast で回した run_20260502_xyz789 の結果を分析したい。imitation/case1 の iter6 として記録予定。まだ result.md は書いてない。",
+      "expected_output": "Skill detects no result.md exists yet for this run, redirects user: 'result.md の初回作成は experiment-execution の責務です。先にそちらで result.md を書き起こしてから、この skill で analysis.md を追加してください'. Does NOT proceed to write analysis.md without an existing result.md. Reports the redirect in Japanese with the suggested next command.",
+      "files": []
+    }
+  ]
+}
