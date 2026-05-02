@@ -10,9 +10,36 @@ exec > >(tee -a /var/log/onstart.log) 2>&1
 
 INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
 
+# Install minimal tools we depend on (aws cli for S3 progress markers,
+# runpodctl for self-destroy, git/curl for clone). The pytorch/pytorch image
+# is small but lacks these. apt-get is invoked once with retry to be robust
+# against transient mirror flakiness.
+install_prereqs() {
+  export DEBIAN_FRONTEND=noninteractive
+  for attempt in 1 2 3; do
+    if apt-get update -qq && \
+       apt-get install -y -qq --no-install-recommends \
+         awscli git curl ca-certificates >/dev/null; then
+      return 0
+    fi
+    echo "[onstart] install_prereqs attempt=${attempt} failed; retrying" >&2
+    sleep 10
+  done
+  return 1
+}
+install_prereqs || echo "[onstart] install_prereqs failed (continuing)"
+
+# runpodctl is the official RunPod cli, used by self-destroy. The pytorch
+# image does not ship it, so we fetch the static binary on-demand.
+if ! command -v runpodctl >/dev/null 2>&1; then
+  curl -sSL -o /usr/local/bin/runpodctl \
+    "https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-amd64" \
+    && chmod +x /usr/local/bin/runpodctl \
+    || echo "[onstart] runpodctl install failed"
+fi
+
 # Progress marker — write a tiny file to S3 at each step so we can debug
-# without SSH access. AWS env vars are injected by create_pod and aws cli is
-# normally present in the runpod/pytorch image; if not, the marker is a no-op.
+# without SSH access. AWS env vars are injected by create_pod.
 S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>"
 mark() {
   local step="$1"

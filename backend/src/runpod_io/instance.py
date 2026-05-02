@@ -39,10 +39,14 @@ _TEMPLATE_PLACEHOLDERS = (
     "<PREPROCESS_CMD>",
 )
 
-# RunPod 公式 PyTorch image。runpodctl pre-install。
+# Vast 基盤と同じ image を使う。runpod/pytorch image は古い tag 名は HUB に
+# 残っているが pull が極端に遅い (10分 image pull で uptimeInSeconds が動いて
+# も実 bash 開始しない) 事象を観測したため、軽量で確実に pull できる
+# pytorch/pytorch image に切り替えた。runpodctl は image に無いので onstart
+# 内で curl install する。
 DEFAULT_IMAGE = os.environ.get(
     "ORBIT_WARS_RUNPOD_IMAGE",
-    "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+    "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime",
 )
 DEFAULT_DISK_GB = 40
 DEFAULT_PORTS = "22/tcp,8888/http"
