@@ -79,18 +79,24 @@ else
   echo "[onstart] WARNING: uv unavailable" >&2
 fi
 
-# aws cli を uv pip --system で入れる。system Python を直接汚すが、
-# pod 内の単発用途なので問題なし (uv tool install だと bin path が別になる)。
-# pytorch image の system python に awscli を install して `aws` コマンドを
-# 提供する。失敗時に silent でスキップしないよう、stderr を明示的に出す。
+# aws cli を uv tool install で入れる。Ubuntu 24.04 は PEP 668
+# (externally-managed-environment) で system python への pip install を拒否する
+# ため uv pip --system は失敗する。uv tool install は隔離 venv を作って bin を
+# ~/.local/bin/aws に配置する (PATH に含めれば command -v aws で検出可能)。
 if ! command -v aws >/dev/null 2>&1; then
-  echo "[onstart] installing awscli via uv pip --system"
+  echo "[onstart] installing awscli via uv tool install"
   if command -v uv >/dev/null 2>&1; then
-    if uv pip install --system awscli 2>&1 | tail -3; then
-      echo "[onstart] uv pip install awscli ok"
+    UV_TOOL_OUT=$(uv tool install awscli 2>&1)
+    UV_TOOL_EXIT=$?
+    echo "[onstart] uv tool install output (last 5 lines):"
+    echo "${UV_TOOL_OUT}" | tail -5
+    if [ "${UV_TOOL_EXIT}" -eq 0 ]; then
+      echo "[onstart] uv tool install awscli ok (exit=0)"
     else
-      echo "[onstart] uv pip install awscli FAILED (S3 markers will be skipped)" >&2
+      echo "[onstart] uv tool install awscli FAILED exit=${UV_TOOL_EXIT}" >&2
     fi
+    # uv tool は ~/.local/bin に置く。PATH に含める。
+    export PATH="$HOME/.local/bin:$PATH"
   else
     echo "[onstart] uv unavailable; cannot install awscli" >&2
   fi
@@ -260,10 +266,18 @@ for attempt in 1 2 3; do
 done
 
 mark "40_uv_sync_done"
-echo "[onstart] step=dvc_pull"
+echo "[onstart] step=dvc_pull cwd=$(pwd)"
+# 診断: cwd と repo の dvc-tracked 状態を log に残す
+echo "[onstart] dvc pull diagnostic:"
+ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
 # set -e は外しているので明示的に exit code を確認
 if ! uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc; then
   echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
+  echo "[onstart] dvc pull diagnostic listing:"
+  ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
+  ls -la 2>&1 | head -10
+  git status --short 2>&1 | head -10
+  git log --oneline -3 2>&1 | head -3
   mark "45_dvc_pull_kaggle_failed"
   exit 1
 fi
