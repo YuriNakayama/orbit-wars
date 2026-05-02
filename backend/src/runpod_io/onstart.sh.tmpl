@@ -10,6 +10,36 @@ exec > >(tee -a /var/log/onstart.log) 2>&1
 
 INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
 
+echo "[onstart] starting at $(date -u +%Y-%m-%dT%H:%M:%SZ) pod=${INSTANCE_ID}"
+
+# 早期 sshd 起動: docker_args で ENTRYPOINT を上書きしているので image の
+# /start.sh は走らない → デフォルトでは sshd が立ち上がらない。bash の冒頭で
+# 明示起動して、onstart 中の任意のタイミングで `tail -f /var/log/onstart.log`
+# を SSH 経由で読めるようにする。AUTHORIZED_KEYS は pod の env PUBLIC_KEY か
+# RunPod が予め配置してくれるはず。失敗しても onstart 本体は続行。
+start_sshd_early() {
+  # AUTHORIZED_KEYS を env から書き戻す (RunPod が PUBLIC_KEY を渡してくる)
+  if [ -n "${PUBLIC_KEY:-}" ]; then
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    echo "${PUBLIC_KEY}" > /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+  fi
+  # openssh-server は image によって既に入っている / いない両方ある。
+  if ! command -v sshd >/dev/null 2>&1; then
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq --no-install-recommends openssh-server 2>/dev/null || true
+  fi
+  if command -v sshd >/dev/null 2>&1; then
+    mkdir -p /var/run/sshd
+    /usr/sbin/sshd 2>/dev/null && \
+      echo "[onstart] sshd started (port 22 open)" || \
+      echo "[onstart] sshd start failed (continuing without ssh)"
+  else
+    echo "[onstart] sshd not available; skipping"
+  fi
+}
+start_sshd_early
+
 # Install minimal tools we depend on (aws cli for S3 progress markers,
 # runpodctl for self-destroy, git/curl for clone). pytorch image は小さく
 # これらを持たないので、apt-get + (失敗したら) pip の 2 段で aws cli を確保する。
@@ -28,7 +58,9 @@ install_prereqs() {
   done
   return 1
 }
+echo "[onstart] running install_prereqs (apt-get install awscli git curl)"
 install_prereqs || echo "[onstart] install_prereqs apt failed (will try pip)"
+echo "[onstart] install_prereqs done"
 
 # aws cli フォールバック: apt が失敗しても pytorch image なら python があるので
 # pip 経由で awscli を入れる (SDK だけで十分、cli wrapper は entry-point)。
