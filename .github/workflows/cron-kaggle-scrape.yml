@@ -73,7 +73,9 @@ jobs:
       - name: Detect data changes
         id: diff
         run: |
-          if git diff --quiet -- data/lake/kaggle_episodes/matches.dvc; then
+          # `dvc add` は内部で `git add` まで実行するため、変更は staged 側に
+          # 載る。`git diff` (unstaged のみ) では検出できないので HEAD と比較する。
+          if git diff --quiet HEAD -- data/lake/kaggle_episodes/matches.dvc; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"

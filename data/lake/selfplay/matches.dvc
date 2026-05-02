@@ -1,0 +1,6 @@
+outs:
+- md5: 7d9d24583a16a05740f3a7be78cb18f9.dir
+  size: 165214745
+  nfiles: 588
+  hash: md5
+  path: matches
