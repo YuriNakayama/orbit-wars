@@ -120,3 +120,57 @@ def test_run_json_is_human_readable(tmp_path: Path) -> None:
     data = json.loads(raw)  # parseable
     assert "\n" in raw  # indented
     assert data["schema_version"] == SCHEMA_VERSION
+
+
+def test_runpod_fields_default_none() -> None:
+    meta = RunMetadata()
+    assert meta.runpod_pod_id is None
+    assert meta.runpod_offer_snapshot is None
+
+
+def test_runpod_fields_roundtrip(tmp_path: Path) -> None:
+    snapshot = {
+        "gpu_type_id": "NVIDIA GeForce RTX 3090",
+        "cloud_type": "SECURE",
+        "dph_total": 0.43,
+    }
+    meta = RunMetadata(
+        run_id="20260502-100000__main__deadbee__seed0",
+        git_sha="deadbeefcafef00d",
+        seed=0,
+        runpod_pod_id="abcd1234ef",
+        runpod_offer_snapshot=snapshot,
+    )
+    write_run_json(tmp_path, meta)
+    restored = read_run_json(tmp_path)
+    assert restored.runpod_pod_id == "abcd1234ef"
+    assert restored.runpod_offer_snapshot == snapshot
+    assert restored.vast_instance_id is None
+    assert restored.vast_offer_snapshot is None
+
+
+def test_legacy_run_json_without_runpod_fields_loads(tmp_path: Path) -> None:
+    """Vast 既存 run.json (runpod_* 欠如) を読めて default で埋まること。"""
+    legacy = {
+        "schema_version": 1,
+        "run_id": "legacy_run",
+        "git_sha": "abc1234deadbe",
+        "git_branch": "main",
+        "params_hash": "0123456789ab",
+        "seed": 0,
+        "vast_instance_id": 99999,
+        "gpu_name": "RTX_3090",
+        "vast_offer_snapshot": {"dph_total": 0.13},
+        "command": "x",
+        "weights_path": "w",
+        "train_metrics": {},
+        "local_eval_results": None,
+        "status": "pushed",
+        "created_at": "2026-04-25T00:00:00Z",
+        "updated_at": "2026-04-25T00:10:00Z",
+    }
+    (tmp_path / "run.json").write_text(json.dumps(legacy), encoding="utf-8")
+    restored = read_run_json(tmp_path)
+    assert restored.vast_instance_id == 99999
+    assert restored.runpod_pod_id is None
+    assert restored.runpod_offer_snapshot is None

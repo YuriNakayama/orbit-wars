@@ -11,7 +11,8 @@ dev/lint              # Static analysis (ruff + mypy)
 dev/test-backend      # CI (format check → lint → type check → pytest)
 dev/create-worktree   # Create git worktree with .env copy
 dev/dvc               # DVC operations (setup / pull / repro / push / dag / add)
-dev/vast              # Remote GPU server control
+dev/vast              # Vast.ai GPU pod control (train / pull / promote / cost-report / volume)
+dev/runpod            # RunPod GPU pod control (train / pull / promote / cost-report / volume)
 ```
 
 ## DVC Commands
@@ -48,6 +49,34 @@ dev/vast cost-report --month 2026-04
 ```
 
 Candidate weights are saved to `data/output/models/imitation/case1/runs/<run_id>/best.pt` and managed via DVC/S3. `policy/weights.pt` (the canonical Kaggle submit weights) is updated only when `dev/vast promote` runs. `VAST_API_KEY` is recorded in `backend/.env`. See [`docs/plans/vast-ai-basis/`](../../docs/plans/vast-ai-basis/) for details.
+
+## RunPod GPU Training
+
+RunPod 基盤は Vast.ai と並走するもう一つの GPU プロバイダ。Secure Cloud (T3/T4 DC + network volume 可) と Community Cloud (P2P, 安価) の 2 系統を `--cloud-type` で選べる。
+
+```bash
+# 1) commit & push, then launch on RunPod
+git push origin <branch>
+dev/runpod train <commit-sha> [--case case1] [--cloud-type SECURE|COMMUNITY|ALL]
+
+# 2) once finished, fetch locally
+dev/runpod pull <run_id> [--case case1]
+
+# 3) if adopted, promote to canonical weights
+dev/runpod promote <run_id> [--case case1] [--eval-results PATH]
+
+# Cost check (RunPod 専用、vast とは別ファイル)
+dev/runpod cost-report --month 2026-05
+
+# Network volume 管理 (Secure Cloud 専用、Pod 作成時のみ attach 可能)
+dev/runpod volume list
+dev/runpod volume search [--data-center-id US-KS-2]
+dev/runpod volume create <name> --data-center-id US-KS-2 [--size 15]
+```
+
+Vast.ai 基盤と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` に成果物を保存し、DVC/S3 remote も共有。run.json には provider 別フィールド (`vast_*` / `runpod_*`) が記録され、両基盤の run を区別可能。`RUNPOD_API_KEY` は `backend/.env` に置き、key は <https://runpod.io/console/user/settings> で発行。デフォルト cost limit は $1.5/run (Vast の $1.0 より高め)。詳細は [`docs/plans/runpod-basis/`](../../docs/plans/runpod-basis/)。
+
+両基盤の使い分け方針は [`docs/plans/runpod-basis/README.md`](../../docs/plans/runpod-basis/README.md) の「Vast.ai 基盤との使い分け」表を参照。
 
 ## Kaggle Submission Policy
 

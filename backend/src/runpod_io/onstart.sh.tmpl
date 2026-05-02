@@ -1,0 +1,158 @@
+#!/bin/bash
+# RunPod onstart for Orbit Wars GPU training.
+# Placeholders are substituted by runpod_io.instance.render_onstart before upload:
+#   <COMMIT_SHA>, <RUN_ID>, <STAGE>, <BRANCH>, <REPO_URL>,
+#   <CASE> (e.g. case1 / case3), <TRAIN_MODULE> (python -m target),
+#   <CONFIG_ARG> ('' or '--config <path>'),
+#   <PREPROCESS_CMD> ('' or 'module.path [--config <path>]')
+set -euo pipefail
+exec > >(tee -a /var/log/onstart.log) 2>&1
+
+INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
+
+# Hard timeout safety net: even if the trap is bypassed by an unhandled
+# signal, this background job will stop the pod after 2h to bound cost.
+( sleep 7200 && runpodctl stop pod "$INSTANCE_ID" 2>/dev/null || true ) &
+TIMEOUT_GUARD_PID=$!
+
+cleanup_destroy() {
+  local exit_code=$?
+  # Stop the timeout guard so it doesn't fire later in the success path.
+  kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
+  echo "[onstart] cleanup status=${exit_code}"
+  if [ "${exit_code}" -ne 0 ]; then
+    echo "[onstart] failure: leaving pod up for manual inspection"
+    exit "${exit_code}"
+  fi
+  if command -v runpodctl >/dev/null 2>&1; then
+    echo "[onstart] self-destroy pod=${INSTANCE_ID}"
+    runpodctl stop pod "${INSTANCE_ID}" || echo "[onstart] self-destroy failed"
+  else
+    echo "[onstart] runpodctl missing; cannot self-destroy. Stop manually."
+  fi
+}
+trap cleanup_destroy EXIT
+
+echo "[onstart] step=env_persist"
+env >> /etc/environment
+
+# Persistent network volume (mount path is supplied by RunPod create_pod).
+# When a network volume is attached at /persist we symlink uv cache / DVC
+# cache / data/mart for cross-run reuse. When absent we fall back to local
+# disk. mkdir/ln are idempotent.
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_setup mount=/persist"
+  mkdir -p /persist/uv-cache /persist/dvc-cache /persist/data-mart
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/uv" 2>/dev/null || true
+  ln -sfn /persist/uv-cache "$HOME/.cache/uv"
+  export UV_CACHE_DIR="$HOME/.cache/uv"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache"
+else
+  echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
+fi
+
+echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
+mkdir -p /workspace
+cd /workspace
+if [ ! -d orbit-wars ]; then
+  if [ -n "${GIT_PAT:-}" ]; then
+    git clone "https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')" orbit-wars
+  else
+    git clone "<REPO_URL>" orbit-wars
+  fi
+fi
+cd orbit-wars
+git fetch origin "<COMMIT_SHA>" || true
+git checkout "<COMMIT_SHA>"
+
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_link_repo"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn /persist/dvc-cache .dvc/cache
+  mkdir -p data
+  rm -rf data/mart 2>/dev/null || true
+  ln -sfn /persist/data-mart data/mart
+fi
+
+echo "[onstart] step=install_uv"
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+echo "[onstart] step=uv_sync"
+for attempt in 1 2 3; do
+  if uv sync --locked --no-dev --directory backend; then
+    break
+  fi
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
+  fi
+done
+
+echo "[onstart] step=dvc_pull"
+uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
+uv run --project backend dvc pull
+
+echo "[onstart] step=mkdir_run"
+mkdir -p "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+
+if [ -n "<PREPROCESS_CMD>" ]; then
+  if [ -d "data/mart/imitation/<CASE>" ] && \
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (parquet already present)"
+  else
+    echo "[onstart] step=preprocess case=<CASE>"
+    uv run --directory backend python -m <PREPROCESS_CMD>
+  fi
+fi
+
+echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
+ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
+  ORBIT_WARS_RUN_ID="<RUN_ID>" \
+  ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
+  ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
+  ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
+  ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT:-}" \
+  ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
+
+echo "[onstart] step=dvc_add_run"
+uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+
+echo "[onstart] step=dvc_push_runs"
+uv run --project backend dvc push "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+
+echo "[onstart] step=git_push_dvc_meta"
+RUN_DVC_FILE="data/output/models/imitation/<CASE>/runs/<RUN_ID>.dvc"
+if [ -f "${RUN_DVC_FILE}" ]; then
+  git config user.email "runpod-bot@orbit-wars.local"
+  git config user.name "runpod-bot"
+  TARGET_BRANCH="<BRANCH>"
+  git fetch origin "${TARGET_BRANCH}" || true
+  git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+  git add -- "${RUN_DVC_FILE}"
+  git commit --no-verify -m ":robot: runpod: add <CASE>/runs/<RUN_ID>.dvc" || {
+    echo "[onstart] git_push_dvc_meta: nothing to commit (already tracked?)"
+  }
+  for attempt in 1 2 3; do
+    if git push origin "HEAD:${TARGET_BRANCH}"; then
+      echo "[onstart] git_push_dvc_meta: pushed to ${TARGET_BRANCH}"
+      break
+    fi
+    echo "[onstart] git_push_dvc_meta: attempt=${attempt} rejected; rebasing"
+    git pull --rebase origin "${TARGET_BRANCH}" || true
+    if [ "${attempt}" -eq 3 ]; then
+      echo "[onstart] git_push_dvc_meta: exhausted retries; .dvc stays in S3 only"
+    fi
+  done
+else
+  echo "[onstart] git_push_dvc_meta: ${RUN_DVC_FILE} not found (dvc add failed?)"
+fi
+
+echo "[onstart] step=done run_id=<RUN_ID>"

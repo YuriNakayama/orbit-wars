@@ -34,7 +34,7 @@ data/                   4 layers (lake / processed / mart / output) (gitignored,
   lake/                 Raw data (selfplay matches, kaggle_episodes, etc.)
   processed/            Pre-processed data
   mart/                 Curated data for training/evaluation (e.g. imitation/case1/train.parquet)
-  output/               Generated artifacts (Vast.ai GPU training models / Kaggle submission tar.gz + history / ablation aggregates)
+  output/               Generated artifacts (Vast.ai / RunPod GPU training models / Kaggle submission tar.gz + history / ablation aggregates)
 dev/                    Development scripts (each cd's into backend and runs uv internally)
 docs/
   competition/          Competition spec summaries (abstract.md, etc.)
@@ -42,7 +42,7 @@ docs/
   plans/                Feature plans (one directory per feature, phases 00 → 06)
 ```
 
-`uv run ...` is expected to run under `backend/`. From the repo root, use `dev/*` or `cd backend` first. See [`.claude/rules/command.md`](rules/command.md) for the command catalog (DVC, Vast.ai, Kaggle submission policy).
+`uv run ...` is expected to run under `backend/`. From the repo root, use `dev/*` or `cd backend` first. See [`.claude/rules/command.md`](rules/command.md) for the command catalog (DVC, Vast.ai, RunPod, Kaggle submission policy).
 
 ## Glossary
 

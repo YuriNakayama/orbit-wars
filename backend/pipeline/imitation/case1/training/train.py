@@ -131,17 +131,25 @@ def _run_epoch(
 def _resolve_run_dir() -> Path | None:
     """`ORBIT_WARS_RUN_DIR` env が設定されていれば run dir 絶対パスを返す。
 
-    Vast 上では指定必須、ローカルでは未指定で従来挙動を維持する。
-    `ORBIT_WARS_VAST_INSTANCE_ID` があるのに `ORBIT_WARS_RUN_DIR` が無い場合は
+    Vast / RunPod 上では指定必須、ローカルでは未指定で従来挙動を維持する。
+    どちらかの provider env (`ORBIT_WARS_VAST_INSTANCE_ID` /
+    `ORBIT_WARS_RUNPOD_POD_ID`) があるのに `ORBIT_WARS_RUN_DIR` が無い場合は
     canonical weights.pt を誤上書きするリスクがあるため assertion で停止する
-    (Risk #4 防御弾)。
+    (Risk #4 防御弾)。両 provider env が同時 set されているのも誤設定なので拒否。
     """
     run_dir_env = os.environ.get("ORBIT_WARS_RUN_DIR")
     vast_id = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
-    if vast_id and not run_dir_env:
+    runpod_id = os.environ.get("ORBIT_WARS_RUNPOD_POD_ID")
+    if vast_id and runpod_id:
         raise RuntimeError(
-            "ORBIT_WARS_VAST_INSTANCE_ID is set but ORBIT_WARS_RUN_DIR is not. "
-            "Refusing to overwrite canonical weights.pt from a Vast.ai instance."
+            "Both ORBIT_WARS_VAST_INSTANCE_ID and ORBIT_WARS_RUNPOD_POD_ID are set. "
+            "Only one provider should be active per run."
+        )
+    if (vast_id or runpod_id) and not run_dir_env:
+        raise RuntimeError(
+            "ORBIT_WARS_RUN_DIR is required when a provider id "
+            "(ORBIT_WARS_VAST_INSTANCE_ID / ORBIT_WARS_RUNPOD_POD_ID) is set. "
+            "Refusing to overwrite canonical weights.pt from a cloud instance."
         )
     if not run_dir_env:
         return None
@@ -377,6 +385,16 @@ def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
             vast_id = int(vast_id_raw)
         except ValueError:
             vast_id = None
+    runpod_pod_id = os.environ.get("ORBIT_WARS_RUNPOD_POD_ID") or None
+    runpod_offer_snapshot: dict[str, Any] | None = None
+    snapshot_raw = os.environ.get("ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT")
+    if snapshot_raw:
+        try:
+            parsed = json.loads(snapshot_raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            runpod_offer_snapshot = parsed
     gpu_name: str | None = None
     if torch.cuda.is_available():
         try:
@@ -395,8 +413,10 @@ def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
         params_hash=hash_params(_repo_root() / "params.yaml"),
         seed=seed,
         vast_instance_id=vast_id,
+        runpod_pod_id=runpod_pod_id,
         gpu_name=gpu_name,
         vast_offer_snapshot=None,
+        runpod_offer_snapshot=runpod_offer_snapshot,
         command=command,
         weights_path=weights_path_rel,
         train_metrics=metrics,
