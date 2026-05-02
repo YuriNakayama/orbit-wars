@@ -15,8 +15,10 @@ from typing import Any
 import boto3
 
 PROGRESS_BUCKET = "orbit-wars-dvc-286854171013"
-PROGRESS_PREFIX = "runpod_progress"
-ARTIFACT_PREFIX = "runpod_artifacts"
+# IAM の dvc-user は `remote/*` 配下にしか PutObject 権限を持たないので、
+# progress / artifacts も `remote/runpod_progress/...` 配下に置く。
+PROGRESS_PREFIX = "remote/runpod_progress"
+ARTIFACT_PREFIX = "remote/runpod_artifacts"
 KEY_PATTERN = re.compile(
     r"^(?P<prefix>.+/)(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)_(?P<step>.+)$"
 )

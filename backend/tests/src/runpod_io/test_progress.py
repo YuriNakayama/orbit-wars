@@ -17,9 +17,9 @@ def test_list_markers_orders_and_parses() -> None:
     client = MagicMock()
     client.list_objects_v2.return_value = _build_response(
         [
-            "runpod_progress/run42/2026-05-02T01:00:00Z_30_before_uv_sync",
-            "runpod_progress/run42/2026-05-02T00:00:01Z_00_container_started",
-            "runpod_progress/run42/2026-05-02T00:30:00Z_10_before_clone",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T01:00:00Z_30_before_uv_sync",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T00:00:01Z_00_container_started",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T00:30:00Z_10_before_clone",
         ]
     )
 
@@ -33,7 +33,7 @@ def test_list_markers_orders_and_parses() -> None:
     assert markers[0].timestamp == "2026-05-02T00:00:01Z"
     client.list_objects_v2.assert_called_once_with(
         Bucket=progress.PROGRESS_BUCKET,
-        Prefix="runpod_progress/run42/",
+        Prefix=f"{progress.PROGRESS_PREFIX}/run42/",
     )
 
 
@@ -41,8 +41,8 @@ def test_list_markers_skips_unparseable_keys() -> None:
     client = MagicMock()
     client.list_objects_v2.return_value = _build_response(
         [
-            "runpod_progress/run42/garbage",
-            "runpod_progress/run42/2026-05-02T00:00:00Z_99_done",
+            f"{progress.PROGRESS_PREFIX}/run42/garbage",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T00:00:00Z_99_done",
         ]
     )
     markers = progress.list_markers("run42", s3_client=client)
@@ -60,8 +60,8 @@ def test_latest_step_returns_last() -> None:
     client = MagicMock()
     client.list_objects_v2.return_value = _build_response(
         [
-            "runpod_progress/run42/2026-05-02T00:00:00Z_00_container_started",
-            "runpod_progress/run42/2026-05-02T01:00:00Z_99_done",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T00:00:00Z_00_container_started",
+            f"{progress.PROGRESS_PREFIX}/run42/2026-05-02T01:00:00Z_99_done",
         ]
     )
     markers = progress.list_markers("run42", s3_client=client)
@@ -116,11 +116,11 @@ def test_list_artifacts_returns_filenames() -> None:
     client = MagicMock()
     client.list_objects_v2.return_value = {
         "Contents": [
-            {"Key": "runpod_artifacts/run42/best.pt"},
-            {"Key": "runpod_artifacts/run42/metrics.json"},
-            {"Key": "runpod_artifacts/run42/run.json"},
-            {"Key": "runpod_artifacts/run42/onstart.log"},
-            {"Key": "runpod_artifacts/run42/sub/nested.txt"},  # subdir → 除外
+            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/best.pt"},
+            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/metrics.json"},
+            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/run.json"},
+            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/onstart.log"},
+            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/sub/nested.txt"},  # subdir → 除外
         ]
     }
     files = progress.list_artifacts("run42", s3_client=client)

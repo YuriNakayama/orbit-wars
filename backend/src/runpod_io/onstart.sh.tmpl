@@ -112,7 +112,7 @@ fi
 
 # Progress marker — write a tiny file to S3 at each step so we can debug
 # without SSH access. AWS env vars are injected by create_pod.
-S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>"
+S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_progress/<RUN_ID>"
 mark() {
   local step="$1"
   local ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -330,7 +330,7 @@ fi
 # 成果物 (best.pt / metrics.json / run.json / onstart.log) を s3://.../runpod_artifacts/
 # 配下に直接 upload する。これは DVC とは独立した保険経路。dvc push が成功すれば
 # そちらが正本だが、失敗しても artifacts prefix から `dev/runpod pull` で取れる。
-S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/runpod_artifacts/<RUN_ID>"
+S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 echo "[onstart] step=early_artifact_upload prefix=${S3_ARTIFACT_PREFIX}"
 if command -v aws >/dev/null 2>&1; then
   for f in best.pt metrics.json run.json onstart.log; do
