@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -34,6 +35,11 @@ from runpod_io.instance import (
     create_pod,
     render_onstart,
 )
+from runpod_io.launch import (
+    find_run_dir,
+    read_launch_json,
+    write_launch_json,
+)
 from runpod_io.offers import (
     DEFAULT_GPU_NAMES,
     Offer,
@@ -51,6 +57,11 @@ from runpod_io.volumes import (
 )
 from runpod_io.volumes import (
     create_volume as create_volume_fn,
+)
+from runpod_io.watcher import (
+    DEFAULT_MAX_WAIT,
+    DEFAULT_POLL_INTERVAL,
+    watch_pod,
 )
 
 app = typer.Typer(
@@ -222,6 +233,22 @@ def train(
         "--data-center-id",
         help="pod / 新規 volume の DC (例: US-KS-2)",
     ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        help="pod 起動後に終了まで poll してデスクトップ通知を発火する。"
+        " 完了/失敗のいずれでも 1 度だけ通知。",
+    ),
+    poll_interval: float = typer.Option(
+        DEFAULT_POLL_INTERVAL,
+        "--poll-interval",
+        help="--watch 時の S3 marker ポーリング間隔 (秒)",
+    ),
+    max_wait_seconds: float = typer.Option(
+        DEFAULT_MAX_WAIT,
+        "--max-wait",
+        help="--watch のタイムアウト (秒)。デフォルトは onstart の 2h ガードと一致",
+    ),
 ) -> None:
     """Search RunPod GPU offers, pick one, and launch training for a given commit."""
     defaults = _case_defaults(case)
@@ -366,15 +393,56 @@ def train(
         volume_mount_path=mount_path,
         data_center_id=data_center_id,
     )
+    run_dir_local = find_run_dir(_repo_root(), run_id, case)
+    write_launch_json(
+        run_dir_local,
+        run_id=run_id,
+        pod_id=pod_id,
+        commit_sha=commit_sha,
+        branch=branch,
+        case=case,
+        cloud_type=chosen.cloud_type,
+        gpu_type_id=chosen.gpu_type_id,
+        dph_total=chosen.dph_total,
+        data_center_id=data_center_id,
+    )
     console.print(
         f"\n[green]Pod launched![/] id=[bold]{pod_id}[/] run_id={run_id} case={case}"
     )
-    console.print(f"  Monitor logs: [cyan]runpodctl pod logs {pod_id}[/]")
-    console.print(f"  Stop manually: [cyan]runpodctl pod stop {pod_id}[/]")
+    console.print(
+        f"  Inspect: [cyan]dev/runpod status {run_id} --case {case}[/]  "
+        f"Logs: [cyan]dev/runpod logs {run_id} --case {case}[/]"
+    )
     console.print(
         f"  After completion: [cyan]dev/runpod pull {run_id} --case {case}[/] then "
         f"[cyan]dev/runpod promote {run_id} --case {case}[/] to adopt"
     )
+
+    if watch:
+        console.print(
+            f"\n[bold]watching pod[/] {pod_id} until completion "
+            f"(poll={poll_interval:.0f}s, max_wait={max_wait_seconds:.0f}s)"
+        )
+        result = watch_pod(
+            run_id=run_id,
+            pod_id=pod_id,
+            aws_profile=aws_profile,
+            poll_interval=poll_interval,
+            max_wait_seconds=max_wait_seconds,
+        )
+        color = "green" if result.is_success else "red"
+        console.print(
+            f"\n[{color}]watch result:[/] outcome={result.outcome} "
+            f"last_step={result.last_step!r} "
+            f"elapsed={result.elapsed_seconds:.0f}s"
+        )
+        console.print(f"  detail: {result.detail}")
+        console.print(
+            f"\n  Run [cyan]dev/runpod logs {run_id} --case {case}[/] "
+            "to see the full marker timeline."
+        )
+        if not result.is_success:
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -513,6 +581,280 @@ def cost_report_cmd(
     out_path.write_text(md, encoding="utf-8")
     console.print(md)
     console.print(f"\n[green]written:[/] {out_path}")
+
+
+def _ensure_runpod_key() -> None:
+    """RUNPOD_API_KEY を SDK module-level state に読み込む。"""
+    try:
+        runpod_sdk.api_key = load_runpod_api_key()
+    except CredentialsError as exc:
+        console.print(f"[red]credentials error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("ps")
+def ps_cmd(
+    case: str | None = typer.Option(
+        None, "--case", help="特定 case の launched run のみ突き合わせて表示"
+    ),
+    show_all: bool = typer.Option(
+        False, "--all", help="EXITED / TERMINATED の pod も含める"
+    ),
+) -> None:
+    """所有する RunPod pod を一覧表示し、ローカル launch.json と突き合わせる。"""
+    from rich.table import Table
+
+    from runpod_io import pod_state as pod_state_mod
+
+    _ensure_runpod_key()
+    pods = pod_state_mod.list_pods()
+    if not show_all:
+        pods = [p for p in pods if p.is_active]
+
+    pod_id_to_run: dict[str, str] = {}
+    if case is not None:
+        runs_root = _repo_root() / _runs_root_for(case)
+        if runs_root.is_dir():
+            for run_dir in runs_root.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                try:
+                    payload = read_launch_json(run_dir)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    continue
+                pid = payload.get("pod_id")
+                rid = payload.get("run_id")
+                if pid and rid:
+                    pod_id_to_run[str(pid)] = str(rid)
+
+    if not pods:
+        msg = "[yellow]No active pods.[/]" if not show_all else "[yellow]No pods.[/]"
+        console.print(msg)
+        return
+
+    table = Table(title="RunPod pods")
+    table.add_column("pod_id")
+    table.add_column("name / run_id")
+    table.add_column("status")
+    table.add_column("gpu")
+    table.add_column("uptime", justify="right")
+    table.add_column("$/h", justify="right")
+    table.add_column("est. $", justify="right")
+    for p in pods:
+        run_id_label = pod_id_to_run.get(p.pod_id, p.name)
+        table.add_row(
+            p.pod_id,
+            run_id_label,
+            p.desired_status,
+            p.gpu_display_name,
+            pod_state_mod.format_uptime(p.uptime_seconds),
+            f"{p.cost_per_hr:.3f}",
+            f"{p.estimated_cost_usd:.3f}",
+        )
+    console.print(table)
+
+
+@app.command("status")
+def status_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 marker 取得用"
+    ),
+) -> None:
+    """run_id 単位で pod state + onstart 進捗 + DVC push 状況を表示。"""
+    from runpod_io import pod_state as pod_state_mod
+    from runpod_io import progress as progress_mod
+
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    if not run_dir.is_dir():
+        console.print(
+            f"[red]run dir not found:[/] {run_dir}. "
+            "Did you launch this run from a different worktree?"
+        )
+        raise typer.Exit(code=1)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]launch.json not found:[/] {run_dir}. "
+            "This run was likely launched before launch.json was wired in."
+        )
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+
+    console.print(f"[bold]run_id:[/] {run_id}  [bold]pod_id:[/] {pod_id}")
+    console.print(
+        f"  branch={launch.get('branch')!r} commit={launch.get('commit_sha')!r} "
+        f"gpu={launch.get('gpu_type_id')!r} cloud={launch.get('cloud_type')!r} "
+        f"launched_at={launch.get('launched_at')!r}"
+    )
+
+    _ensure_runpod_key()
+    pod = pod_state_mod.get_pod(pod_id)
+    if pod is None:
+        console.print(
+            f"[yellow]Pod {pod_id} not found via SDK.[/] "
+            "RunPod 側で既に削除済みの可能性。"
+        )
+    else:
+        console.print(
+            f"[bold]pod:[/] status={pod.desired_status} "
+            f"uptime={pod_state_mod.format_uptime(pod.uptime_seconds)} "
+            f"cost/h=${pod.cost_per_hr:.3f} "
+            f"est_total=${pod.estimated_cost_usd:.3f}"
+        )
+
+    try:
+        markers = progress_mod.list_markers(run_id, profile=aws_profile)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]progress markers unavailable:[/] {exc}")
+        markers = []
+    if markers:
+        latest = progress_mod.latest_step(markers)
+        assert latest is not None
+        console.print(
+            f"[bold]progress:[/] latest=[cyan]{latest.step}[/] at {latest.timestamp} "
+            f"(total {len(markers)} markers)"
+        )
+        for m in markers:
+            console.print(f"  - {m.timestamp}  {m.step}")
+    else:
+        console.print(
+            "[bold]progress:[/] [yellow]no S3 markers (yet).[/] "
+            "Pod might still be in container_started phase or AWS creds missing."
+        )
+
+    dvc_meta = repo_root / f"{_runs_root_for(case)}/{run_id}.dvc"
+    if dvc_meta.is_file():
+        console.print(
+            f"[bold]artifact:[/] [green]{dvc_meta.relative_to(repo_root)} present[/]"
+            " — `dev/runpod pull` ready"
+        )
+    else:
+        console.print(
+            f"[bold]artifact:[/] [yellow]{dvc_meta.relative_to(repo_root)} not yet "
+            "committed[/] — onstart はまだ git push 段階に到達していない"
+        )
+
+
+@app.command("logs")
+def logs_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    tail: int | None = typer.Option(None, "--tail", help="末尾 N 行のみ"),
+    grep: str | None = typer.Option(None, "--grep", help="正規表現で行フィルタ"),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 marker 取得用 AWS profile"
+    ),
+) -> None:
+    """S3 marker を timestamp 順に表示する onstart 進捗ログ。
+
+    RunPod 公式 CLI には `pod logs` サブコマンドが無いため、本実装では
+    `onstart.sh.tmpl` が S3 に書き出した進捗 marker
+    (`s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>/<TS>_<STEP>`)
+    を timestamp 順に表示する。失敗 pod の最終ステップ確認や、進行中 pod の
+    どこまで進んだかの把握に使う。
+    """
+    from runpod_io import progress as progress_mod
+
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    if run_dir.is_dir():
+        try:
+            launch = read_launch_json(run_dir)
+            console.print(
+                f"[dim]launch:[/] pod_id={launch.get('pod_id')!r} "
+                f"gpu={launch.get('gpu_type_id')!r} "
+                f"cloud={launch.get('cloud_type')!r} "
+                f"launched_at={launch.get('launched_at')!r}"
+            )
+        except (FileNotFoundError, json.JSONDecodeError):
+            console.print(
+                f"[yellow]launch.json missing in {run_dir}[/] "
+                "(run launched before launch.json wiring; markers still readable)"
+            )
+
+    try:
+        markers = progress_mod.list_markers(run_id, profile=aws_profile)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]failed to list S3 markers:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not markers:
+        console.print(
+            f"[yellow]no S3 markers for run_id={run_id!r}.[/] "
+            "Either onstart never wrote any (image pull failed before bash) "
+            "or AWS credentials don't grant ListBucket on runpod_progress/."
+        )
+        raise typer.Exit(code=1)
+
+    lines = [f"{m.timestamp}  {m.step}" for m in markers]
+    if grep is not None:
+        pattern = re.compile(grep)
+        lines = [line for line in lines if pattern.search(line)]
+    if tail is not None and tail > 0:
+        lines = lines[-tail:]
+    for line in lines:
+        console.print(line, highlight=False)
+
+
+@app.command("watch")
+def watch_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    poll_interval: float = typer.Option(
+        DEFAULT_POLL_INTERVAL, "--poll-interval", help="ポーリング間隔 (秒)"
+    ),
+    max_wait_seconds: float = typer.Option(
+        DEFAULT_MAX_WAIT, "--max-wait", help="タイムアウト (秒)"
+    ),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 marker 取得用 AWS profile"
+    ),
+) -> None:
+    """既存 pod の終了を待ち、完了/失敗時にデスクトップ通知を発火する。
+
+    `dev/runpod train --watch` を起動し忘れた / 別ターミナルで監視したい場合に
+    使う。launch.json から pod_id を解決する。
+    """
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]launch.json not found:[/] {run_dir}. "
+            "Provide --case or check the run was launched from this worktree."
+        )
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+    console.print(
+        f"[bold]watching[/] pod={pod_id} run_id={run_id} "
+        f"(poll={poll_interval:.0f}s, max_wait={max_wait_seconds:.0f}s)"
+    )
+    _ensure_runpod_key()
+    result = watch_pod(
+        run_id=run_id,
+        pod_id=pod_id,
+        aws_profile=aws_profile,
+        poll_interval=poll_interval,
+        max_wait_seconds=max_wait_seconds,
+    )
+    color = "green" if result.is_success else "red"
+    console.print(
+        f"\n[{color}]watch result:[/] outcome={result.outcome} "
+        f"last_step={result.last_step!r} "
+        f"elapsed={result.elapsed_seconds:.0f}s"
+    )
+    console.print(f"  detail: {result.detail}")
+    console.print(
+        f"\n  Run [cyan]dev/runpod logs {run_id} --case {case}[/] "
+        "to see the full marker timeline."
+    )
+    if not result.is_success:
+        raise typer.Exit(code=1)
 
 
 def _volume_sdk() -> Any:

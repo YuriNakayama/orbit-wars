@@ -25,6 +25,9 @@ def test_help_lists_all_subcommands() -> None:
     assert "promote" in out
     assert "cost-report" in out
     assert "volume" in out
+    assert "ps" in out
+    assert "status" in out
+    assert "logs" in out
 
 
 def test_volume_help_lists_subcommands() -> None:
@@ -316,3 +319,267 @@ def test_volume_search_no_match() -> None:
     result = runner.invoke(app, ["volume", "search", "--data-center-id", "MARS-1"])
     assert result.exit_code == 1
     assert "No matching" in result.output
+
+
+def _write_launch(run_dir: Path, **overrides: object) -> None:
+    payload: dict[str, object] = {
+        "run_id": "run42",
+        "pod_id": "pod-abc",
+        "commit_sha": "deadbeef",
+        "branch": "feature-x",
+        "case": "case1",
+        "cloud_type": "SECURE",
+        "gpu_type_id": "RTX 3090",
+        "dph_total": 0.5,
+        "data_center_id": None,
+        "launched_at": "2026-05-02T00:00:00Z",
+    }
+    payload.update(overrides)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "launch.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_train_writes_launch_json(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_credentials: None,
+    mock_git: None,
+    mock_offer: Offer,
+    tmp_path: Path,
+) -> None:
+    sdk = MagicMock()
+    monkeypatch.setattr("runpod_io.cli._build_sdk", lambda _key: sdk)
+    monkeypatch.setattr("runpod_io.cli._volume_sdk", lambda: MagicMock())
+    monkeypatch.setattr("runpod_io.cli.list_volumes", lambda _sdk: [])
+    monkeypatch.setattr(
+        "runpod_io.cli.search_offers", lambda _sdk, **_kwargs: [mock_offer]
+    )
+    monkeypatch.setattr(
+        "runpod_io.cli.pick_offer", lambda offers, console=None: offers[0]
+    )
+    monkeypatch.setattr("runpod_io.cli.create_pod", lambda *_a, **_k: "pod-xyz")
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: tmp_path)
+
+    result = runner.invoke(app, ["train", "abc1234deadbeef", "--seed", "0"])
+    assert result.exit_code == 0, result.output
+
+    runs = list((tmp_path / "data/output/models/imitation/case1/runs").iterdir())
+    assert len(runs) == 1
+    payload = json.loads((runs[0] / "launch.json").read_text(encoding="utf-8"))
+    assert payload["pod_id"] == "pod-xyz"
+    assert payload["case"] == "case1"
+
+
+def test_ps_lists_active_pods(monkeypatch: pytest.MonkeyPatch) -> None:
+    from runpod_io.pod_state import PodState
+
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr(
+        "runpod_io.pod_state.list_pods",
+        lambda: [
+            PodState(
+                pod_id="pod-abc",
+                name="my-run",
+                desired_status="RUNNING",
+                cost_per_hr=0.5,
+                uptime_seconds=125,
+                gpu_display_name="RTX 3090",
+                image_name="x",
+            ),
+            PodState(
+                pod_id="pod-old",
+                name="old-run",
+                desired_status="EXITED",
+                cost_per_hr=0.5,
+                uptime_seconds=10,
+                gpu_display_name="RTX 3090",
+                image_name="x",
+            ),
+        ],
+    )
+
+    result = runner.invoke(app, ["ps"])
+    assert result.exit_code == 0, result.output
+    assert "pod-abc" in result.output
+    assert "pod-old" not in result.output  # active filter
+
+    result_all = runner.invoke(app, ["ps", "--all"])
+    assert "pod-old" in result_all.output
+
+
+def test_ps_no_pods(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr("runpod_io.pod_state.list_pods", lambda: [])
+    result = runner.invoke(app, ["ps"])
+    assert result.exit_code == 0
+    assert "No active pods" in result.output
+
+
+def test_status_full_flow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from runpod_io.pod_state import PodState
+    from runpod_io.progress import ProgressMarker
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    (repo_root / "data/output/models/imitation/case1/runs/run42.dvc").write_text(
+        "outs: []\n", encoding="utf-8"
+    )
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr(
+        "runpod_io.pod_state.get_pod",
+        lambda _pid: PodState(
+            pod_id="pod-abc",
+            name="run42",
+            desired_status="RUNNING",
+            cost_per_hr=0.5,
+            uptime_seconds=600,
+            gpu_display_name="RTX 3090",
+            image_name="x",
+        ),
+    )
+    monkeypatch.setattr(
+        "runpod_io.progress.list_markers",
+        lambda _run, **_k: [
+            ProgressMarker(
+                timestamp="2026-05-02T00:00:00Z", step="00_container_started"
+            ),
+            ProgressMarker(timestamp="2026-05-02T00:10:00Z", step="60_before_train"),
+        ],
+    )
+
+    result = runner.invoke(app, ["status", "run42"])
+    assert result.exit_code == 0, result.output
+    assert "pod-abc" in result.output
+    assert "RUNNING" in result.output
+    assert "60_before_train" in result.output
+    assert "ready" in result.output  # dvc artifact present
+
+
+def test_status_missing_run_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: tmp_path)
+    result = runner.invoke(app, ["status", "missing_run"])
+    assert result.exit_code == 1
+    assert "run dir not found" in result.output
+
+
+def test_status_progress_unavailable_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from runpod_io.pod_state import PodState
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr("runpod_io.cli._ensure_runpod_key", lambda: None)
+    monkeypatch.setattr(
+        "runpod_io.pod_state.get_pod",
+        lambda _pid: PodState(
+            pod_id="pod-abc",
+            name="run42",
+            desired_status="RUNNING",
+            cost_per_hr=0.5,
+            uptime_seconds=10,
+            gpu_display_name="RTX 3090",
+            image_name="x",
+        ),
+    )
+
+    def boom(*_a: object, **_k: object) -> list[object]:
+        raise RuntimeError("no creds")
+
+    monkeypatch.setattr("runpod_io.progress.list_markers", boom)
+    result = runner.invoke(app, ["status", "run42"])
+    assert result.exit_code == 0
+    assert "progress markers unavailable" in result.output
+    # dvc meta missing -> warning branch
+    assert "not yet" in result.output
+
+
+def test_logs_lists_s3_markers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """logs は S3 marker を timestamp 順に列挙する (runpodctl 不要)。"""
+    from runpod_io.progress import ProgressMarker
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+
+    markers = [
+        ProgressMarker(timestamp="2026-05-02T00:00:00Z", step="00_container_started"),
+        ProgressMarker(timestamp="2026-05-02T00:01:00Z", step="10_before_clone"),
+        ProgressMarker(timestamp="2026-05-02T00:05:00Z", step="40_uv_sync_done"),
+    ]
+    monkeypatch.setattr(
+        "runpod_io.progress.list_markers",
+        lambda run_id, profile=None: markers,
+    )
+    result = runner.invoke(app, ["logs", "run42"])
+    assert result.exit_code == 0, result.output
+    assert "00_container_started" in result.output
+    assert "10_before_clone" in result.output
+    assert "40_uv_sync_done" in result.output
+
+
+def test_logs_grep_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from runpod_io.progress import ProgressMarker
+
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+
+    markers = [
+        ProgressMarker(timestamp="2026-05-02T00:00:00Z", step="00_container_started"),
+        ProgressMarker(timestamp="2026-05-02T00:01:00Z", step="10_before_clone"),
+        ProgressMarker(timestamp="2026-05-02T00:02:00Z", step="20_clone_done"),
+        ProgressMarker(timestamp="2026-05-02T00:05:00Z", step="40_uv_sync_done"),
+    ]
+    monkeypatch.setattr(
+        "runpod_io.progress.list_markers",
+        lambda run_id, profile=None: markers,
+    )
+    result = runner.invoke(app, ["logs", "run42", "--grep", "_done$", "--tail", "1"])
+    assert result.exit_code == 0
+    # tail=1 で `_done` を含む行のみ → 最後の 1 行
+    assert "40_uv_sync_done" in result.output
+    assert "00_container_started" not in result.output
+
+
+def test_logs_no_markers_exits_with_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """marker が 0 件のときは exit 1 + actionable message。"""
+    repo_root = tmp_path
+    run_dir = repo_root / "data/output/models/imitation/case1/runs/run42"
+    _write_launch(run_dir)
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "runpod_io.progress.list_markers", lambda run_id, profile=None: []
+    )
+    result = runner.invoke(app, ["logs", "run42"])
+    assert result.exit_code == 1
+    assert "no S3 markers" in result.output
+
+
+def test_logs_works_without_launch_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """launch.json 無しでも S3 marker は読める (旧 launched run 救済経路)。"""
+    from runpod_io.progress import ProgressMarker
+
+    monkeypatch.setattr("runpod_io.cli._repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "runpod_io.progress.list_markers",
+        lambda run_id, profile=None: [
+            ProgressMarker(
+                timestamp="2026-05-02T00:00:00Z", step="00_container_started"
+            )
+        ],
+    )
+    result = runner.invoke(app, ["logs", "ghost_run"])
+    assert result.exit_code == 0
+    assert "00_container_started" in result.output

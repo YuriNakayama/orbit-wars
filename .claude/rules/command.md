@@ -72,6 +72,17 @@ dev/runpod cost-report --month 2026-05
 dev/runpod volume list
 dev/runpod volume search [--data-center-id US-KS-2]
 dev/runpod volume create <name> --data-center-id US-KS-2 [--size 15]
+
+# 進捗確認 / 完了監視
+dev/runpod ps                         # 起動中 pod 一覧 (launch.json と突合)
+dev/runpod status <run_id>            # 単一 run の pod state + S3 marker + DVC 状況
+dev/runpod logs <run_id>              # S3 progress marker を timestamp 順に表示
+dev/runpod logs <run_id> --tail 5     # 末尾のみ
+dev/runpod logs <run_id> --grep done  # 行フィルタ
+dev/runpod watch <run_id>             # 既存 pod の終了まで poll → 完了/失敗で desktop 通知
+
+# `dev/runpod train --watch` で起動と同時に監視も開始可能 (推奨)。
+# 終了通知は macOS osascript / Linux notify-send / fallback stdout。
 ```
 
 Vast.ai 基盤と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` に成果物を保存し、DVC/S3 remote も共有。run.json には provider 別フィールド (`vast_*` / `runpod_*`) が記録され、両基盤の run を区別可能。`RUNPOD_API_KEY` は `backend/.env` に置き、key は <https://runpod.io/console/user/settings> で発行。デフォルト cost limit は $1.5/run (Vast の $1.0 より高め)。詳細は [`docs/plans/runpod-basis/`](../../docs/plans/runpod-basis/)。
