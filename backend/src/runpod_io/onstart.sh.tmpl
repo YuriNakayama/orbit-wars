@@ -10,6 +10,21 @@ exec > >(tee -a /var/log/onstart.log) 2>&1
 
 INSTANCE_ID="${RUNPOD_POD_ID:-unknown}"
 
+# Progress marker — write a tiny file to S3 at each step so we can debug
+# without SSH access. AWS env vars are injected by create_pod and aws cli is
+# normally present in the runpod/pytorch image; if not, the marker is a no-op.
+S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>"
+mark() {
+  local step="$1"
+  local ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local body="ts=${ts} step=${step} pod=${INSTANCE_ID}"
+  echo "[onstart] mark step=${step}"
+  if command -v aws >/dev/null 2>&1; then
+    echo "${body}" | aws s3 cp - "${S3_MARKER_PREFIX}/${ts}_${step}" 2>/dev/null || true
+  fi
+}
+mark "00_container_started"
+
 # Hard timeout safety net: even if the trap is bypassed by an unhandled
 # signal, this background job will stop the pod after 2h to bound cost.
 ( sleep 7200 && runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true ) &
@@ -20,6 +35,7 @@ cleanup_destroy() {
   # Stop the timeout guard so it doesn't fire later in the success path.
   kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
   echo "[onstart] cleanup status=${exit_code}"
+  mark "90_cleanup_exit_${exit_code}"
   # RunPod は docker_args の bash プロセスが exit するとコンテナを再起動して
   # docker_args を再実行する (実 e2e で確認済み: stop pod 後も restart loop)。
   # `runpodctl stop pod` は storage を残して停止するだけで、RunPod の自動
@@ -60,6 +76,7 @@ else
   echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
 fi
 
+mark "10_before_clone"
 echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
 mkdir -p /workspace
 cd /workspace
@@ -84,12 +101,14 @@ if [ -d /persist ]; then
   ln -sfn /persist/data-mart data/mart
 fi
 
+mark "20_clone_done"
 echo "[onstart] step=install_uv"
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
 for attempt in 1 2 3; do
   if uv sync --locked --no-dev --directory backend; then
@@ -103,10 +122,12 @@ for attempt in 1 2 3; do
   fi
 done
 
+mark "40_uv_sync_done"
 echo "[onstart] step=dvc_pull"
 uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
 uv run --project backend dvc pull
 
+mark "50_dvc_pull_done"
 echo "[onstart] step=mkdir_run"
 mkdir -p "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
@@ -120,6 +141,7 @@ if [ -n "<PREPROCESS_CMD>" ]; then
   fi
 fi
 
+mark "60_before_train"
 echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
 # snapshot は引用符を含む JSON なので、RunPod env では base64 で渡されている。
 # 学習プロセス起動時に decode して ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT に再注入する。
@@ -136,6 +158,7 @@ ORBIT_WARS_RUN_DIR="data/output/models/imitation/<CASE>/runs/<RUN_ID>" \
   ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
   uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
 
+mark "70_train_done"
 echo "[onstart] step=dvc_add_run"
 uv run --project backend dvc add "data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 
@@ -169,4 +192,5 @@ else
   echo "[onstart] git_push_dvc_meta: ${RUN_DVC_FILE} not found (dvc add failed?)"
 fi
 
+mark "99_done"
 echo "[onstart] step=done run_id=<RUN_ID>"
