@@ -218,9 +218,7 @@ def sweep_outcomes() -> dict[str, int]:
                     continue  # too close to centre
                 src = Planet(1, 0, sx, sy, 2.0, 1000, 5)
                 initial = {1: src, 2: tgt}
-                aim = aim_with_prediction(
-                    src, tgt, ships, initial, ang_vel, [], set()
-                )
+                aim = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
                 counts["total"] += 1
                 if aim is None:
                     counts["aim_returned_none"] += 1
@@ -281,8 +279,7 @@ def test_sweep_true_fix_has_no_false_positives(sweep_outcomes: dict[str, int]) -
 def test_sweep_true_fix_dominates_existing_fix(sweep_outcomes: dict[str, int]) -> None:
     """Hypothesis D: true fix labels ≥ as many shots as hits as the existing fix."""
     assert (
-        sweep_outcomes["true_fix_says_hit"]
-        >= sweep_outcomes["existing_fix_says_hit"]
+        sweep_outcomes["true_fix_says_hit"] >= sweep_outcomes["existing_fix_says_hit"]
     ), f"true fix should label at least as many hits, got {sweep_outcomes}"
 
 
@@ -309,9 +306,7 @@ def test_aim_with_prediction_output_always_lands_on_target() -> None:
                     continue
                 src = Planet(1, 0, sx, sy, 2.0, 1000, 5)
                 initial = {1: src, 2: tgt}
-                aim = aim_with_prediction(
-                    src, tgt, ships, initial, ang_vel, [], set()
-                )
+                aim = aim_with_prediction(src, tgt, ships, initial, ang_vel, [], set())
                 if aim is None:
                     continue
                 fired += 1
