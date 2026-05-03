@@ -59,7 +59,7 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) 参戦リポ
 ## Folder Structure
 
 ```
-backend/                Python 実装一式 (pyproject.toml / uv.lock はここに配置)
+bot/                Python 実装一式 (pyproject.toml / uv.lock はここに配置)
   src/
     dataset/            対戦ログ管理 (selfplay 実行 + Kaggle scraper + storage)
       schema/           MatchRecord 等のドメイン型
@@ -92,7 +92,7 @@ dev/                    Development scripts
   setup                 Install dependencies (uv sync)
   format                Code formatting (ruff)
   lint                  Static analysis (ruff + mypy)
-  test-backend          Backend CI (format check -> lint -> type check -> pytest)
+  test-bot              Bot CI (format check -> lint -> type check -> pytest)
   create-worktree       Create git worktree with .env copy
 docs/
   competition/          コンペ仕様まとめ（abstract.md 等）
@@ -100,7 +100,7 @@ docs/
   research/             Research prompts and outputs
 ```
 
-Python コマンドは `backend/` 配下で `uv run ...` として実行するか、`dev/*` スクリプト経由で呼び出してください（スクリプトは内部で `cd backend` します）。
+Python コマンドは `bot/` 配下で `uv run ...` として実行するか、`dev/*` スクリプト経由で呼び出してください（スクリプトは内部で `cd bot` します）。
 
 ## Commands
 
@@ -108,7 +108,7 @@ Python コマンドは `backend/` 配下で `uv run ...` として実行する�
 dev/setup            # Install dependencies (uv sync)
 dev/format           # Code formatting (ruff)
 dev/lint             # Static analysis (ruff + mypy)
-dev/test-backend     # CI (format check -> lint -> type check -> pytest)
+dev/test-bot     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
 dev/dvc              # DVC operations (setup / pull / repro / push / dag / add)
 ```
@@ -141,7 +141,7 @@ dev/dvc status                           # 差分一覧
 変更した成果物を S3 に共有:
 
 ```bash
-uv run --directory backend dvc push
+uv run --directory bot dvc push
 git add dvc.lock params.yaml data/mart/imitation/case1/eval_metrics.json
 git commit -m "..."
 ```
@@ -154,16 +154,16 @@ selfplay runner が生成する 1v1 / FFA の対戦ログ (index.parquet + repla
 
 ```bash
 # selfplay 実行 (自動で dvc add を走らせる場合)
-cd backend
+cd bot
 uv run python -m dataset run --agents baseline_v1,case0 --mode 1v1 -n 100 --dvc-add
 
 # 手動で dvc add する場合
-uv run --directory backend dvc add data/lake/selfplay/matches
+uv run --directory bot dvc add data/lake/selfplay/matches
 
 # 変更を共有
 git add data/lake/selfplay/matches.dvc
 git commit -m ":sparkles: selfplay: N 件追加"
-uv run --directory backend dvc push
+uv run --directory bot dvc push
 ```
 
 別 worktree や clean clone から復元するには `dvc pull data/lake/selfplay/matches.dvc` を実行します。Kaggle scraper が出力する `data/lake/kaggle_episodes/matches/` も同様に `dvc add` で管理されています。
@@ -174,12 +174,12 @@ uv run --directory backend dvc push
 
 Terraform 管理。詳細は [`infra/environment/dev/README.md`](infra/environment/dev/README.md) を参照。
 
-## Evaluation Framework (`backend/src/dataset/`)
+## Evaluation Framework (`bot/src/dataset/`)
 
-ローカルでの対戦実行・データ蓄積・分析・再生、および Kaggle 上位リプレイの取得を提供する汎用フレームワーク。以下のコマンドは `backend/` ディレクトリ配下で実行します。
+ローカルでの対戦実行・データ蓄積・分析・再生、および Kaggle 上位リプレイの取得を提供する汎用フレームワーク。以下のコマンドは `bot/` ディレクトリ配下で実行します。
 
 ```bash
-cd backend
+cd bot
 
 # 自己対戦実行 (結果は data/lake/selfplay/matches/ に保存)
 uv run python -m dataset run \
@@ -197,7 +197,7 @@ uv run python -m dataset kaggle scrape --top 20 --modes 1v1,ffa4
 
 - **データ**: Parquet (hive partition: `mode=`) に指標、`replays/{match_id}.json.gz` に env.toJSON。
 - **分析**: `dataset.storage.analyze.agent_winrate(...)` / `timing_distribution(...)` / `mode_summary(...)` を呼ぶ。
-- **可視化**: `backend/pipeline/rulebase/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
+- **可視化**: `bot/pipeline/rulebase/case1/eda/replay_viewer.py` を Jupyter / VS Code で開き、`env.render("ipython")` を実行。
 
 ## Glossary
 

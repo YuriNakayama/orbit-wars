@@ -1,12 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
-cd "$(dirname "$0")/../backend"
-
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXIT_CODE=0
 
-echo "== backend: lint =="
-uv run ruff check . --fix || EXIT_CODE=1
-uv run mypy --config-file pyproject.toml . || EXIT_CODE=1
+echo "== bot: lint =="
+(cd "$ROOT_DIR/bot" && uv run ruff check . --fix) || EXIT_CODE=1
+(cd "$ROOT_DIR/bot" && uv run mypy --config-file pyproject.toml .) || EXIT_CODE=1
+
+if [ -d "$ROOT_DIR/simulator/rust" ] && command -v cargo >/dev/null 2>&1; then
+  echo "== simulator/rust: lint =="
+  (cd "$ROOT_DIR/simulator/rust" && cargo fmt --check) || EXIT_CODE=1
+  # `--no-default-features` skips the `extension-module` feature so cargo can
+  # link the test binary against libpython. clippy on the cdylib build is
+  # checked separately to keep both link modes honest.
+  (cd "$ROOT_DIR/simulator/rust" && cargo clippy --no-default-features --all-targets -- -D warnings) || EXIT_CODE=1
+  (cd "$ROOT_DIR/simulator/rust" && cargo clippy --lib -- -D warnings) || EXIT_CODE=1
+fi
 
 exit $EXIT_CODE

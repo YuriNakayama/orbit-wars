@@ -1,7 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-cd "$(dirname "$0")/../backend"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "== backend: format =="
-uv run ruff format .
+echo "== bot: format =="
+(cd "$ROOT_DIR/bot" && uv run ruff format .)
+
+if [ -d "$ROOT_DIR/simulator/rust" ] && command -v cargo >/dev/null 2>&1; then
+  echo "== simulator/rust: format =="
+  (cd "$ROOT_DIR/simulator/rust" && cargo fmt)
+fi

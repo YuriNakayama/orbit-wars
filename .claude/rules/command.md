@@ -1,6 +1,6 @@
 # Command Execution Rules
 
-Conventions for running scripts and tooling in this repository. Prefer the wrappers under `dev/` over invoking `uv` / `dvc` / package managers directly: the wrappers `cd` into `backend/` and pin the right interpreter, so the same command works from any worktree.
+Conventions for running scripts and tooling in this repository. Prefer the wrappers under `dev/` over invoking `uv` / `dvc` / package managers directly: the wrappers `cd` into `bot/` and pin the right interpreter, so the same command works from any worktree.
 
 ## Top-level Commands
 
@@ -8,7 +8,7 @@ Conventions for running scripts and tooling in this repository. Prefer the wrapp
 dev/setup             # Install dependencies (uv sync)
 dev/format            # Code formatting (ruff)
 dev/lint              # Static analysis (ruff + mypy)
-dev/test-backend      # CI (format check → lint → type check → pytest)
+dev/test-bot          # CI (format check → lint → type check → pytest)
 dev/create-worktree   # Create git worktree with .env copy
 dev/dvc               # DVC operations (setup / pull / repro / push / dag / add)
 dev/vast              # Remote GPU server control
@@ -47,7 +47,7 @@ dev/vast promote <run_id>
 dev/vast cost-report --month 2026-04
 ```
 
-Candidate weights are saved to `data/output/models/imitation/case1/runs/<run_id>/best.pt` and managed via DVC/S3. `policy/weights.pt` (the canonical Kaggle submit weights) is updated only when `dev/vast promote` runs. `VAST_API_KEY` is recorded in `backend/.env`. See [`docs/plans/vast-ai-basis/`](../../docs/plans/vast-ai-basis/) for details.
+Candidate weights are saved to `data/output/models/imitation/case1/runs/<run_id>/best.pt` and managed via DVC/S3. `policy/weights.pt` (the canonical Kaggle submit weights) is updated only when `dev/vast promote` runs. `VAST_API_KEY` is recorded in `bot/.env`. See [`docs/plans/vast-ai-basis/`](../../docs/plans/vast-ai-basis/) for details.
 
 ## Kaggle Submission Policy
 
@@ -55,4 +55,4 @@ Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kag
 
 ## Direct `uv` / `dvc` Usage
 
-Only fall back to running `uv run --directory backend ...` or `dvc ...` directly when no wrapper covers the case. If the same direct invocation appears more than once, add it as a subcommand under the relevant `dev/` script instead of duplicating it across docs.
+Only fall back to running `uv run --directory bot ...` or `dvc ...` directly when no wrapper covers the case. If the same direct invocation appears more than once, add it as a subcommand under the relevant `dev/` script instead of duplicating it across docs.

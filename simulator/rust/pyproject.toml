@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "orbit-wars-rust"
+version = "0.1.0"
+description = "Rust-backed Orbit Wars simulator (PyO3 + maturin)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Yuri Nakayama", email = "yuri620620@gmail.com" }]
+dependencies = [
+    "kaggle-environments>=1.17.0",
+    "orbit-wars-vendor",
+]
+
+[tool.uv.sources]
+orbit-wars-vendor = { path = "../python", editable = true }
+
+[tool.maturin]
+python-source = "python"
+module-name = "orbit_wars_rust._lib"
+features = ["extension-module"]
+
+[dependency-groups]
+dev = ["pytest>=8.3.4", "maturin>=1.7,<2"]

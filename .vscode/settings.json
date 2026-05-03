@@ -18,11 +18,11 @@
     "github.copilot.enable": {
         "markdown": true
     },
-    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python3.12",
+    "python.defaultInterpreterPath": "${workspaceFolder}/bot/.venv/bin/python3.12",
     "python.analysis.extraPaths": [
-        "${workspaceFolder}/backend/src",
-        "${workspaceFolder}/backend/tests",
-        "${workspaceFolder}/backend/.venv/lib/python3.12/site-packages"
+        "${workspaceFolder}/bot/src",
+        "${workspaceFolder}/bot/tests",
+        "${workspaceFolder}/bot/.venv/lib/python3.12/site-packages"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
@@ -35,7 +35,7 @@
         "html",
         "-ra"
     ],
-    "python.testing.cwd": "${workspaceFolder}/backend",
+    "python.testing.cwd": "${workspaceFolder}/bot",
     "coverage-gutters.showGutterCoverage": true,
     "coverage-gutters.showLineCoverage": true,
     "coverage-gutters.showRulerCoverage": true,
