@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
+PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
 
 
 @dataclass(frozen=True)
@@ -330,11 +332,16 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     base_dir = index_path.parent
 
     logger.info(
-        "preprocess case4: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d",
+        "preprocess case4 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
+        "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s",
         featurizer.PLANET_FEAT_DIM,
         featurizer.GLOBAL_FEAT_DIM,
         CAND_K,
         CAND_FEAT_DIM,
+        modes,
+        rating_quantile,
+        val_split,
+        max_episodes,
     )
 
     index = pl.read_parquet(index_path)
@@ -343,33 +350,95 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     if max_episodes is not None:
         filtered = filtered.head(int(max_episodes))
 
+    rows = filtered.to_dicts()
+    n_to_process = len(rows)
+    logger.info(
+        "preprocess case4 filter: cutoff=%.2f episodes_total=%d to_process=%d",
+        cutoff,
+        episodes_total,
+        n_to_process,
+    )
+
     train_rows: list[dict[str, Any]] = []
     val_rows: list[dict[str, Any]] = []
-    rows = filtered.to_dicts()
 
+    started_at = time.monotonic()
     kept = 0
+    skipped_no_slots = 0
+    skipped_no_replay = 0
+    skipped_no_frames = 0
     fired_total = 0
     outside_total = 0
-    for rec in rows:
-        slots = _player_slots(rec, _num_player_slots(rec, modes))
-        if not slots:
-            continue
-        rp = rec.get("replay_path") or ""
-        replay_path = (base_dir / rp).resolve() if rp else None
-        if replay_path is None or not replay_path.exists():
-            continue
-        frames, fired, outside = _iter_episode_frames(replay_path, slots)
-        if not frames:
-            continue
-        bucket = _split_episode(str(rec["match_id"]), val_split)
-        target = val_rows if bucket == "val" else train_rows
-        target.extend(frames)
-        kept += 1
-        fired_total += fired
-        outside_total += outside
 
+    def _log_progress(processed: int) -> None:
+        elapsed = time.monotonic() - started_at
+        rate = processed / elapsed if elapsed > 0 else 0.0
+        remaining = (n_to_process - processed) / rate if rate > 0 else float("inf")
+        outside_pct = 100.0 * outside_total / max(1, fired_total)
+        logger.info(
+            "preprocess progress: %d/%d (%.1f%%) kept=%d "
+            "skip(no_slots=%d, no_replay=%d, no_frames=%d) "
+            "frames(train=%d val=%d) fired=%d outside=%d (%.1f%%) "
+            "elapsed=%.1fs rate=%.2f ep/s eta=%.0fs",
+            processed,
+            n_to_process,
+            100.0 * processed / max(1, n_to_process),
+            kept,
+            skipped_no_slots,
+            skipped_no_replay,
+            skipped_no_frames,
+            len(train_rows),
+            len(val_rows),
+            fired_total,
+            outside_total,
+            outside_pct,
+            elapsed,
+            rate,
+            remaining,
+        )
+
+    for processed, rec in enumerate(rows, start=1):
+        try:
+            slots = _player_slots(rec, _num_player_slots(rec, modes))
+            if not slots:
+                skipped_no_slots += 1
+                continue
+            rp = rec.get("replay_path") or ""
+            replay_path = (base_dir / rp).resolve() if rp else None
+            if replay_path is None or not replay_path.exists():
+                skipped_no_replay += 1
+                continue
+            frames, fired, outside = _iter_episode_frames(replay_path, slots)
+            if not frames:
+                skipped_no_frames += 1
+                continue
+            bucket = _split_episode(str(rec["match_id"]), val_split)
+            target = val_rows if bucket == "val" else train_rows
+            target.extend(frames)
+            kept += 1
+            fired_total += fired
+            outside_total += outside
+        finally:
+            if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
+                _log_progress(processed)
+
+    logger.info(
+        "preprocess case4 writing parquet: train_rows=%d val_rows=%d "
+        "out_train=%s out_val=%s",
+        len(train_rows),
+        len(val_rows),
+        out_train,
+        out_val,
+    )
+    write_started = time.monotonic()
     n_train = _write_parquet(train_rows, out_train)
     n_val = _write_parquet(val_rows, out_val)
+    logger.info(
+        "preprocess case4 parquet written: train=%d val=%d write_elapsed=%.1fs",
+        n_train,
+        n_val,
+        time.monotonic() - write_started,
+    )
 
     report = PreprocessReport(
         rating_cutoff=cutoff,
@@ -383,17 +452,24 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         fired_total=fired_total,
     )
     pct = 100.0 * outside_total / max(1, fired_total)
+    total_elapsed = time.monotonic() - started_at
     logger.info(
-        "preprocess done: cutoff=%.2f kept=%d/%d frames train=%d val=%d "
-        "label_outside_K=%d / fired=%d (%.1f%%)",
+        "preprocess case4 done: cutoff=%.2f kept=%d/%d "
+        "skip(no_slots=%d, no_replay=%d, no_frames=%d) "
+        "frames train=%d val=%d label_outside_K=%d / fired=%d (%.1f%%) "
+        "total_elapsed=%.1fs",
         report.rating_cutoff,
         report.episodes_kept,
         report.episodes_total,
+        skipped_no_slots,
+        skipped_no_replay,
+        skipped_no_frames,
         report.train_frames,
         report.val_frames,
         outside_total,
         fired_total,
         pct,
+        total_elapsed,
     )
     return report
 
