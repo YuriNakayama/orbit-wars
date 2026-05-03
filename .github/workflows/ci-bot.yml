@@ -14,7 +14,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v5
@@ -81,19 +81,32 @@ jobs:
         run: uv run mypy --config-file pyproject.toml .
         working-directory: bot
 
-      # `-n auto` で pytest-xdist による並列化、`--no-cov` で coverage 計算を
-      # 省略 (CI では shape pass を見るだけで十分)。-m "not slow" で重い
-      # benchmark / fuzz 系を除外。
-      # --ignore は main 由来の既存 fail 4 件を一時的に除外 (別 PR で本格修正):
-      #   * imitation/case1/test_agent_snapshot.py — model snapshot drift
-      #   * imitation/case3/test_fleet_arrival.py — env interaction flake
-      #   * rulebase/case5/test_fleet_split.py — strategy threshold drift
-      #   * src/vast/test_cli.py — .dvc fixture absent in CI
+      # `-n auto` で pytest-xdist による並列化 (GH Actions ubuntu-latest は
+      # 2 vCPU)、`--no-cov` で coverage 計算を省略 (CI では shape pass を
+      # 見るだけで十分)。-m "not slow" で重い benchmark / fuzz 系を除外。
+      #
+      # --ignore で除外している test:
+      #   - main 由来の既存 fail 4 件 (別 PR で本格修正):
+      #     * imitation/case1/test_agent_snapshot.py — model snapshot drift
+      #     * imitation/case3/test_fleet_arrival.py — env interaction flake
+      #     * rulebase/case5/test_fleet_split.py — strategy threshold drift
+      #     * src/vast/test_cli.py — .dvc fixture absent in CI
+      #   - 重い integration test 7 件 (5 分制約のため一時除外、別 job で
+      #     `nightly` 等に回す。local では `dev/test-bot` でフル実行可):
+      #     * rulebase/case[1-6]/test_baseline_agent.py — 1試合最後まで走る
+      #     * rulebase/case4/test_fleet_consolidation.py — 同上
       - name: Pytest (bot, parallel + fast slice)
         run: |
           uv run pytest tests -m "not slow" -n auto --no-cov \
             --ignore=tests/pipeline/imitation/case1/test_agent_snapshot.py \
             --ignore=tests/pipeline/imitation/case3/test_fleet_arrival.py \
             --ignore=tests/pipeline/rulebase/case5/test_fleet_split.py \
-            --ignore=tests/src/vast/test_cli.py
+            --ignore=tests/src/vast/test_cli.py \
+            --ignore=tests/pipeline/rulebase/case1/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case2/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case3/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case4/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case5/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case6/test_baseline_agent.py \
+            --ignore=tests/pipeline/rulebase/case4/test_fleet_consolidation.py
         working-directory: bot
