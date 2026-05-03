@@ -361,11 +361,25 @@ mkdir -p "${RUN_DIR_ABS}"
 
 PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
+  # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
+  # `.dvc` stub は git にあるが本体 blob が S3 にない (orphan) ケースで
+  # `data/mart/imitation/<CASE>/*.parquet` が dangling symlink として
+  # 残ることがある。`find -name '*.parquet'` は dangling symlink も拾うので
+  # `-xtype f` で「symlink を辿った先が file かつ存在」のみ採用、さらに
+  # `-size +0c` で 0 byte を弾く (DVC cache 経由なら本体は MB〜GB のはず)。
   if [ -d "data/mart/imitation/<CASE>" ] && \
-     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
-    echo "[onstart] step=preprocess_skip (parquet already present)"
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+       \( -type f -o -xtype f \) -size +0c -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (parquet already present and non-empty)"
   else
     echo "[onstart] step=preprocess case=<CASE>"
+    # 既存の dangling symlink を消してから preprocess を走らせる。残ったまま
+    # だと preprocess.py が write_parquet で symlink target に書き込もうとして
+    # 元の blob path に書き込もうとするため (dvc cache の symlink type の場合)。
+    if [ -d "data/mart/imitation/<CASE>" ]; then
+      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+        \( -type l -xtype l \) -print -delete 2>&1 || true
+    fi
     uv run --directory backend python -m <PREPROCESS_CMD>
     PREPROCESS_RAN=1
   fi
