@@ -253,6 +253,29 @@ def test_parity_full_episode(seed: int) -> None:
 
 
 @pytest.mark.parametrize("seed", [0, 1, 7])
+def test_run_callable_agent(seed: int) -> None:
+    """`run()` accepts user callables when `parallel=1`. Verifies that
+    rulebase / imitation agents (which are Python callables, not registered
+    names) can be driven through the unified entry point."""
+    import random as _random
+
+    _random.seed(seed)
+    captured: list[Any] = []
+
+    def my_agent(obs: Any, _conf: Any = None) -> list[list[int]]:
+        # Side effect to confirm the callable was actually invoked, not
+        # silently swallowed by some fallback path.
+        captured.append(int(getattr(obs, "step", -1)))
+        return []  # noop — easier to compare against known string agent
+
+    result = orbit_wars_rust.run([my_agent, "random"], seed=seed)
+    assert result["seed"] == seed
+    assert result["turns"] > 0, "episode should produce at least one step"
+    # The callable saw the per-turn observations.
+    assert len(captured) > 0, "callable agent was never invoked"
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
 def test_parity_run_episode_vs_env_run(seed: int) -> None:
     """`orbit_wars_rust.run_episode` must produce the same final state and
     rewards as `env.run` on the same seed / agents.

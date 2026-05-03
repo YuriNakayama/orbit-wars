@@ -842,7 +842,7 @@ def run_episodes_parallel(
 
 
 def run(
-    agents: list[str],
+    agents: list[Any],
     seed: int | None = None,
     seeds: list[int] | range | None = None,
     parallel: int = 1,
@@ -870,14 +870,14 @@ def run(
 
     Returns one summary dict (`seed=`) or a list of them (`seeds=`).
     Each summary is `{"seed", "turns", "rewards", "statuses"}` — small,
-    JSON-friendly, suitable for cross-process IPC. When the caller needs
-    the full `env.steps` history (replay JSON, per-frame inspection),
-    use `run_episode(env, agents)` directly with a `make()`-built env.
+    JSON-friendly, suitable for cross-process IPC.
 
-    `agents` must be registered names (e.g. ``"random"``, ``"starter"``).
-    Custom callables are not supported here because the parallel path
-    needs them picklable; for in-process callables, build the env
-    yourself and call `run_episode(env, callable_agents)`.
+    `agents` accepts a mix of registered names (e.g. ``"random"``,
+    ``"starter"``) and user callables. Callables are supported only when
+    ``parallel == 1`` (in-process); workers cannot pickle arbitrary
+    closures, so a callable with ``parallel >= 2`` raises ``TypeError``.
+    Use a registered name (or a top-level pickleable module function) to
+    parallelize.
 
     The default `mp_context="spawn"` is safe with PyTorch / CUDA tensors
     held by the parent. Use ``"fork"`` for pure-Python agents to skip the
@@ -899,6 +899,48 @@ def run(
     else:
         seeds_list = [int(s) for s in seeds]  # type: ignore[arg-type]
         single = False
+
+    has_callable = any(not isinstance(a, str) for a in agents)
+
+    if has_callable and parallel >= 2:
+        raise TypeError(
+            "callable agents cannot be sent to worker processes; pass "
+            "registered agent names or use parallel=1."
+        )
+
+    if has_callable:
+        # In-process path — `run_episodes_parallel` only accepts strings,
+        # so we drive the per-seed loop ourselves with `run_episode`.
+        from kaggle_environments import make as _make
+
+        num_agents = len(agents)
+        summaries: list[dict[str, Any]] = []
+        for s in seeds_list:
+            env = _make(
+                "orbit_wars", configuration={"agents": num_agents, "seed": s}
+            )
+            run_episode(env, list(agents))
+            final = env.steps[-1] if env.steps else []
+            rewards: list[Any] = []
+            statuses: list[str] = []
+            for state in final:
+                try:
+                    rewards.append(state["reward"])
+                except (KeyError, TypeError):
+                    rewards.append(getattr(state, "reward", None))
+                try:
+                    statuses.append(state["status"])
+                except (KeyError, TypeError):
+                    statuses.append(getattr(state, "status", "UNKNOWN"))
+            summaries.append(
+                {
+                    "seed": s,
+                    "turns": len(env.steps),
+                    "rewards": rewards,
+                    "statuses": statuses,
+                }
+            )
+        return summaries[0] if single else summaries
 
     summaries = run_episodes_parallel(
         agents=list(agents),
