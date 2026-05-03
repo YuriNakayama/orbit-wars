@@ -504,21 +504,30 @@ def _abspath(rel: str | Path) -> Path:
     return absolute_under_repo(rel, start=Path(__file__))
 
 
-def _load_params() -> dict[str, Any]:
-    path = _repo_root() / "params.yaml"
+def _load_params(config_path: Path | None = None) -> dict[str, Any]:
+    path = config_path if config_path is not None else _repo_root() / "params.yaml"
+    if not path.is_absolute():
+        path = _repo_root() / path
     with path.open() as f:
         loaded = yaml.safe_load(f)
-    assert isinstance(loaded, dict), "params.yaml must be a mapping"
+    assert isinstance(loaded, dict), f"{path} must be a mapping"
     return loaded
 
 
 @app.command()
-def main() -> None:
-    """CLI: run training using repo-root params.yaml."""
+def main(
+    config: Path = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML config path (default=params.yaml, case5 は configs/il_case5.yaml)",
+    ),
+) -> None:
+    """CLI: run training using repo-root params.yaml or --config override."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    cfg = _load_params()
+    cfg = _load_params(config)
     report = train(cfg)
     typer.echo(
         f"best_val_loss={report.best_val_loss:.4f} "

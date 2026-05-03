@@ -527,21 +527,30 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 app = typer.Typer(add_completion=False)
 
 
-def _load_params() -> dict[str, Any]:
-    path = _repo_root() / "params.yaml"
+def _load_params(config_path: Path | None = None) -> dict[str, Any]:
+    path = config_path if config_path is not None else _repo_root() / "params.yaml"
+    if not path.is_absolute():
+        path = _repo_root() / path
     with path.open() as f:
         loaded = yaml.safe_load(f)
-    assert isinstance(loaded, dict), "params.yaml must be a mapping"
+    assert isinstance(loaded, dict), f"{path} must be a mapping"
     return loaded
 
 
 @app.command()
-def main() -> None:
-    """CLI: run preprocess using repo-root params.yaml."""
+def main(
+    config: Path = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML config path (default=params.yaml, case5 は configs/il_case5.yaml)",
+    ),
+) -> None:
+    """CLI: run preprocess using repo-root params.yaml or --config override."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    cfg = _load_params()
+    cfg = _load_params(config)
     report = preprocess(cfg)
     typer.echo(
         f"rating_cutoff={report.rating_cutoff:.2f} "
