@@ -37,8 +37,10 @@ class RunMetadata:
     params_hash: str = ""
     seed: int = 0
     vast_instance_id: int | None = None
+    runpod_pod_id: str | None = None
     gpu_name: str | None = None
     vast_offer_snapshot: dict[str, Any] | None = None
+    runpod_offer_snapshot: dict[str, Any] | None = None
     command: str = ""
     weights_path: str = ""
     train_metrics: dict[str, Any] = field(default_factory=dict)

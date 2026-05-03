@@ -89,10 +89,17 @@ def _build_run_dir(case: str, seed: int) -> Path:
 def _resolve_run_dir(cfg_run_dir: str | None, case: str, seed: int) -> Path:
     env_run_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
     vast_id = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
-    if vast_id and not env_run_dir:
+    runpod_id = os.environ.get("ORBIT_WARS_RUNPOD_POD_ID")
+    if vast_id and runpod_id:
         raise RuntimeError(
-            "ORBIT_WARS_VAST_INSTANCE_ID is set but ORBIT_WARS_RUN_DIR is not. "
-            "Refusing to overwrite canonical weights from a Vast.ai instance."
+            "Both ORBIT_WARS_VAST_INSTANCE_ID and ORBIT_WARS_RUNPOD_POD_ID are set. "
+            "Only one provider should be active per run."
+        )
+    if (vast_id or runpod_id) and not env_run_dir:
+        raise RuntimeError(
+            "ORBIT_WARS_RUN_DIR is required when a provider id "
+            "(ORBIT_WARS_VAST_INSTANCE_ID / ORBIT_WARS_RUNPOD_POD_ID) is set. "
+            "Refusing to overwrite canonical weights from a cloud instance."
         )
     if env_run_dir:
         return _abspath(env_run_dir)
@@ -335,6 +342,16 @@ def _write_run_json(run_dir: Path, summary: dict[str, Any], *, seed: int) -> Non
             vast_id = int(vast_id_raw)
         except ValueError:
             vast_id = None
+    runpod_pod_id = os.environ.get("ORBIT_WARS_RUNPOD_POD_ID") or None
+    runpod_offer_snapshot: dict[str, Any] | None = None
+    snapshot_raw = os.environ.get("ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT")
+    if snapshot_raw:
+        try:
+            parsed = json.loads(snapshot_raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            runpod_offer_snapshot = parsed
     gpu_name: str | None = None
     if torch.cuda.is_available():
         try:
@@ -353,8 +370,10 @@ def _write_run_json(run_dir: Path, summary: dict[str, Any], *, seed: int) -> Non
         params_hash="",
         seed=seed,
         vast_instance_id=vast_id,
+        runpod_pod_id=runpod_pod_id,
         gpu_name=gpu_name,
         vast_offer_snapshot=None,
+        runpod_offer_snapshot=runpod_offer_snapshot,
         command=command,
         weights_path=weights_path_rel,
         train_metrics=summary,

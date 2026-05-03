@@ -154,6 +154,53 @@ def test_no_env_uses_canonical_path(
 
 def test_vast_id_without_run_dir_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORBIT_WARS_VAST_INSTANCE_ID", "12345")
+    monkeypatch.delenv("ORBIT_WARS_RUNPOD_POD_ID", raising=False)
     monkeypatch.delenv("ORBIT_WARS_RUN_DIR", raising=False)
     with pytest.raises(RuntimeError, match="ORBIT_WARS_RUN_DIR"):
         _resolve_run_dir()
+
+
+def test_runpod_id_without_run_dir_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "abcd1234")
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_RUN_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="ORBIT_WARS_RUN_DIR"):
+        _resolve_run_dir()
+
+
+def test_both_provider_ids_set_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORBIT_WARS_VAST_INSTANCE_ID", "12345")
+    monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "abcd1234")
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", "/tmp/whatever")
+    with pytest.raises(RuntimeError, match="Both"):
+        _resolve_run_dir()
+
+
+def test_run_dir_override_records_runpod_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mini_dataset: tuple[Path, Path],
+) -> None:
+    train_path, val_path = mini_dataset
+    canonical = tmp_path / "canonical_should_not_be_written.pt"
+    run_dir = tmp_path / "run_runpod"
+    snapshot = {
+        "gpu_type_id": "NVIDIA GeForce RTX 3090",
+        "cloud_type": "SECURE",
+        "dph_total": 0.43,
+    }
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("ORBIT_WARS_RUN_ID", "test_runpod_run")
+    monkeypatch.setenv("ORBIT_WARS_GIT_SHA", "abc1234deadbeef")
+    monkeypatch.setenv("ORBIT_WARS_GIT_BRANCH", "feature/test")
+    monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "pod-abc123")
+    monkeypatch.setenv("ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT", json.dumps(snapshot))
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+
+    train(_build_cfg(train_path, val_path, canonical))
+
+    meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert meta["runpod_pod_id"] == "pod-abc123"
+    assert meta["runpod_offer_snapshot"] == snapshot
+    assert meta["vast_instance_id"] is None
+    assert meta["vast_offer_snapshot"] is None
