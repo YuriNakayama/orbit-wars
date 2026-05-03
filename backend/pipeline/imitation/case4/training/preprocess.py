@@ -37,6 +37,8 @@ from typing import Any
 
 import numpy as np
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 import typer
 import yaml
 
@@ -53,6 +55,7 @@ logger = logging.getLogger(__name__)
 UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
+FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
 
 
 @dataclass(frozen=True)
@@ -287,30 +290,57 @@ def _filter_index(
     return df, cutoff
 
 
-def _empty_schema() -> dict[str, pl.DataType]:
-    return {
-        "planet_feats": pl.List(pl.Float32),
-        "global_feats": pl.List(pl.Float32),
-        "planet_mask": pl.List(pl.Boolean),
-        "my_planet_mask": pl.List(pl.Boolean),
-        "target_mask": pl.List(pl.Boolean),
-        "candidate_feats": pl.List(pl.Float32),
-        "candidate_mask": pl.List(pl.Boolean),
-        "candidate_pid": pl.List(pl.Int32),
-        "cand_slot_per_src": pl.List(pl.Int32),
-        "is_noop": pl.Boolean(),
-    }
+def _arrow_schema() -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("planet_feats", pa.list_(pa.float32())),
+            pa.field("global_feats", pa.list_(pa.float32())),
+            pa.field("planet_mask", pa.list_(pa.bool_())),
+            pa.field("my_planet_mask", pa.list_(pa.bool_())),
+            pa.field("target_mask", pa.list_(pa.bool_())),
+            pa.field("candidate_feats", pa.list_(pa.float32())),
+            pa.field("candidate_mask", pa.list_(pa.bool_())),
+            pa.field("candidate_pid", pa.list_(pa.int32())),
+            pa.field("cand_slot_per_src", pa.list_(pa.int32())),
+            pa.field("is_noop", pa.bool_()),
+        ]
+    )
 
 
-def _write_parquet(rows: list[dict[str, Any]], path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        empty = pl.DataFrame(schema=_empty_schema())
-        empty.write_parquet(path)
-        return 0
-    df = pl.DataFrame(rows)
-    df.write_parquet(path)
-    return df.height
+class StreamingParquetWriter:
+    """Buffer rows and flush in chunks to keep RAM bounded.
+
+    All rows for the parquet file go through this single instance; flushing
+    is automatic when the buffer reaches ``flush_every`` rows. Call
+    :meth:`close` after the last append to flush the tail and close the
+    underlying ParquetWriter. ``rows_written`` reports the cumulative count.
+    """
+
+    def __init__(self, path: Path, flush_every: int = FLUSH_EVERY_FRAMES) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
+        self._flush_every = flush_every
+        self._buf: list[dict[str, Any]] = []
+        self._writer = pq.ParquetWriter(str(path), _arrow_schema(), compression="zstd")
+        self.rows_written = 0
+
+    def append(self, row: dict[str, Any]) -> None:
+        self._buf.append(row)
+        if len(self._buf) >= self._flush_every:
+            self._flush()
+
+    def _flush(self) -> None:
+        if not self._buf:
+            return
+        table = pa.Table.from_pylist(self._buf, schema=_arrow_schema())
+        self._writer.write_table(table)
+        self.rows_written += len(self._buf)
+        self._buf.clear()
+
+    def close(self) -> int:
+        self._flush()
+        self._writer.close()
+        return self.rows_written
 
 
 def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
@@ -359,8 +389,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         n_to_process,
     )
 
-    train_rows: list[dict[str, Any]] = []
-    val_rows: list[dict[str, Any]] = []
+    train_writer = StreamingParquetWriter(out_train)
+    val_writer = StreamingParquetWriter(out_val)
 
     started_at = time.monotonic()
     kept = 0
@@ -387,8 +417,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             skipped_no_slots,
             skipped_no_replay,
             skipped_no_frames,
-            len(train_rows),
-            len(val_rows),
+            train_writer.rows_written,
+            val_writer.rows_written,
             fired_total,
             outside_total,
             outside_pct,
@@ -397,48 +427,51 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             remaining,
         )
 
-    for processed, rec in enumerate(rows, start=1):
-        try:
-            slots = _player_slots(rec, _num_player_slots(rec, modes))
-            if not slots:
-                skipped_no_slots += 1
-                continue
-            rp = rec.get("replay_path") or ""
-            replay_path = (base_dir / rp).resolve() if rp else None
-            if replay_path is None or not replay_path.exists():
-                skipped_no_replay += 1
-                continue
-            frames, fired, outside = _iter_episode_frames(replay_path, slots)
-            if not frames:
-                skipped_no_frames += 1
-                continue
-            bucket = _split_episode(str(rec["match_id"]), val_split)
-            target = val_rows if bucket == "val" else train_rows
-            target.extend(frames)
-            kept += 1
-            fired_total += fired
-            outside_total += outside
-        finally:
-            if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
-                _log_progress(processed)
-
-    logger.info(
-        "preprocess case4 writing parquet: train_rows=%d val_rows=%d "
-        "out_train=%s out_val=%s",
-        len(train_rows),
-        len(val_rows),
-        out_train,
-        out_val,
-    )
-    write_started = time.monotonic()
-    n_train = _write_parquet(train_rows, out_train)
-    n_val = _write_parquet(val_rows, out_val)
-    logger.info(
-        "preprocess case4 parquet written: train=%d val=%d write_elapsed=%.1fs",
-        n_train,
-        n_val,
-        time.monotonic() - write_started,
-    )
+    try:
+        for processed, rec in enumerate(rows, start=1):
+            try:
+                slots = _player_slots(rec, _num_player_slots(rec, modes))
+                if not slots:
+                    skipped_no_slots += 1
+                    continue
+                rp = rec.get("replay_path") or ""
+                replay_path = (base_dir / rp).resolve() if rp else None
+                if replay_path is None or not replay_path.exists():
+                    skipped_no_replay += 1
+                    continue
+                frames, fired, outside = _iter_episode_frames(replay_path, slots)
+                if not frames:
+                    skipped_no_frames += 1
+                    continue
+                bucket = _split_episode(str(rec["match_id"]), val_split)
+                writer = val_writer if bucket == "val" else train_writer
+                for frame in frames:
+                    writer.append(frame)
+                kept += 1
+                fired_total += fired
+                outside_total += outside
+            finally:
+                if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
+                    _log_progress(processed)
+    finally:
+        logger.info(
+            "preprocess case4 closing parquet writers: "
+            "train_flushed_so_far=%d val_flushed_so_far=%d",
+            train_writer.rows_written,
+            val_writer.rows_written,
+        )
+        close_started = time.monotonic()
+        n_train = train_writer.close()
+        n_val = val_writer.close()
+        logger.info(
+            "preprocess case4 parquet finalized: train=%d val=%d close_elapsed=%.1fs "
+            "out_train=%s out_val=%s",
+            n_train,
+            n_val,
+            time.monotonic() - close_started,
+            out_train,
+            out_val,
+        )
 
     report = PreprocessReport(
         rating_cutoff=cutoff,
