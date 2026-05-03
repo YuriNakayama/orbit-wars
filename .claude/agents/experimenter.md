@@ -98,6 +98,7 @@ Pre-flight checks before invoking `dev/runpod train`:
 - `git status` is clean (no uncommitted changes that won't make it into the run).
 - The commit being trained from is pushed to the remote.
 - The user has approved the run if it is the first time you are spending GPU budget in this conversation. **GPU spend on RunPod is real money — confirm with the user before the first launch each session.** Subsequent launches in the same conversation that follow the same approved cost envelope do not require re-confirmation.
+- **Never bypass interactive cost-confirmation prompts.** `dev/runpod train` may prompt for `[y/N]` when estimated cost exceeds the configured cap or for the first launch. Do NOT use `yes |`, `echo y |`, `--yes`, `printf 'y\n' |`, `expect`, or any other auto-answer mechanism to skip that prompt. Such mechanisms suppress the safety gate even when the parent session approved the *scope* — the per-command confirmation is its own gate. If the prompt blocks, stop and either (a) ask the user to type `y` manually via `! dev/runpod train ...`, (b) re-confirm the exact cost figure with the user before proceeding, or (c) raise the issue and let the main session decide. Scope approval (e.g. "Secure Cloud, $1.5 cap") authorizes the *parameters*, not the bypass of the confirmation step itself.
 
 Capture the `run_id` printed by `dev/runpod train`. Save it (and the commit SHA, case, start time) in your working notes — you'll need it for status checks and for promoting weights later.
 
