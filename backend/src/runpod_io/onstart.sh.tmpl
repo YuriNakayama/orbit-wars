@@ -414,6 +414,15 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   fi
 fi
 
+# preprocess-only mode: <TRAIN_MODULE> が空なら train セクションを全スキップ。
+# preprocess の成果物 (data/mart/...) は前段で DVC 永続化済み。
+if [ -z "<TRAIN_MODULE>" ]; then
+  echo "[onstart] step=train_skip (preprocess-only mode, TRAIN_MODULE empty)"
+  mark "70_train_done"
+  mark "99_done"
+  exit 0
+fi
+
 mark "60_before_train"
 echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
 # snapshot は引用符を含む JSON なので、RunPod env では base64 で渡されている。

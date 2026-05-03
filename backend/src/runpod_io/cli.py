@@ -284,6 +284,12 @@ def train(
         "--max-wait",
         help="--watch のタイムアウト (秒)。デフォルトは onstart の 2h ガードと一致",
     ),
+    preprocess_only: bool = typer.Option(
+        False,
+        "--preprocess-only",
+        help="train を実行せず preprocess + DVC 永続化までで終了する。"
+        " train 不要 (data/mart の事前生成のみ目的) のとき。",
+    ),
 ) -> None:
     """Search RunPod GPU offers, pick one, and launch training for a given commit."""
     defaults = _case_defaults(case)
@@ -384,6 +390,11 @@ def train(
         raise typer.Exit(code=1)
 
     run_id = generate_run_id(branch, commit_sha, seed)
+    if preprocess_only and not defaults["preprocess_cmd"]:
+        raise typer.BadParameter(
+            f"case={case!r} には preprocess_cmd が定義されていないため "
+            "--preprocess-only は使用できません。"
+        )
     onstart_cmd = render_onstart(
         DEFAULT_TEMPLATE_PATH,
         commit_sha=commit_sha,
@@ -392,7 +403,7 @@ def train(
         branch=branch,
         repo_url=repo_url,
         case=case,
-        train_module=defaults["train_module"],
+        train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
     )

@@ -104,7 +104,12 @@ def render_onstart(
     _validate("branch", branch)
     _validate("repo_url", repo_url)
     _validate("case", case)
-    _validate("train_module", train_module)
+    # train_module は preprocess-only 経路では空文字。値があれば形式チェック。
+    if train_module and not _VALID_VALUE.match(train_module):
+        raise TemplateError(
+            f"invalid characters in 'train_module'={train_module!r}; "
+            "shell injection prevention rejected the value"
+        )
     _validate_config_arg(config_arg)
     _validate_preprocess_cmd(preprocess_cmd)
     text = template_path.read_text(encoding="utf-8")
