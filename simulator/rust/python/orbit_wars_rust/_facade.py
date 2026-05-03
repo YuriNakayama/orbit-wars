@@ -6,25 +6,36 @@ identical to the upstream `kaggle_environments/envs/orbit_wars` registry —
 we only swap out `interpreter`. Everything else (renderer, html_renderer,
 specification, agents) is reused verbatim from the vendored Python copy.
 
-The active interpreter is chosen lazily at each call so tests can flip the
+The active interpreter is chosen lazily at each call so callers can flip the
 `ORBIT_WARS_BACKEND` env var per-case without re-importing the package.
+
+## Default: backend = `python`
+
+The default backend is the **upstream Python interpreter** (the vendored
+copy of `kaggle_environments/envs/orbit_wars`). Importing this package
+therefore preserves the exact behavior every existing call site already
+sees — `make("orbit_wars", ...)` / `env.step` / `env.run` resolve to the
+upstream Python implementation.
+
+To opt into the Rust-accelerated path, set the environment variable:
+
+    ORBIT_WARS_BACKEND=rust
 
 ## Backend = `rust` semantics (hybrid)
 
 The Rust port does NOT implement initial planet generation
-(`generate_planets`) or comet path sampling (`generate_comet_paths`),
-because both rely on Python's `random` module and rejection sampling that we
-deliberately did not port (see `02-requirements.md`). To stay bit-exact with
-the upstream Python interpreter we delegate the **generation-touching turns**
-back to Python:
+(`generate_planets`); we delegate the **generation-touching turns** back
+to Python so the global `random` cursor stays in lock-step with upstream:
 
-  1. The very first step (planets are still empty) — runs `generate_planets`.
+  1. The very first step (planets are still empty) — runs `generate_planets`
+     in Python.
   2. Each step where `(obs.step + 1) in COMET_SPAWN_STEPS` (i.e. steps
-     49 / 149 / 249 / 349 / 449 — the turn before each spawn) — runs
-     `generate_comet_paths`.
+     49 / 149 / 249 / 349 / 449 — the turn before each spawn) — pre-samples
+     attempts in Python and dispatches to Rust `fast_generate_comet_paths`.
 
-All other steps go through the Rust interpreter. This costs ~6 Python steps
-per 500-turn episode (~1.2%) and preserves full upstream compatibility.
+All other steps go through the Rust interpreter. This costs ~6 Python
+steps per 500-turn episode (~1.2%) when the Rust backend is active and
+preserves full upstream compatibility.
 """
 
 from __future__ import annotations
@@ -279,10 +290,12 @@ _ENV_GET = os.environ.get
 
 
 def interpreter(state: Any, env: Any) -> Any:
-    # Hot path: backend selection. Skip the .lower() call (the documented
-    # contract is lowercase 'rust' / 'python'); accept either to be lenient.
-    backend = _ENV_GET("ORBIT_WARS_BACKEND", "rust")
-    if backend == "python" or backend == "Python" or backend == "PYTHON":
+    # Backend selection. Default is `python` — the upstream
+    # `kaggle_environments` interpreter — so that every existing call site
+    # behaves exactly as before importing this module. Set
+    # `ORBIT_WARS_BACKEND=rust` explicitly to opt into the Rust path.
+    backend = _ENV_GET("ORBIT_WARS_BACKEND", "python")
+    if backend != "rust":
         return python_interpreter(state, env)
 
     # Bootstrap (planets empty): upstream runs `generate_planets` and the

@@ -54,10 +54,13 @@ the same venv will then trigger `kaggle_environments.register("orbit_wars",
 
 ## Backend selection at runtime
 
-| `ORBIT_WARS_BACKEND` | Behaviour                                     |
-|----------------------|-----------------------------------------------|
-| `rust` (default)     | Rust interpreter via PyO3                     |
-| `python`             | Apache-2.0 vendored Python interpreter        |
+| `ORBIT_WARS_BACKEND` | Behaviour                                            |
+|----------------------|------------------------------------------------------|
+| _unset_ (default)    | Apache-2.0 vendored Python interpreter (upstream)   |
+| `python`             | Apache-2.0 vendored Python interpreter (explicit)    |
+| `rust`               | Rust interpreter via PyO3                            |
 
-Set this environment variable before any code path that calls
-`kaggle_environments.make("orbit_wars", ...)`.
+Default is the upstream Python implementation so that existing call sites
+keep their pre-existing behavior. Opt into Rust explicitly when self-play
+throughput matters. Set the environment variable before any code path that
+calls `kaggle_environments.make("orbit_wars", ...)`.

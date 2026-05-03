@@ -98,6 +98,9 @@ tfplan.out
 /.dvc/config.local
 /.dvc/cache
 
+# Rust build artifacts (simulator/rust/)
+simulator/rust/target/
+
 # DVC-managed weights (formerly git-tracked)
 bot/pipeline/imitation/case1/policy/weights.pt
 
