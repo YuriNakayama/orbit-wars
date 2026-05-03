@@ -6,9 +6,6 @@ identical to the upstream `kaggle_environments/envs/orbit_wars` registry —
 we only swap out `interpreter`. Everything else (renderer, html_renderer,
 specification, agents) is reused verbatim from the vendored Python copy.
 
-The active interpreter is chosen lazily at each call so callers can flip the
-`ORBIT_WARS_BACKEND` env var per-case without re-importing the package.
-
 ## Default: backend = `python`
 
 The default backend is the **upstream Python interpreter** (the vendored
@@ -17,9 +14,23 @@ therefore preserves the exact behavior every existing call site already
 sees — `make("orbit_wars", ...)` / `env.step` / `env.run` resolve to the
 upstream Python implementation.
 
-To opt into the Rust-accelerated path, set the environment variable:
+## Switching backends in code
 
-    ORBIT_WARS_BACKEND=rust
+Use the public helpers exported from `orbit_wars_rust`:
+
+    import orbit_wars_rust
+    orbit_wars_rust.use_rust()       # opt into the Rust interpreter
+    orbit_wars_rust.use_python()     # back to the upstream Python (default)
+    with orbit_wars_rust.backend("rust"):
+        env.run([...])               # scoped switch with auto-restore
+
+Or set the attribute directly:
+
+    orbit_wars_rust.set_backend("rust")
+    print(orbit_wars_rust.get_backend())   # → "rust"
+
+The active interpreter is chosen lazily at each call, so flipping the
+backend takes effect on the next `env.step` without re-importing.
 
 ## Backend = `rust` semantics (hybrid)
 
@@ -41,9 +52,9 @@ preserves full upstream compatibility.
 from __future__ import annotations
 
 import math
-import os
 import random
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator, Literal
 
 from orbit_wars_vendor import (
     agents,
@@ -284,18 +295,86 @@ def _spawn_comet_via_rust(state: Any, env: Any) -> bool:
     return True
 
 
-# Pre-resolve the env var lookup once per call. We accept lowercase values
-# only — tests and the documented env var contract use lowercase.
-_ENV_GET = os.environ.get
+# --- Backend selection state ---------------------------------------------
+#
+# Module-level state read on every interpreter call so flipping it takes
+# effect on the next `env.step`. Default is the upstream Python interpreter
+# so existing call sites preserve their pre-existing behavior.
+
+Backend = Literal["python", "rust"]
+
+_VALID_BACKENDS: tuple[Backend, ...] = ("python", "rust")
+
+_active_backend: Backend = "python"
+_rust_comet_enabled: bool = True
+
+
+def get_backend() -> Backend:
+    """Return the currently active backend (`"python"` or `"rust"`)."""
+    return _active_backend
+
+
+def set_backend(backend: Backend) -> None:
+    """Switch the active backend. Takes effect on the next `env.step`.
+
+    Raises `ValueError` for unknown backends so typos surface immediately
+    rather than silently routing through the python fallback.
+    """
+    global _active_backend
+    if backend not in _VALID_BACKENDS:
+        raise ValueError(
+            f"unknown backend {backend!r}; expected one of {_VALID_BACKENDS}"
+        )
+    _active_backend = backend
+
+
+def use_python() -> None:
+    """Convenience wrapper: `set_backend("python")`."""
+    set_backend("python")
+
+
+def use_rust() -> None:
+    """Convenience wrapper: `set_backend("rust")`."""
+    set_backend("rust")
+
+
+@contextmanager
+def backend(backend_name: Backend) -> Iterator[None]:
+    """Scoped backend switch: ``with backend("rust"): env.run(...)``.
+
+    Restores the previous backend on exit even if the body raises.
+    """
+    prev = get_backend()
+    set_backend(backend_name)
+    try:
+        yield
+    finally:
+        set_backend(prev)
+
+
+def set_rust_comet(enabled: bool) -> None:
+    """Toggle the Rust-accelerated comet spawn (only active under
+    `backend == "rust"`). Default: enabled.
+
+    Set to False to delegate comet spawn turns back to the upstream
+    Python `generate_comet_paths` for strict bit-exact comparisons.
+    """
+    global _rust_comet_enabled
+    _rust_comet_enabled = bool(enabled)
+
+
+def get_rust_comet() -> bool:
+    """Return whether Rust comet spawn is enabled."""
+    return _rust_comet_enabled
 
 
 def interpreter(state: Any, env: Any) -> Any:
     # Backend selection. Default is `python` — the upstream
     # `kaggle_environments` interpreter — so that every existing call site
-    # behaves exactly as before importing this module. Set
-    # `ORBIT_WARS_BACKEND=rust` explicitly to opt into the Rust path.
-    backend = _ENV_GET("ORBIT_WARS_BACKEND", "python")
-    if backend != "rust":
+    # behaves exactly as before importing this module. Use
+    # `orbit_wars_rust.use_rust()` (or `set_backend("rust")` /
+    # `with orbit_wars_rust.backend("rust"): ...`) to opt into the Rust path.
+    if _active_backend != "rust":
         return python_interpreter(state, env)
 
     # Bootstrap (planets empty): upstream runs `generate_planets` and the
@@ -309,7 +388,7 @@ def interpreter(state: Any, env: Any) -> Any:
 
     # Comet spawn turns: spawn via Rust, then hand off to Rust interpreter.
     if _is_comet_spawn_turn(state):
-        if _ENV_GET("ORBIT_WARS_RUST_COMET", "1") == "1":
+        if _rust_comet_enabled:
             _spawn_comet_via_rust(state, env)
             return _rust_interpreter(state, env)
         return python_interpreter(state, env)

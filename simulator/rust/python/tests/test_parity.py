@@ -21,7 +21,6 @@ keeps the regression signal sharp.
 from __future__ import annotations
 
 import math
-import os
 import random
 from typing import Any
 
@@ -29,7 +28,7 @@ import pytest
 
 # Force-register the orbit_wars env name with the facade BEFORE the test
 # imports anything from kaggle_environments.
-import orbit_wars_rust  # noqa: F401
+import orbit_wars_rust
 
 from kaggle_environments import make
 
@@ -88,7 +87,7 @@ def _build_env(backend: str, seed: int, num_agents: int) -> Any:
     state across the two `env.step()` calls so both backends draw from the
     same RNG cursor at every turn.
     """
-    os.environ["ORBIT_WARS_BACKEND"] = backend
+    orbit_wars_rust.set_backend(backend)
     env = make("orbit_wars", configuration={"seed": seed})
     env.reset(num_agents=num_agents)
     return env

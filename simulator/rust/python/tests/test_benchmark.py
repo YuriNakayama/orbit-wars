@@ -13,17 +13,16 @@ machine they were measured on get pasted into
 
 from __future__ import annotations
 
-import os
 import time
 
 import pytest
 
-import orbit_wars_rust  # noqa: F401  registers facade
+import orbit_wars_rust
 from kaggle_environments import make
 
 
 def _run_episodes(backend: str, num_episodes: int, num_agents: int) -> float:
-    os.environ["ORBIT_WARS_BACKEND"] = backend
+    orbit_wars_rust.set_backend(backend)
     t0 = time.perf_counter()
     for seed in range(num_episodes):
         env = make("orbit_wars", configuration={"agents": num_agents, "seed": seed})

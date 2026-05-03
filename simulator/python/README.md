@@ -11,9 +11,10 @@ Two reasons:
 1. **Reference implementation** for the Rust port in `simulator/rust/`. The
    Python interpreter is the source-of-truth used by parity tests
    (`simulator/rust/python/tests/test_parity.py`).
-2. **Runtime fallback**. The facade in `orbit_wars_rust` dispatches to this
-   vendored copy when the env var `ORBIT_WARS_BACKEND=python` is set, which is
-   how we keep the Rust simulator opt-out-able.
+2. **Runtime default**. The facade in `orbit_wars_rust` defaults to this
+   vendored copy and dispatches to Rust only after explicit opt-in via
+   `orbit_wars_rust.use_rust()` / `set_backend("rust")` / `backend("rust")`,
+   which is how we keep the Rust simulator opt-in.
 
 ## Contents
 

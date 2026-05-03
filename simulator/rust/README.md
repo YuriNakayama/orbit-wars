@@ -54,13 +54,21 @@ the same venv will then trigger `kaggle_environments.register("orbit_wars",
 
 ## Backend selection at runtime
 
-| `ORBIT_WARS_BACKEND` | Behaviour                                            |
-|----------------------|------------------------------------------------------|
-| _unset_ (default)    | Apache-2.0 vendored Python interpreter (upstream)   |
-| `python`             | Apache-2.0 vendored Python interpreter (explicit)    |
-| `rust`               | Rust interpreter via PyO3                            |
+The default backend is the upstream Apache-2.0 vendored Python interpreter,
+so existing call sites preserve their pre-existing behavior. Opt into Rust
+explicitly via the public Python API:
 
-Default is the upstream Python implementation so that existing call sites
-keep their pre-existing behavior. Opt into Rust explicitly when self-play
-throughput matters. Set the environment variable before any code path that
-calls `kaggle_environments.make("orbit_wars", ...)`.
+```python
+import orbit_wars_rust
+
+orbit_wars_rust.use_rust()                  # opt into Rust
+orbit_wars_rust.use_python()                # back to upstream Python
+orbit_wars_rust.set_backend("rust")         # explicit setter
+orbit_wars_rust.get_backend()               # → "python" or "rust"
+
+with orbit_wars_rust.backend("rust"):
+    env.run([...])                          # scoped switch with auto-restore
+```
+
+The active backend is read on every `env.step`, so toggling it takes effect
+immediately without re-importing. Unknown backend names raise `ValueError`.
