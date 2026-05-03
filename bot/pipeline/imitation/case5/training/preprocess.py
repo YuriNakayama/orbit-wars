@@ -528,9 +528,27 @@ app = typer.Typer(add_completion=False)
 
 
 def _load_params(config_path: Path | None = None) -> dict[str, Any]:
-    path = config_path if config_path is not None else _repo_root() / "params.yaml"
-    if not path.is_absolute():
-        path = _repo_root() / path
+    if config_path is None:
+        path = _repo_root() / "params.yaml"
+    else:
+        path = config_path
+        if not path.is_absolute():
+            # 相対 path は cwd → repo_root/bot → repo_root の順で探す。
+            # `uv run --directory bot python -m ...` cwd は bot/ なので
+            # `pipeline/imitation/case5/configs/il_case5.yaml` のような cwd
+            # 相対 path がまず通る。fallback でも見つからなければ最後の path
+            # を投げて FileNotFoundError を出す (デバッグ用に最終 path 残す)。
+            candidates = [
+                Path.cwd() / path,
+                _repo_root() / "bot" / path,
+                _repo_root() / path,
+            ]
+            for c in candidates:
+                if c.is_file():
+                    path = c
+                    break
+            else:
+                path = candidates[0]
     with path.open() as f:
         loaded = yaml.safe_load(f)
     assert isinstance(loaded, dict), f"{path} must be a mapping"

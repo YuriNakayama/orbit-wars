@@ -505,9 +505,24 @@ def _abspath(rel: str | Path) -> Path:
 
 
 def _load_params(config_path: Path | None = None) -> dict[str, Any]:
-    path = config_path if config_path is not None else _repo_root() / "params.yaml"
-    if not path.is_absolute():
-        path = _repo_root() / path
+    if config_path is None:
+        path = _repo_root() / "params.yaml"
+    else:
+        path = config_path
+        if not path.is_absolute():
+            # 相対 path は cwd → repo_root/bot → repo_root の順で探す
+            # (`uv run --directory bot` cwd 配慮)。
+            candidates = [
+                Path.cwd() / path,
+                _repo_root() / "bot" / path,
+                _repo_root() / path,
+            ]
+            for c in candidates:
+                if c.is_file():
+                    path = c
+                    break
+            else:
+                path = candidates[0]
     with path.open() as f:
         loaded = yaml.safe_load(f)
     assert isinstance(loaded, dict), f"{path} must be a mapping"
