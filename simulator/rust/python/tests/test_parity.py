@@ -252,6 +252,63 @@ def test_parity_full_episode(seed: int) -> None:
         _compare_step(env_py, env_rs, turn, seed)
 
 
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_run_callable_agent(seed: int) -> None:
+    """`run()` accepts user callables when `parallel=1`. Verifies that
+    rulebase / imitation agents (which are Python callables, not registered
+    names) can be driven through the unified entry point."""
+    import random as _random
+
+    _random.seed(seed)
+    captured: list[Any] = []
+
+    def my_agent(obs: Any, _conf: Any = None) -> list[list[int]]:
+        # Side effect to confirm the callable was actually invoked, not
+        # silently swallowed by some fallback path.
+        captured.append(int(getattr(obs, "step", -1)))
+        return []  # noop — easier to compare against known string agent
+
+    result = orbit_wars_rust.run([my_agent, "random"], seed=seed)
+    assert result["seed"] == seed
+    assert result["turns"] > 0, "episode should produce at least one step"
+    # The callable saw the per-turn observations.
+    assert len(captured) > 0, "callable agent was never invoked"
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_parity_run_episode_vs_env_run(seed: int) -> None:
+    """`orbit_wars_rust.run_episode` must produce the same final state and
+    rewards as `env.run` on the same seed / agents.
+
+    Both paths drive the same Rust interpreter underneath. The batch path
+    only skips per-step framework bookkeeping (deepcopy/structify/overage
+    tracking) — the actual planet/fleet trajectory must be identical.
+    """
+    import random as _random
+
+    _random.seed(seed)
+    env_legacy = _build_env("rust", seed, num_agents=2)
+    _random.seed(seed)
+    env_legacy.run(["random", "random"])
+
+    _random.seed(seed)
+    env_batch = _build_env("rust", seed, num_agents=2)
+    _random.seed(seed)
+    orbit_wars_rust.run_episode(env_batch, ["random", "random"])
+
+    assert len(env_legacy.steps) == len(env_batch.steps), (
+        f"step count differs: legacy={len(env_legacy.steps)} batch={len(env_batch.steps)}"
+    )
+    legacy_obs = env_legacy.steps[-1][0]["observation"]
+    batch_obs = env_batch.steps[-1][0]["observation"]
+    legacy_planets = legacy_obs["planets"] if isinstance(legacy_obs, dict) else legacy_obs.planets
+    batch_planets = batch_obs["planets"] if isinstance(batch_obs, dict) else batch_obs.planets
+    legacy_fleets = legacy_obs["fleets"] if isinstance(legacy_obs, dict) else legacy_obs.fleets
+    batch_fleets = batch_obs["fleets"] if isinstance(batch_obs, dict) else batch_obs.fleets
+    _assert_planets_equal(legacy_planets, batch_planets)
+    _assert_fleets_equal(legacy_fleets, batch_fleets)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", [0, 1])
 def test_parity_4p_full_episode(seed: int) -> None:

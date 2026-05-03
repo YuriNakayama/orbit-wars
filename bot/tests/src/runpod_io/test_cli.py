@@ -367,9 +367,7 @@ def test_tail_no_follow_uses_tail_n(
     )
     captured: list[list[str]] = []
 
-    def fake_run(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         captured.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 

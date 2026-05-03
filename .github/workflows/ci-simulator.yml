@@ -1,0 +1,89 @@
+name: CI Simulator
+
+on:
+  pull_request:
+    paths:
+      - "simulator/**"
+      - "bot/pyproject.toml"
+      - "bot/uv.lock"
+      - ".github/workflows/ci-simulator.yml"
+    types:
+      - opened
+      - synchronize
+      - ready_for_review
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache uv
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv
+            .pytest_cache
+          key: ${{ runner.os }}-sim-tools-${{ hashFiles('bot/uv.lock', 'bot/pyproject.toml', 'simulator/python/pyproject.toml', 'simulator/rust/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-sim-tools-
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            simulator/rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('simulator/rust/Cargo.lock', 'simulator/rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install bot deps (uv sync) — needed as host venv for maturin
+        run: uv sync --locked --all-extras --dev
+        working-directory: bot
+
+      - name: Install simulator/python deps
+        run: uv sync --all-extras --dev
+        working-directory: simulator/python
+
+      - name: Build + install Rust extension into bot venv
+        run: |
+          uv run --directory bot python -m pip install --quiet 'maturin>=1.7,<2'
+          cd simulator/rust
+          VIRTUAL_ENV="${{ github.workspace }}/bot/.venv" \
+            "${{ github.workspace }}/bot/.venv/bin/maturin" develop --release --quiet
+
+      - name: Cargo fmt check (simulator/rust)
+        run: cargo fmt --check
+        working-directory: simulator/rust
+
+      - name: Cargo clippy (simulator/rust)
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+        working-directory: simulator/rust
+
+      - name: Cargo test (simulator/rust)
+        run: cargo test --no-default-features
+        working-directory: simulator/rust
+
+      - name: Pytest (simulator/python vendored)
+        run: uv run pytest orbit_wars_vendor/tests -q
+        working-directory: simulator/python
+
+      - name: Pytest (simulator/rust facade + parity, fast slice)
+        run: uv run pytest ../simulator/rust/python/tests -m "not slow" -q
+        working-directory: bot

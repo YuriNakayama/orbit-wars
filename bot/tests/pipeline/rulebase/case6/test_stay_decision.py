@@ -176,9 +176,7 @@ def test_burst_capped_when_consecutive_at_limit(
         "burst hold for src at MAX_HOLD_TURNS should be suppressed"
     )
     # And it should be observable as a burst_capped diagnostic decision.
-    assert any(
-        d.src_id == capped_src and d.kind == "burst_capped" for d in decisions
-    )
+    assert any(d.src_id == capped_src and d.kind == "burst_capped" for d in decisions)
     # Sanity: original burst would have held this src.
     assert capped_src in base_holds
 
@@ -205,9 +203,7 @@ def test_consecutive_none_preserves_legacy_behavior(
     """Passing consecutive_holds=None must match the no-arg call exactly."""
     world = _burst_world(monkeypatch)
     legacy_holds, legacy_decisions = build_stay_holds(world)
-    explicit_holds, explicit_decisions = build_stay_holds(
-        world, consecutive_holds=None
-    )
+    explicit_holds, explicit_decisions = build_stay_holds(world, consecutive_holds=None)
     assert legacy_holds == explicit_holds
     assert [(d.src_id, d.kind, d.held_ships) for d in legacy_decisions] == [
         (d.src_id, d.kind, d.held_ships) for d in explicit_decisions
