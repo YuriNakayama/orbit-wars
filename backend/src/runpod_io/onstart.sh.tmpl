@@ -382,19 +382,38 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   for pq in "${MART_DIR}"/*.parquet; do
     [ -f "${pq}" ] || continue
     echo "[onstart] dvc add ${pq}"
-    if uv run --project backend dvc add "${pq}"; then
+    if uv run --project backend dvc add "${pq}" 2>&1; then
       added_any=1
     else
-      echo "[onstart] dvc add ${pq} FAILED" >&2
+      echo "[onstart] dvc add ${pq} FATAL" >&2
+      mark "55_mart_dvc_add_failed"
+      exit 1
     fi
   done
   shopt -u nullglob
   if [ "${added_any}" -eq 1 ]; then
-    echo "[onstart] dvc push ${MART_DIR}"
-    uv run --project backend dvc push "${MART_DIR}" \
-      || echo "[onstart] dvc push mart FAILED (non-fatal; cache に残る)" >&2
+    # dvc push は fatal: ここで成功しないと .dvc stub だけが orphan で残り
+    # 後続 run の `dvc pull` が `FileNotFoundError` で死ぬ (前 case4 train run
+    # の bvsfn7nd4g4kqw が学習開始 +6 秒で exit=1 した直接原因)。3 回までリトライ
+    # して全滅したら mart_dvc_persist 自体を失敗させる (= exit 1 で pod が
+    # cleanup_destroy 経由で onstart.log を S3 にあげて self-destroy)。
+    push_ok=0
+    for attempt in 1 2 3; do
+      echo "[onstart] dvc push ${MART_DIR} (attempt ${attempt}/3)"
+      if uv run --project backend dvc push "${MART_DIR}" 2>&1; then
+        push_ok=1
+        break
+      fi
+      echo "[onstart] dvc push attempt=${attempt} FAILED; retrying in 30s" >&2
+      sleep 30
+    done
+    if [ "${push_ok}" -ne 1 ]; then
+      echo "[onstart] dvc push mart FATAL — exiting so .dvc stub is NOT git-pushed" >&2
+      mark "55_mart_dvc_push_failed"
+      exit 1
+    fi
 
-    # .dvc stub と .gitignore を git に commit & push
+    # .dvc stub と .gitignore を git に commit & push (dvc push 成功時のみ)
     git config user.email "runpod-bot@orbit-wars.local"
     git config user.name "runpod-bot"
     if [ -n "${GIT_PAT:-}" ]; then
@@ -525,10 +544,31 @@ echo "[onstart] step=dvc_add_run"
 # dvc add は cwd 基準 path を取る。RUN_DIR_ABS の絶対 path から repo root を
 # 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
 RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
-uv run --project backend dvc add "${RUN_DIR_REL}"
+if ! uv run --project backend dvc add "${RUN_DIR_REL}" 2>&1; then
+  echo "[onstart] dvc_add_run FATAL" >&2
+  mark "75_dvc_add_run_failed"
+  exit 1
+fi
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project backend dvc push "${RUN_DIR_REL}"
+# dvc push を fatal 化。DVC remote (S3) に本体が無いまま .dvc stub だけ
+# git push されると次回 run の `dvc pull` が `FileNotFoundError` で死ぬ
+# (mart_dvc_persist と同じ問題)。3 回までリトライ後 exit 1。
+push_runs_ok=0
+for attempt in 1 2 3; do
+  echo "[onstart] dvc push ${RUN_DIR_REL} (attempt ${attempt}/3)"
+  if uv run --project backend dvc push "${RUN_DIR_REL}" 2>&1; then
+    push_runs_ok=1
+    break
+  fi
+  echo "[onstart] dvc_push_runs attempt=${attempt} FAILED; retrying in 30s" >&2
+  sleep 30
+done
+if [ "${push_runs_ok}" -ne 1 ]; then
+  echo "[onstart] dvc_push_runs FATAL — exiting" >&2
+  mark "75_dvc_push_runs_failed"
+  exit 1
+fi
 
 echo "[onstart] step=git_push_dvc_meta"
 RUN_DVC_FILE="${RUN_DIR_REL}.dvc"
