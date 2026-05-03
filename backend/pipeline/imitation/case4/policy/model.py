@@ -207,9 +207,12 @@ class CandidatePolicy(nn.Module):
         global_exp = global_h.unsqueeze(1).unsqueeze(2).expand(-1, p, k, -1)
         joint = torch.cat([self_exp, global_exp, cand_h], dim=-1)  # (B, P, K, 3H)
         cand_logits = self.cand_score(joint).squeeze(-1)  # (B, P, K)
-        # Mask invalid slots
-        neg_inf = torch.finfo(cand_logits.dtype).min
-        cand_logits = cand_logits.masked_fill(~batch.candidate_mask, neg_inf)
+        # Mask invalid slots: -1e9 で「実質ゼロ確率」を表現する。
+        # `torch.finfo(float32).min` (= -3.4e38) を使うと `log_softmax` 内で
+        # `x - max` が +inf に overflow し、loss が Inf に飛ぶ (commit 6e35f04
+        # 後も再現)。1e9 は softmax 出力で exp(-1e9)≒0 を保証するのに十分大きく、
+        # かつ log_softmax の差し引き演算で overflow しない。
+        cand_logits = cand_logits.masked_fill(~batch.candidate_mask, -1e9)
         return PolicyOutput(candidate_logits=cand_logits)
 
 

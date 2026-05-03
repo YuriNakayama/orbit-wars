@@ -50,9 +50,10 @@ def test_model_forward_shapes() -> None:
     assert output.candidate_logits.shape == (1, MAX_PLANETS, CAND_K)
 
 
-def test_invalid_slots_are_neg_inf_masked() -> None:
+def test_invalid_slots_are_masked_with_large_negative() -> None:
     """For non-mine slots, candidate_mask is all False, so logits should be
-    finfo.min (or thereabouts after the masked_fill in forward)."""
+    a large-magnitude negative (-1e9) that softmax treats as ~0 without
+    overflowing log_softmax (finfo.min would overflow)."""
     cfg = ModelConfig()
     model = CandidatePolicy(cfg)
     model.eval()
@@ -73,14 +74,13 @@ def test_invalid_slots_are_neg_inf_masked() -> None:
     batch, snap = featurize(obs, HistoryState())
     with torch.no_grad():
         output = model(batch)
-    # For non-my, non-valid candidate slots, mask is False; logit should be -inf
+    # non-my planet — candidate_mask all-False → logits all -1e9
     for slot, pid in enumerate(snap.planet_ids):
         if pid in snap.my_planet_ids:
             continue
-        # non-my planet — candidate_mask all-False → logits all very negative
         for k in range(CAND_K):
             v = float(output.candidate_logits[0, slot, k].item())
-            assert v < -1e30
+            assert v < -1e8
 
 
 def test_dimensions_match_config() -> None:
