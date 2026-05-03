@@ -9,7 +9,8 @@ data:
   rating_quantile: 0.50
   val_split: 0.10
   modes: ["1v1"]
-  max_episodes: null
+  # smoke test: 30 episode で preprocess を 数分に短縮 (本番回す前の e2e 検証用)
+  max_episodes: 30
 
 model:
   planet_in_dim: 35
@@ -21,7 +22,8 @@ model:
 train:
   case: case4
   batch_size: 256
-  epochs: 15
+  # smoke test: 2 epochs で train を 数分に短縮。本番に戻すときは 15 へ
+  epochs: 2
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
