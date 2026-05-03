@@ -76,6 +76,9 @@ bot/                Python 実装一式 (pyproject.toml / uv.lock はここに�
     imitation/          模倣学習パイプライン
       case1/            DeepSets BC
   tests/                Pytest unit tests
+simulator/              Orbit Wars simulator (公式 Python vendored copy + Rust 高速版)
+  python/               Apache-2.0 vendored kaggle_environments/envs/orbit_wars
+  rust/                 PyO3 + maturin Rust 実装 (orbit_wars_rust._lib)
 infra/                  Terraform によるインフラ管理 (AWS 等)
   environment/          環境別 root module (dev / staging / prod)
     dev/
@@ -112,6 +115,48 @@ dev/test-bot     # CI (format check -> lint -> type check -> pytest)
 dev/create-worktree  # Create git worktree with .env copy
 dev/dvc              # DVC operations (setup / pull / repro / push / dag / add)
 ```
+
+## Rust simulator (高速 self-play)
+
+`simulator/rust/` に Rust 実装の simulator があり、`orbit_wars_rust.run(...)`
+を呼ぶだけで自己対戦を最大 **100×+** 高速化できます。bit-exact parity
+維持、`kaggle_environments.make("orbit_wars", ...)` の既存呼び出しは完全不変。
+
+### 一行でだいたい何でもできる: `run()`
+
+```python
+import orbit_wars_rust
+
+# 1 試合
+result = orbit_wars_rust.run(["random", "random"], seed=0)
+# → {"seed": 0, "turns": 500, "rewards": [-1, 1], "statuses": ["DONE", "DONE"]}
+
+# N 試合 シーケンシャル
+results = orbit_wars_rust.run(["random", "random"], seeds=range(30))
+
+# N 試合 並列 (Pool は helper 内蔵)
+results = orbit_wars_rust.run(
+    ["random", "random"],
+    seeds=range(30),
+    parallel=8,
+    mp_context="fork",   # PyTorch 安全側は "spawn" (default)
+)
+
+# parity / debugging — Python interpreter を強制
+result = orbit_wars_rust.run(["random", "random"], seed=0, backend="python")
+```
+
+### 速度 tier (30 試合 × 2 random agents, M-series Mac, 12 cores)
+
+| 呼び出し | wall-clock | speedup vs Python |
+|---|---:|---:|
+| `run(..., backend="python")` (baseline) | 51 s | 1.0× |
+| `run(..., seeds=range(30))` (rust serial) | 1.8–1.9 s | **~27×** |
+| `run(..., seeds=range(30), parallel=4, mp_context="fork")` | 0.47 s | **~108×** |
+| `run(..., seeds=range(30), parallel=8, mp_context="fork")` | 0.36–0.43 s | **~120–141×** |
+| `run(..., seeds=range(30), parallel=12, mp_context="fork")` | 0.28 s | **~180×** |
+
+詳細・low-level API・制約: [`simulator/rust/README.md`](simulator/rust/README.md)。
 
 ## Data / Model Management (DVC)
 

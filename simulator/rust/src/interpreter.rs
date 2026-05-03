@@ -33,22 +33,18 @@ pub fn step(state: &mut OrbitWarsState, actions: &[Vec<Move>]) {
     }
 
     // Phase 0: process moves.
-    // Build a planet_id → slot index once per turn so each move's planet
-    // lookup is O(1) instead of O(N). Skip the map entirely when no agent
-    // submitted any moves this turn (very common with random_agent's
-    // ships>=20 gate during the noisy parts of an episode).
+    // Build a planet_id → slot lookup once per turn. Planet IDs are dense
+    // (0..=N small comet offset), so a Vec<i32> with -1 sentinel beats a
+    // HashMap on both alloc cost and per-lookup hash work. Skip the table
+    // entirely when no agent submitted any moves this turn (very common
+    // with random_agent's ships>=20 gate during noisy parts of an episode).
     let any_moves = actions.iter().any(|m| !m.is_empty());
     if any_moves {
-        let planet_index: std::collections::HashMap<i64, usize> = state
-            .planets
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.id, i))
-            .collect();
+        let lookup = build_planet_lookup(&state.planets);
         for (player, moves) in actions.iter().enumerate() {
             let player_id = player as i32;
             for mv in moves.iter() {
-                launch_fleet(state, &planet_index, player_id, mv);
+                launch_fleet(state, &lookup, player_id, mv);
             }
         }
     }
@@ -149,21 +145,43 @@ pub fn step(state: &mut OrbitWarsState, actions: &[Vec<Move>]) {
     }
 }
 
+/// Build a planet_id → slot table sized to `max(id) + 1`. Slots without a
+/// planet hold `-1`. The table costs one allocation per turn; inside the
+/// per-move loop each lookup is a single bounds-checked read.
+fn build_planet_lookup(planets: &[crate::state::Planet]) -> Vec<i32> {
+    let max_id = planets.iter().map(|p| p.id).max().unwrap_or(-1);
+    if max_id < 0 {
+        return Vec::new();
+    }
+    let mut lookup = vec![-1i32; (max_id as usize) + 1];
+    for (slot, p) in planets.iter().enumerate() {
+        if (p.id as usize) < lookup.len() {
+            lookup[p.id as usize] = slot as i32;
+        }
+    }
+    lookup
+}
+
 /// Sanitize and apply a single `Move`, appending a fleet on success. Mirrors
 /// `process_moves` in the upstream interpreter (orbit_wars.py:480–509).
-fn launch_fleet(
-    state: &mut OrbitWarsState,
-    planet_index: &std::collections::HashMap<i64, usize>,
-    player_id: i32,
-    mv: &Move,
-) {
+fn launch_fleet(state: &mut OrbitWarsState, planet_lookup: &[i32], player_id: i32, mv: &Move) {
     let ships = mv.ships;
     if ships <= 0 {
         return;
     }
-    let Some(&planet_slot) = planet_index.get(&mv.from_planet_id) else {
+    let pid = mv.from_planet_id;
+    if pid < 0 {
         return;
-    };
+    }
+    let pid_usize = pid as usize;
+    if pid_usize >= planet_lookup.len() {
+        return;
+    }
+    let slot_i = planet_lookup[pid_usize];
+    if slot_i < 0 {
+        return;
+    }
+    let planet_slot = slot_i as usize;
     let planet = &state.planets[planet_slot];
     if planet.owner != player_id {
         return;

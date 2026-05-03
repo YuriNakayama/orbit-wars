@@ -98,6 +98,11 @@ pub fn advance_fleets(state: &mut OrbitWarsState) -> FleetMovementOutcome {
         fleets_to_remove,
     };
 
+    // Precompute planet (x, y, radius) into a flat tuple Vec so the inner
+    // loop hits contiguous memory and AABB pruning can read radius once.
+    let planet_geo: Vec<(f64, f64, f64)> =
+        state.planets.iter().map(|p| (p.x, p.y, p.radius)).collect();
+
     for (idx, fleet) in state.fleets.iter_mut().enumerate() {
         let speed = fleet_speed(fleet.ships, state.ship_speed);
         let old_pos = (fleet.x, fleet.y);
@@ -121,12 +126,30 @@ pub fn advance_fleets(state: &mut OrbitWarsState) -> FleetMovementOutcome {
             continue;
         }
 
+        // Segment AABB used for broad-phase pruning. Cheap to compute and
+        // rejects ~80% of planets in a typical late-game step before we
+        // run the squared point-to-segment math.
+        let seg_min_x = old_pos.0.min(new_pos.0);
+        let seg_max_x = old_pos.0.max(new_pos.0);
+        let seg_min_y = old_pos.1.min(new_pos.1);
+        let seg_max_y = old_pos.1.max(new_pos.1);
+
         // Continuous-collision against any planet. Squared compare.
         // combat_lists is built from state.planets in the same order, so we
         // can index directly without the defensive id mismatch check.
-        for (slot, planet) in state.planets.iter().enumerate() {
-            let r_sq = planet.radius * planet.radius;
-            if point_to_segment_distance_sq(planet.pos(), old_pos, new_pos) < r_sq {
+        for (slot, &(px, py, pr)) in planet_geo.iter().enumerate() {
+            // AABB reject: planet bounding box and segment bounding box
+            // must overlap, otherwise the squared distance is guaranteed
+            // > pr², so the precise check would also reject.
+            if px + pr < seg_min_x
+                || px - pr > seg_max_x
+                || py + pr < seg_min_y
+                || py - pr > seg_max_y
+            {
+                continue;
+            }
+            let r_sq = pr * pr;
+            if point_to_segment_distance_sq((px, py), old_pos, new_pos) < r_sq {
                 outcome.combat_lists[slot].1.push(idx);
                 outcome.fleets_to_remove[idx] = true;
                 break;
@@ -141,26 +164,50 @@ pub fn advance_fleets(state: &mut OrbitWarsState) -> FleetMovementOutcome {
 /// on the path. Adds the swept fleets to `outcome.combat_lists` /
 /// `fleets_to_remove`.
 pub fn rotate_planets(state: &mut OrbitWarsState, outcome: &mut FleetMovementOutcome) {
-    // Comet membership: small set, linear scan beats HashMap allocation.
-    let comet_ids = &state.comet_planet_ids;
-
     let step = state.step;
     let av = state.angular_velocity;
 
-    // Cache initial_planets by id only once; positions never change so we
-    // can use a Vec<Option<...>> indexed by planet.id when ids are dense
-    // (typical: 0..N consecutive). Fall back to linear scan otherwise.
-    // For the typical orbit_wars layout (32 planets, ids 0..31 + comets),
-    // linear scan is ~2x faster than HashMap due to cache effects.
+    // Build two id-indexed tables once per call: a comet bitmap and an
+    // initial_planets slot lookup. Both replace `Vec::contains` /
+    // `Iterator::find` linear scans inside the per-planet loop. Sized to
+    // `max_id + 1` so each index is one bounds-checked read.
+    let max_id = state
+        .planets
+        .iter()
+        .map(|p| p.id)
+        .chain(state.initial_planets.iter().map(|p| p.id))
+        .max()
+        .unwrap_or(-1);
+    if max_id < 0 {
+        return;
+    }
+    let table_len = max_id as usize + 1;
+    let mut is_comet = vec![false; table_len];
+    for &cid in state.comet_planet_ids.iter() {
+        if cid >= 0 && (cid as usize) < table_len {
+            is_comet[cid as usize] = true;
+        }
+    }
+    let mut initial_slot = vec![-1i32; table_len];
+    for (i, p) in state.initial_planets.iter().enumerate() {
+        if p.id >= 0 && (p.id as usize) < table_len {
+            initial_slot[p.id as usize] = i as i32;
+        }
+    }
+
     for slot in 0..state.planets.len() {
         let planet_id = state.planets[slot].id;
-        if comet_ids.contains(&planet_id) {
+        if planet_id < 0 || (planet_id as usize) >= table_len {
             continue;
         }
-        // Find initial position by linear scan (small N, cache-friendly).
-        let Some(initial) = state.initial_planets.iter().find(|p| p.id == planet_id) else {
+        if is_comet[planet_id as usize] {
             continue;
-        };
+        }
+        let init_idx = initial_slot[planet_id as usize];
+        if init_idx < 0 {
+            continue;
+        }
+        let initial = &state.initial_planets[init_idx as usize];
         let ix = initial.x;
         let iy = initial.y;
         let dx = ix - CENTER;
@@ -191,6 +238,19 @@ pub fn rotate_planets(state: &mut OrbitWarsState, outcome: &mut FleetMovementOut
 pub fn advance_comets(state: &mut OrbitWarsState, outcome: &mut FleetMovementOutcome) -> Vec<i64> {
     let mut expired: Vec<i64> = Vec::new();
 
+    // planet_id → slot table, built once per call instead of one
+    // `iter().position(...)` per (group × member) lookup.
+    let max_id = state.planets.iter().map(|p| p.id).max().unwrap_or(-1);
+    if max_id < 0 {
+        return expired;
+    }
+    let mut slot_of = vec![-1i32; (max_id as usize) + 1];
+    for (i, p) in state.planets.iter().enumerate() {
+        if p.id >= 0 && (p.id as usize) < slot_of.len() {
+            slot_of[p.id as usize] = i as i32;
+        }
+    }
+
     for group_idx in 0..state.comets.len() {
         state.comets[group_idx].path_index += 1;
         let path_idx = state.comets[group_idx].path_index;
@@ -198,9 +258,14 @@ pub fn advance_comets(state: &mut OrbitWarsState, outcome: &mut FleetMovementOut
         // Snapshot the planet ids and paths to avoid &mut/&immut overlap.
         let planet_ids = state.comets[group_idx].planet_ids.clone();
         for (i, pid) in planet_ids.iter().enumerate() {
-            let Some(slot) = state.planets.iter().position(|p| p.id == *pid) else {
+            if *pid < 0 || (*pid as usize) >= slot_of.len() {
                 continue;
-            };
+            }
+            let slot_i = slot_of[*pid as usize];
+            if slot_i < 0 {
+                continue;
+            }
+            let slot = slot_i as usize;
             let path = &state.comets[group_idx].paths[i];
             if (path_idx as usize) >= path.len() {
                 expired.push(*pid);
@@ -234,7 +299,17 @@ fn sweep_fleets_on_planet(
         return;
     }
     let planet = &state.planets[slot];
-    let radius_sq = planet.radius * planet.radius;
+    let radius = planet.radius;
+    let radius_sq = radius * radius;
+
+    // Bounding box around the planet's swept segment, padded by radius.
+    // Fleets outside this box can't possibly be within `radius` of the
+    // segment, so we can reject with a single coordinate compare per axis
+    // before touching the f64 multiply chain.
+    let min_x = old_pos.0.min(new_pos.0) - radius;
+    let max_x = old_pos.0.max(new_pos.0) + radius;
+    let min_y = old_pos.1.min(new_pos.1) - radius;
+    let max_y = old_pos.1.max(new_pos.1) + radius;
 
     // `combat_lists[slot]` corresponds to `state.planets[slot]` because both
     // are built in the same order in `advance_fleets`, and motion phases do
@@ -243,7 +318,12 @@ fn sweep_fleets_on_planet(
         if outcome.fleets_to_remove[idx] {
             continue;
         }
-        if point_to_segment_distance_sq((fleet.x, fleet.y), old_pos, new_pos) < radius_sq {
+        let fx = fleet.x;
+        let fy = fleet.y;
+        if fx < min_x || fx > max_x || fy < min_y || fy > max_y {
+            continue;
+        }
+        if point_to_segment_distance_sq((fx, fy), old_pos, new_pos) < radius_sq {
             outcome.combat_lists[slot].1.push(idx);
             outcome.fleets_to_remove[idx] = true;
         }

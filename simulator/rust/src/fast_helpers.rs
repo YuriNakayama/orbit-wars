@@ -295,6 +295,53 @@ pub fn fast_generate_planets<'py>(
     PyList::new(py, rows)
 }
 
+/// Filter `planets` / `initial_planets` / `comet_planet_ids` to drop any
+/// entry whose planet id appears in `expired`. Returns three new PyLists.
+///
+/// Mirrors the Python `[p for p in xs if int(p[0]) not in expired]` triple
+/// in `_facade._expire_comets_at_path_end`. Moving the loop to Rust skips
+/// the Python interpreter overhead for ~30 list-comprehension iterations
+/// per comet expiration turn (5–6 turns / episode).
+#[pyfunction]
+pub fn fast_filter_expired<'py>(
+    py: Python<'py>,
+    planets: Bound<'py, PyList>,
+    initial_planets: Bound<'py, PyList>,
+    comet_planet_ids: Bound<'py, PyList>,
+    expired: Bound<'py, PyAny>,
+) -> PyResult<(Bound<'py, PyList>, Bound<'py, PyList>, Bound<'py, PyList>)> {
+    // Materialize `expired` into a small sorted Vec (typical size ≤ 4).
+    let mut expired_ids: Vec<i64> = Vec::new();
+    for v in expired.try_iter()? {
+        expired_ids.push(v?.extract()?);
+    }
+    expired_ids.sort_unstable();
+    let is_expired = |id: i64| expired_ids.binary_search(&id).is_ok();
+
+    let new_planets = PyList::empty(py);
+    for row in planets.iter() {
+        let id: i64 = row.get_item(0)?.extract()?;
+        if !is_expired(id) {
+            new_planets.append(row)?;
+        }
+    }
+    let new_initial = PyList::empty(py);
+    for row in initial_planets.iter() {
+        let id: i64 = row.get_item(0)?.extract()?;
+        if !is_expired(id) {
+            new_initial.append(row)?;
+        }
+    }
+    let new_cids = PyList::empty(py);
+    for v in comet_planet_ids.iter() {
+        let id: i64 = v.extract()?;
+        if !is_expired(id) {
+            new_cids.append(id)?;
+        }
+    }
+    Ok((new_planets, new_initial, new_cids))
+}
+
 /// Register the helpers as a sub-module accessible via
 /// `orbit_wars_rust._lib.fast_helpers`.
 pub fn register(_py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -302,5 +349,6 @@ pub fn register(_py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_function(wrap_pyfunction!(fast_validate_action, parent)?)?;
     parent.add_function(wrap_pyfunction!(fast_generate_comet_paths, parent)?)?;
     parent.add_function(wrap_pyfunction!(fast_generate_planets, parent)?)?;
+    parent.add_function(wrap_pyfunction!(fast_filter_expired, parent)?)?;
     Ok(())
 }
