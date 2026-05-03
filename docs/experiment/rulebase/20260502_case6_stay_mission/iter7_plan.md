@@ -54,13 +54,13 @@ config.py 自体は **変更しない** (試行錯誤痕跡を残さない方針
 
 ```bash
 mkdir -p /tmp/case6_iter7
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-hold-turns 5 > /tmp/case6_iter7/A_cap5.log 2>&1 &
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-hold-turns 6 > /tmp/case6_iter7/B_cap6.log 2>&1 &
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-target-turns 25 > /tmp/case6_iter7/C_tgt25.log 2>&1 &
 ```

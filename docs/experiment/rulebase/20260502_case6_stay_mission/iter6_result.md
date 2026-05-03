@@ -2,11 +2,11 @@
 
 > 評価コマンド (Stage 1):
 > ```bash
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 \
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 \
 >   -n 50 --seed 1000 --max-hold-turns 2
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 \
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 \
 >   -n 50 --seed 1000 --max-hold-turns 3
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 \
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 \
 >   -n 50 --seed 1000 --max-hold-turns 4
 > ```
 > 構成: burst-only (defense=False, gain=1, ships=8, dist=30) + cap 値のみ可変

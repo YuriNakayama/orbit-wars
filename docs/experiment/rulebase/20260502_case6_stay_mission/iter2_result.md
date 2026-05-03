@@ -1,9 +1,9 @@
 # [rulebase/case6] STAY mission ablation — vs baseline_v5 (case6 直接派生元)
 
 > 評価コマンド (各ラン 100戦 / seed=1000、両 seat 50戦ずつ):
-> - **Full**:        `cd backend && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000`
-> - **defense-only**: `cd backend && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --no-burst`
-> - **burst-only**:   `cd backend && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --no-defense`
+> - **Full**:        `cd bot && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000`
+> - **defense-only**: `cd bot && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --no-burst`
+> - **burst-only**:   `cd bot && uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --no-defense`
 >
 > 比較対象: baseline_v6 (case6) vs **baseline_v5 (case5、書き換え前のエージェント、case6 の直接派生元)** — iter1 (vs baseline_v4) からの差分は対戦相手のみ。
 > 環境: kaggle_environments orbit_wars 1v1, seed = 1000..1099 (両 seat)
@@ -65,7 +65,7 @@ iter1 (vs baseline_v4) で得た 64% という Full の数字は、対戦相手�
 
 ### Option A: defense を切って採用 (Recommended、即実行可能)
 
-`backend/pipeline/rulebase/case6/baseline/core/config.py` で `STAY_DEFENSE_ENABLED = False` をデフォルト化。
+`bot/pipeline/rulebase/case6/baseline/core/config.py` で `STAY_DEFENSE_ENABLED = False` をデフォルト化。
 - pros: 59% は採用候補閾値 55% を超える、追加評価不要
 - cons: defense 設計の検討資産は残しつつ無効化するだけなので、後で再導入余地あり
 - 追加検証: あれば burst パラメータ (hold turn 数、score 重み) のミニ ablation を 100 戦 × 1〜2 だけ追加
@@ -83,7 +83,7 @@ memory `project_imitation_case1_phase3` のような **5/100 が再評価で 0/3
 ## 再現手順 (検証用)
 
 ```bash
-cd backend
+cd bot
 
 # Full (default)
 uv run python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000

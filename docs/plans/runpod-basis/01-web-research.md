@@ -83,7 +83,7 @@
   - 4TB 超は support 連絡。
   - 対応データセンター: US-KS-2 等の特定 DC のみ。**volume が乗っている DC で pod を立てる必要がある** ので、Pod 検索時に `data_center_id` を volume と揃える必要がある。
 - **API**: REST / Web UI / `runpodctl network-volume {create|delete|get|list}` ([runpodctl_network-volume](https://github.com/runpod/runpodctl/blob/main/docs/runpodctl_network-volume.md))。Python SDK には公式 wrapper が薄く、REST 直叩きが必要 ([Issue #172 runpodctl GraphQL fail](https://github.com/runpod/runpodctl/issues/172))。
-- **本基盤での扱い**: 初期版は **手動で 1 個 network volume を作成** → `RUNPOD_NETWORK_VOLUME_ID` を `backend/.env` に書いておく → `runpod train` でその id を `network_volume_id=` で渡す、で十分。自動 search/create は Phase 2 (`volume search` / `volume create` サブコマンド) で対応。
+- **本基盤での扱い**: 初期版は **手動で 1 個 network volume を作成** → `RUNPOD_NETWORK_VOLUME_ID` を `bot/.env` に書いておく → `runpod train` でその id を `network_volume_id=` で渡す、で十分。自動 search/create は Phase 2 (`volume search` / `volume create` サブコマンド) で対応。
 
 ### Logs / 監視
 
@@ -107,7 +107,7 @@
 - **Pitfalls found**:
   - Issue tracker に「RunPod の docker_args は exit すると再起動するので、idle 化を意識的にやらないと無限再起動する」報告あり (RunPod 共通の罠)。
   - Network volume の region 制約に何度かハマったログがある。
-- **Applicability**: 本基盤は当面シングルプロバイダ (RunPod 単体) なので、SkyPilot ほど大袈裟な抽象は不要。ただし「将来 Vast / RunPod 両基盤を `dev/cloud train --provider=vast|runpod` で統一する」の伏線として、`backend/src/runpod_io/` と `backend/src/vast/` を **同じ public interface (search_offers, create_instance, destroy_instance) で揃える** 価値はある。
+- **Applicability**: 本基盤は当面シングルプロバイダ (RunPod 単体) なので、SkyPilot ほど大袈裟な抽象は不要。ただし「将来 Vast / RunPod 両基盤を `dev/cloud train --provider=vast|runpod` で統一する」の伏線として、`bot/src/runpod_io/` と `bot/src/vast/` を **同じ public interface (search_offers, create_instance, destroy_instance) で揃える** 価値はある。
 
 ### Project 2 — [runpod/containers](https://github.com/runpod/containers)
 
@@ -216,15 +216,15 @@ Vast 版では Python SDK 呼び出しでの self-destroy (venv 内 vastai SDK) 
 
 ## Research Summary
 
-- **Vast.ai 基盤の構造をそのまま mirror** して RunPod 基盤を作るのが最小差分・最大流用。`backend/src/runpod_io/` を新設、`backend/src/vast/` の各ファイルに 1:1 対応する `auth.py` / `offers.py` / `instance.py` / `run_meta.py` / `cost.py` / `cli.py` / `onstart.sh.tmpl` / `__main__.py` を実装。
+- **Vast.ai 基盤の構造をそのまま mirror** して RunPod 基盤を作るのが最小差分・最大流用。`bot/src/runpod_io/` を新設、`bot/src/vast/` の各ファイルに 1:1 対応する `auth.py` / `offers.py` / `instance.py` / `run_meta.py` / `cost.py` / `cli.py` / `onstart.sh.tmpl` / `__main__.py` を実装。
 - **provider 抽象は MVP では作らない**。両基盤が同居する場合、`run_meta.py` の `vast_instance_id` フィールドを 2 つに分ける (vast 側は維持、runpod 側に `runpod_pod_id` を追加) の最小拡張で済ませる。共通化は Phase 2。
 - **Onstart 機構** は `docker_args` に bash 文字列を渡す方式が clean。Vast の `onstart_cmd` と概ね等価。末尾で `runpodctl stop pod $RUNPOD_POD_ID` で自殺、SDK install 不要なので Vast 版より bash テンプレが **短く** なる。
-- **Network volume** は Secure Cloud 専用 + 作成時 attach のみ。MVP は手動で 1 個作って `backend/.env` に id を書く。`volume_in_gb=0` + `network_volume_id` で attach、`volume_mount_path="/persist"` で Vast と同じ mount path 規約。
+- **Network volume** は Secure Cloud 専用 + 作成時 attach のみ。MVP は手動で 1 個作って `bot/.env` に id を書く。`volume_in_gb=0` + `network_volume_id` で attach、`volume_mount_path="/persist"` で Vast と同じ mount path 規約。
 - **GPU 検索** は SDK の `get_gpus()` + 各 id ごとに `get_gpu(id)` で価格を取り、(`secureCloud` 真 / `securePrice <= max_price` / `memoryInGb >= 16` / 等) フィルタで絞ってから rich Table 表示 + 数字選択。Vast の `search_offers(query=...)` の DSL 構文より処理が散らばるので、`offers.py` 内で **caching と filter pipeline** を組む。
 - **Cost report** は `runpod_offer_snapshot.dph_total × runtime_seconds / 3600` で同じ式を再利用 (`vast.cost.aggregate_runs` → `runpod.cost.aggregate_runs` に内容コピー、メッセージ文字列のみ差分)。出力 path は `docs/experiment/runpod_cost_report_<YYYY-MM>.md`。
 - **Recommended approach**:
-  1. `backend/src/runpod_io/` を新規作成 (vast を mirror)。
-  2. `dev/runpod` thin wrapper (`exec uv run --directory backend python -m runpod_io "$@"` — `runpod` モジュール名は SDK と衝突するので **パッケージ名は `runpod_io`** とする (ユーザ確定))。
+  1. `bot/src/runpod_io/` を新規作成 (vast を mirror)。
+  2. `dev/runpod` thin wrapper (`exec uv run --directory bot python -m runpod_io "$@"` — `runpod` モジュール名は SDK と衝突するので **パッケージ名は `runpod_io`** とする (ユーザ確定))。
   3. `train.py` 側は **無改修**。`ORBIT_WARS_RUN_DIR` 等の既存 env は provider 中立なのでそのまま使える。`run_meta.RunMetadata` には `runpod_pod_id: int | None` フィールドを追加 (vast 側は None のまま、後方互換確保)。
   4. `data/output/models/imitation/case<N>/runs/<run_id>/` の run dir scheme は両基盤で共有。`run_id` 内に provider 識別子を入れない (commit-sha と timestamp で衝突回避)。
   5. e2e は手動で 1 度だけ実行 (Vast と同じ運用)。

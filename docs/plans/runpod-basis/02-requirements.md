@@ -4,10 +4,10 @@
 
 `docs/plans/vast-ai-basis/` で構築した Vast.ai 基盤は、PR commit → GPU 学習 → 結果評価のループを 30 分単位に短縮した。一方で Vast.ai は host quality が分散しており (community marketplace)、reliability=0.99 でも切断や availability の偏りが運用上のばらつきを生んでいる。RunPod は Secure Cloud + per-minute billing + network volume が安定して使えるため、「reliability 重視で長め (例: H100 を A6000 の代わりに) を回したい」「Community との価格メリットを使い分けたい」という選択肢を持たせたい。
 
-本 feature は **Vast.ai 基盤を完全 mirror した RunPod 基盤を `backend/src/runpod_io/` として独立実装** し、開発者が `dev/vast train` と `dev/runpod train` を価格・availability・reliability に応じて使い分けられるようにする。両基盤は coexist し、どちらも同じ DVC remote (S3 `orbit-wars-dvc-...`) と同じ run dir scheme (`data/output/models/imitation/case<N>/runs/<run_id>/`) を共有する。
+本 feature は **Vast.ai 基盤を完全 mirror した RunPod 基盤を `bot/src/runpod_io/` として独立実装** し、開発者が `dev/vast train` と `dev/runpod train` を価格・availability・reliability に応じて使い分けられるようにする。両基盤は coexist し、どちらも同じ DVC remote (S3 `orbit-wars-dvc-...`) と同じ run dir scheme (`data/output/models/imitation/case<N>/runs/<run_id>/`) を共有する。
 
 副次目的:
-- (a) `train.py` 側 (`backend/pipeline/imitation/case{1,3,4}/training/train.py`) を **無改修** とし、provider 中立な env プロトコル (`ORBIT_WARS_RUN_DIR` 等) をそのまま流用する。
+- (a) `train.py` 側 (`bot/pipeline/imitation/case{1,3,4}/training/train.py`) を **無改修** とし、provider 中立な env プロトコル (`ORBIT_WARS_RUN_DIR` 等) をそのまま流用する。
 - (b) `run.json` schema は v1 を維持し、optional field `runpod_pod_id` / `runpod_offer_snapshot` を追加 (vast 既存 run.json は影響なし、後方互換確保)。
 - (c) 1 run ごとの cost を月次集計し、provider 別に `docs/experiment/runpod_cost_report_<YYYY-MM>.md` として記録 (vast 側と分離)。
 
@@ -42,7 +42,7 @@
    - `--auto-create-volume` フラグがあり、一致 volume 不在なら `search_volume_offers` → ユーザに choice → `create_volume` で新規作成。
    - どれでもなければ volume なし (uv cache / DVC cache 永続化なし)。
 9. **F1.9** onstart スクリプト構築:
-   - `backend/src/runpod_io/onstart.sh.tmpl` を読み、`<COMMIT_SHA>`, `<RUN_ID>`, `<STAGE>`, `<BRANCH>`, `<REPO_URL>`, `<CASE>`, `<TRAIN_MODULE>`, `<CONFIG_ARG>`, `<PREPROCESS_CMD>` の 9 placeholder を sanitize 後 `str.replace`。
+   - `bot/src/runpod_io/onstart.sh.tmpl` を読み、`<COMMIT_SHA>`, `<RUN_ID>`, `<STAGE>`, `<BRANCH>`, `<REPO_URL>`, `<CASE>`, `<TRAIN_MODULE>`, `<CONFIG_ARG>`, `<PREPROCESS_CMD>` の 9 placeholder を sanitize 後 `str.replace`。
    - vast 同等の正規表現バリデート (`_VALID_VALUE = ^[A-Za-z0-9._\-/:]+$`、`_VALID_CONFIG_ARG`、`_VALID_PREPROCESS_CMD`) で shell injection 対策。
 10. **F1.10** env 注入: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `RUNPOD_API_KEY`, `ORBIT_WARS_RUN_ID`, `ORBIT_WARS_GIT_SHA`, `ORBIT_WARS_GIT_BRANCH`, `ORBIT_WARS_CASE`, **`ORBIT_WARS_RUNPOD_POD_ID`** (空文字、後で onstart 内で `RUNPOD_POD_ID` env を assignment)。
 11. **F1.11** `runpod.create_pod(...)` 呼び出し:
@@ -67,7 +67,7 @@
 12. **F1.12** 起動後、pod_id を表示。`runpodctl pod logs <pod_id>` で監視するモニタコマンドをユーザに案内。`dev/runpod pull <run_id>` の次手順も併記。
 13. **F1.13** dirty working tree (uncommitted changes) は警告のみ (vast 同等、commit-sha は固定なので学習自体は影響なし)。
 
-### F2. Onstart script: `backend/src/runpod_io/onstart.sh.tmpl`
+### F2. Onstart script: `bot/src/runpod_io/onstart.sh.tmpl`
 
 vast の onstart.sh.tmpl を踏襲しつつ、self-destroy のみ RunPod 流。
 
@@ -82,8 +82,8 @@ vast の onstart.sh.tmpl を踏襲しつつ、self-destroy のみ RunPod 流。
 6. **F2.6** `/persist` がマウントされていれば uv cache / DVC cache / data/mart を symlink 永続化 (vast.onstart と同一処理)。
 7. **F2.7** `git clone <REPO_URL> orbit-wars` (private repo の場合 `GIT_PAT` env 経由で認証、vast と同設計)。`git checkout <COMMIT_SHA>`。
 8. **F2.8** `curl -LsSf https://astral.sh/uv/install.sh | sh` で uv install (image に未含まれている前提)。
-9. **F2.9** `uv sync --locked --no-dev --directory backend` を 3 回 retry (大型 wheel ダウンロード対策)。
-10. **F2.10** `uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc` + `uv run --project backend dvc pull` で deps 取得。
+9. **F2.9** `uv sync --locked --no-dev --directory bot` を 3 回 retry (大型 wheel ダウンロード対策)。
+10. **F2.10** `uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc` + `uv run --project bot dvc pull` で deps 取得。
 11. **F2.11** `mkdir -p data/output/models/imitation/<CASE>/runs/<RUN_ID>` で run dir 作成。
 12. **F2.12** Preprocess: parquet が `data/mart/imitation/<CASE>/*.parquet` に存在するなら skip、なければ `<PREPROCESS_CMD>` を実行 (vast.onstart 同設計)。
 13. **F2.13** Train: dvc repro は使わず `python -m <TRAIN_MODULE> <CONFIG_ARG>` を直叩き (vast 同設計)。env で `ORBIT_WARS_RUN_DIR`, `ORBIT_WARS_RUN_ID`, `ORBIT_WARS_GIT_SHA`, `ORBIT_WARS_GIT_BRANCH`, **`ORBIT_WARS_RUNPOD_POD_ID`** (Vast 側の `ORBIT_WARS_VAST_INSTANCE_ID` の RunPod 版)、`ORBIT_WARS_COMMAND` を渡す。
@@ -104,7 +104,7 @@ vast.run_meta.RunMetadata に optional フィールドを追加。`schema_versio
 
 ### F4. `train.py` の RunPod env 対応
 
-`backend/pipeline/imitation/case{1,3,4}/training/train.py` は vast 基盤改修済み。RunPod 用の追加対応:
+`bot/pipeline/imitation/case{1,3,4}/training/train.py` は vast 基盤改修済み。RunPod 用の追加対応:
 
 1. **F4.1** env 検出ロジック追加: `os.environ.get("ORBIT_WARS_RUNPOD_POD_ID")` がセットされていれば、`RunMetadata.runpod_pod_id` を埋める。`ORBIT_WARS_VAST_INSTANCE_ID` がセットされていれば従来通り `vast_instance_id` を埋める。
 2. **F4.2** **両方 set** されていることはあり得ない (provider は run.json 1 つに 1 個しか出ない)。assertion として「両方 set はエラー」を入れる。
@@ -121,7 +121,7 @@ vast.cli.promote と同設計。`run_dir/best.pt` を `<canonical>` (`pipeline/i
 
 ### F7. CLI: `dev/runpod cost-report [--month YYYY-MM] [--case case1]`
 
-`backend/src/runpod_io/cost.py` の `aggregate_runs()` で `runs/*/run.json` を全走査 → `runpod_offer_snapshot.dph_total != null` のものだけを集計 (vast の run はスキップ) → markdown を `docs/experiment/runpod_cost_report_<YYYY-MM>.md` に保存。
+`bot/src/runpod_io/cost.py` の `aggregate_runs()` で `runs/*/run.json` を全走査 → `runpod_offer_snapshot.dph_total != null` のものだけを集計 (vast の run はスキップ) → markdown を `docs/experiment/runpod_cost_report_<YYYY-MM>.md` に保存。
 
 ### F8. CLI: `dev/runpod volume {list,search,create}`
 
@@ -134,8 +134,8 @@ vast.cli.volume_app と同等。`runpod.api` の network volume 操作は SDK �
 
 ### F9. Configuration: 環境変数とローカル設定
 
-1. **F9.1** `backend/.env` に `RUNPOD_API_KEY=<your-key>` を追加 (vast の `VAST_API_KEY` と同じ枠組み)。`backend/.env.example` にプレースホルダ行を追加。
-2. **F9.2** `backend/src/runpod_io/auth.py` の `load_runpod_api_key()` は vast.auth.load_vast_api_key と同パターン (dotenv → env fallback → actionable error)。
+1. **F9.1** `bot/.env` に `RUNPOD_API_KEY=<your-key>` を追加 (vast の `VAST_API_KEY` と同じ枠組み)。`bot/.env.example` にプレースホルダ行を追加。
+2. **F9.2** `bot/src/runpod_io/auth.py` の `load_runpod_api_key()` は vast.auth.load_vast_api_key と同パターン (dotenv → env fallback → actionable error)。
 3. **F9.3** AWS credentials は `vast.auth.load_aws_creds()` と同じ関数を流用 (profile=`orbit-wars`)。**vast/auth.py から再利用** または **runpod/auth.py で同じ関数を独立実装**。実装方式は Architecture (Step 5) で決定。
 4. **F9.4** `pyproject.toml` に `runpod>=1.7.0` を依存追加。`vastai>=0.3.0` はそのまま維持 (両基盤共存)。
 
@@ -143,10 +143,10 @@ vast.cli.volume_app と同等。`runpod.api` の network volume 操作は SDK �
 
 ユーザ確定: 内部パッケージ名は `runpod_io`、CLI 名は `dev/runpod`。
 
-1. **F10.1** 内部パッケージは `backend/src/runpod_io/` に配置。SDK との衝突は **パッケージ名分離で物理的に解決**。
+1. **F10.1** 内部パッケージは `bot/src/runpod_io/` に配置。SDK との衝突は **パッケージ名分離で物理的に解決**。
 2. **F10.2** SDK は各モジュールで `import runpod as runpod_sdk` の alias で読む (規約)。`runpod_io` パッケージは `runpod` SDK と別名なので Python の import システムが両者を独立に解決可能。
-3. **F10.3** `backend/pyproject.toml` の `[tool.hatch.build.targets.wheel]` (or 同等) に `src/runpod_io` を追加。`[tool.mypy]` / `[tool.ruff]` の対象にも追加。
-4. **F10.4** thin wrapper `dev/runpod` の中身は `exec uv run --directory backend python -m runpod_io "$@"`。CLI 名は要件通り `runpod`、Python module 名は `runpod_io`。
+3. **F10.3** `bot/pyproject.toml` の `[tool.hatch.build.targets.wheel]` (or 同等) に `src/runpod_io` を追加。`[tool.mypy]` / `[tool.ruff]` の対象にも追加。
+4. **F10.4** thin wrapper `dev/runpod` の中身は `exec uv run --directory bot python -m runpod_io "$@"`。CLI 名は要件通り `runpod`、Python module 名は `runpod_io`。
 
 ## Non-Functional Requirements
 
@@ -181,7 +181,7 @@ vast.cli.volume_app と同等。`runpod.api` の network volume 操作は SDK �
 
 - vast 基盤と **同じファイル構成** (auth, offers, instance, run_meta, cost, cli, onstart.sh.tmpl, volumes) で並行配置。コードレビュー時に diff で機能対応関係が把握できる。
 - テスト構造も同じ (test_auth, test_offers, test_instance, test_run_meta, test_cost, test_cli)。
-- mypy + ruff 通過、`dev/test-backend` グリーン維持。
+- mypy + ruff 通過、`dev/test-bot` グリーン維持。
 
 ## Out of Scope
 
@@ -208,6 +208,6 @@ vast.cli.volume_app と同等。`runpod.api` の network volume 操作は SDK �
 | `RUNPOD_API_KEY` | RunPod のアカウント API key。https://runpod.io/console/user/settings で発行 |
 | `runpodctl` | RunPod CLI バイナリ。Pod 内には pre-install + pod-scoped key で `stop pod $RUNPOD_POD_ID` 可能 |
 | `runpod_offer_snapshot` | run.json に保存する pod 起動時の offer メタ情報 (gpu_type_id, cloud_type, dph 等) |
-| canonical weights | `backend/pipeline/imitation/case<N>/policy/weights.pt` (両基盤共通) |
+| canonical weights | `bot/pipeline/imitation/case<N>/policy/weights.pt` (両基盤共通) |
 | candidate weights | `<run_dir>/best.pt` (両基盤共通) |
 | run dir | `data/output/models/imitation/case<N>/runs/<run_id>/` (両基盤共通の scheme) |

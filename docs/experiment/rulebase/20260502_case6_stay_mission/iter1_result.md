@@ -1,6 +1,6 @@
 # [rulebase/case6] STAY mission 100戦評価結果 (vs baseline_v4)
 
-> 評価コマンド: `cd backend && uv run python -m pipeline.rulebase.case6.evaluation.compare_v4 -n 50 --seed 1000`
+> 評価コマンド: `cd bot && uv run python -m pipeline.rulebase.case6.evaluation.compare_v4 -n 50 --seed 1000`
 > 比較対象: baseline_v6 (case6) vs baseline_v4 (case4) — 50 戦 × 2 seat = 100 戦
 > 環境: kaggle_environments orbit_wars 1v1, seed = 1000..1099 (両 seat)
 > 計算: ローカル CPU、Vast.ai GPU は不使用 (rulebase は学習なし)
@@ -93,8 +93,8 @@ total          v6=64 v4=36
 ## 関連リンク
 
 - plan: `docs/experiment/rulebase/20260502_case6_stay_mission/plan.md`
-- 実装: `backend/pipeline/rulebase/case6/baseline/missions/stay.py`
-- strategy フック: `backend/pipeline/rulebase/case6/baseline/strategy.py` (`stay_holds` 経由で `source_attack_left` をラップ)
-- 評価ハーネス: `backend/pipeline/rulebase/case6/evaluation/compare_v4.py`
-- agent registry: `backend/src/dataset/selfplay/agents.py` (`baseline_v6` キー)
-- テスト: `backend/tests/pipeline/rulebase/case6/` (5 unit + 2 integration)
+- 実装: `bot/pipeline/rulebase/case6/baseline/missions/stay.py`
+- strategy フック: `bot/pipeline/rulebase/case6/baseline/strategy.py` (`stay_holds` 経由で `source_attack_left` をラップ)
+- 評価ハーネス: `bot/pipeline/rulebase/case6/evaluation/compare_v4.py`
+- agent registry: `bot/src/dataset/selfplay/agents.py` (`baseline_v6` キー)
+- テスト: `bot/tests/pipeline/rulebase/case6/` (5 unit + 2 integration)

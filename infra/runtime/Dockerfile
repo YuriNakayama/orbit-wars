@@ -15,23 +15,45 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
-# git は Vast onstart の git clone で必須. その他は uv build に必要な最小限.
+# git は Vast onstart の git clone で必須. build-essential は Rust crate の
+# 一部 (e.g. zerocopy) が cc/ld を必要とするため.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # uv インストール (system path に配置)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
-# 依存だけ先に layer に焼く. pyproject.toml / uv.lock の変更時のみ rebuild.
-WORKDIR /opt/orbit-wars/backend
-COPY backend/pyproject.toml backend/uv.lock ./
+# Rust toolchain (simulator/rust の cargo build / maturin develop に必要).
+# rustup を /usr/local に焼き込んで PATH を通すことで Vast onstart で再 install を回避.
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- --default-toolchain stable --profile minimal -y --no-modify-path && \
+    rustup component add rustfmt clippy
+
+# Python 依存を先に layer に焼く. pyproject.toml / uv.lock の変更時のみ rebuild.
+WORKDIR /opt/orbit-wars/bot
+COPY bot/pyproject.toml bot/uv.lock ./
+COPY simulator/python /opt/orbit-wars/simulator/python
 
 # uv sync は project 自身も install しようとするので --no-install-project で
 # 依存のみ install. project 本体は onstart で git clone 後に install される.
 RUN uv sync --locked --no-install-project --no-dev
+
+# simulator/rust を image に焼き込み、Vast 起動時に maturin develop --release
+# が cargo cache hit になるようにする. 実 venv install は onstart で行うが、
+# 重い `cargo build --release` の中間成果物だけは image に残す.
+COPY simulator/rust /opt/orbit-wars/simulator/rust
+RUN cd /opt/orbit-wars/simulator/rust && \
+    VIRTUAL_ENV=/opt/orbit-wars/bot/.venv \
+        /opt/orbit-wars/bot/.venv/bin/python -m pip install --quiet 'maturin>=1.7,<2' && \
+    VIRTUAL_ENV=/opt/orbit-wars/bot/.venv \
+        /opt/orbit-wars/bot/.venv/bin/maturin develop --release --quiet
 
 # Vast 起動時の uv cache hit を最大化するため、cache をユーザ可視な場所に維持.
 ENV UV_CACHE_DIR=/root/.cache/uv

@@ -6,18 +6,18 @@ paths:
 
 # Python Rules
 
-**General Python rules** for editing `.py` / `.ipynb` files in this repository. Auto-loaded across every region that contains Python code (`backend/`, `pipeline/`, tests, notebooks, etc.).
+**General Python rules** for editing `.py` / `.ipynb` files in this repository. Auto-loaded across every region that contains Python code (`bot/`, `pipeline/`, tests, notebooks, etc.).
 
-For case-directory submit structure see `.claude/rules/backend/pipeline.md`. For pytest conventions see `.claude/rules/backend/tests.md`.
+For case-directory submit structure see `.claude/rules/bot/pipeline.md`. For pytest conventions see `.claude/rules/bot/tests.md`.
 
-`pyproject.toml` / `uv.lock` / `.python-version` sit at `backend/` root, and `uv run ...` commands are expected to execute from `backend/`.
+`pyproject.toml` / `uv.lock` / `.python-version` sit at `bot/` root, and `uv run ...` commands are expected to execute from `bot/`.
 
-## Backend Module Architecture (`backend/src/**`)
+## Bot Module Architecture (`bot/src/**`)
 
 The shared library for Orbit Wars agents follows the module layout below:
 
 ```
-backend/src/
+bot/src/
   agents/          Submission agents (Kaggle Submission entrypoint)
   env/             kaggle-environments wrappers and self-play utilities
   features/        Observation -> features, orbit prediction, threat evaluation

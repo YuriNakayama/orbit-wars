@@ -33,16 +33,16 @@ case "$subcommand" in
         mkdir -p "$CACHE_DIR"
 
         echo "== DVC: setting shared cache dir =="
-        uv run --directory backend dvc cache dir --local "$CACHE_DIR"
+        uv run --directory bot dvc cache dir --local "$CACHE_DIR"
 
         echo "== DVC: setting AWS profile for remote 's3' =="
-        uv run --directory backend dvc remote modify --local s3 profile "$AWS_PROFILE"
+        uv run --directory bot dvc remote modify --local s3 profile "$AWS_PROFILE"
 
         echo
         echo "Local DVC config written to .dvc/config.local (gitignored):"
         cat .dvc/config.local 2>/dev/null || true
         ;;
     *)
-        exec uv run --directory backend dvc "$subcommand" "$@"
+        exec uv run --directory bot dvc "$subcommand" "$@"
         ;;
 esac

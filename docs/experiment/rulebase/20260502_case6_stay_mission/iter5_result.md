@@ -3,11 +3,11 @@
 > 評価コマンド (Stage 1 + Stage 2):
 > ```bash
 > # Stage 1 (100戦 single seed)
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
 > # Stage 2 (300戦, 3 並列)
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000
 > ```
 > 構成: burst-only + **`STAY_BURST_MAX_HOLD_TURNS=3`** (新規)、broad burst パラメータ (`MIN_GAIN=1`, `MIN_SHIPS=8`, `MAX_TARGET_TURNS=30`) は iter3 broad のまま
 > 対戦相手: baseline_v5

@@ -2,9 +2,9 @@
 
 > 評価コマンド (3 並列、各 100戦):
 > ```bash
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000
 > ```
 > 構成: **burst-only** (`STAY_DEFENSE_ENABLED=False`, `STAY_BURST_ENABLED=True`、Kaggle 提出済み構成と同一)
 > 対戦相手: baseline_v5 (case6 直接派生元)
@@ -76,7 +76,7 @@ iter2 burst-only の 59% は **iter3 で 54.7% へ収束** — 上振れ 4.3pp �
 
 ## Kaggle 提出への影響
 
-提出済み `case6_20260502-110353.tar.gz` は本構成 (burst-only) と同一。Kaggle 側の opponent pool は v5 とは異なる多様な agent 群なので、ローカル v5 評価で 54.7% でも Kaggle publicScore がどう出るかは別問題 (`.claude/rules/backend/pipeline.md` 通り publicScore は判断材料にしない)。
+提出済み `case6_20260502-110353.tar.gz` は本構成 (burst-only) と同一。Kaggle 側の opponent pool は v5 とは異なる多様な agent 群なので、ローカル v5 評価で 54.7% でも Kaggle publicScore がどう出るかは別問題 (`.claude/rules/bot/pipeline.md` 通り publicScore は判断材料にしない)。
 
 **結論**: 提出を取り下げる必要はない。case6 は v5 と互角以上、Full / defense-only より一貫して上、fleet 形成効果は設計通り、という性質の baseline。Kaggle 評価結果は別途確認。
 
@@ -103,9 +103,9 @@ case6 (burst-only) は Full より良い構成として残す価値あり。300�
 ```bash
 # 3 並列実行 (合計 ~53分)
 mkdir -p /tmp/case6_validation
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 > /tmp/case6_validation/seed1000.log 2>&1 &
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000 > /tmp/case6_validation/seed2000.log 2>&1 &
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000 > /tmp/case6_validation/seed3000.log 2>&1 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 > /tmp/case6_validation/seed1000.log 2>&1 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000 > /tmp/case6_validation/seed2000.log 2>&1 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000 > /tmp/case6_validation/seed3000.log 2>&1 &
 wait
 ```
 

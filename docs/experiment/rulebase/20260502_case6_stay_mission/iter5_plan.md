@@ -85,7 +85,7 @@ defense holds は対象外 (defense は脅威に対する応答で、文脈喪�
 ### Stage 1: 100戦 vs v5 (~50分)
 
 ```bash
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
 ```
 
 判定:

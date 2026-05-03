@@ -1,16 +1,16 @@
 # DVC pipeline definitions.
 # All stages read parameters from repo-root params.yaml via each CLI's internal loader.
-# Commands use `uv run --directory backend` so the `pipeline.*` package is importable,
+# Commands use `uv run --directory bot` so the `pipeline.*` package is importable,
 # while deps/outs are expressed as paths relative to the repo root.
 stages:
   preprocess_imitation_case1:
-    cmd: uv run --directory backend python -m pipeline.imitation.case1.training.preprocess
+    cmd: uv run --directory bot python -m pipeline.imitation.case1.training.preprocess
     deps:
       - data/lake/kaggle_episodes/matches
-      - backend/pipeline/imitation/case1/training/preprocess.py
-      - backend/pipeline/imitation/case1/policy/featurizer.py
-      - backend/pipeline/imitation/case1/policy/geometry.py
-      - backend/pipeline/imitation/case1/policy/templates.py
+      - bot/pipeline/imitation/case1/training/preprocess.py
+      - bot/pipeline/imitation/case1/policy/featurizer.py
+      - bot/pipeline/imitation/case1/policy/geometry.py
+      - bot/pipeline/imitation/case1/policy/templates.py
     params:
       - seed
       - data
@@ -19,27 +19,27 @@ stages:
       - data/mart/imitation/case1/val.parquet
 
   train_imitation_case1:
-    cmd: uv run --directory backend python -m pipeline.imitation.case1.training.train
+    cmd: uv run --directory bot python -m pipeline.imitation.case1.training.train
     deps:
       - data/mart/imitation/case1/train.parquet
       - data/mart/imitation/case1/val.parquet
-      - backend/pipeline/imitation/case1/training/train.py
-      - backend/pipeline/imitation/case1/training/losses.py
-      - backend/pipeline/imitation/case1/training/dataset.py
-      - backend/pipeline/imitation/case1/policy/model.py
+      - bot/pipeline/imitation/case1/training/train.py
+      - bot/pipeline/imitation/case1/training/losses.py
+      - bot/pipeline/imitation/case1/training/dataset.py
+      - bot/pipeline/imitation/case1/policy/model.py
     params:
       - seed
       - model
       - train
     outs:
-      - backend/pipeline/imitation/case1/policy/weights.pt
+      - bot/pipeline/imitation/case1/policy/weights.pt
 
   eval_imitation_case1:
-    cmd: uv run --directory backend python -m pipeline.imitation.case1.evaluation.eval_vs_baseline
+    cmd: uv run --directory bot python -m pipeline.imitation.case1.evaluation.eval_vs_baseline
     deps:
-      - backend/pipeline/imitation/case1/policy/weights.pt
-      - backend/pipeline/imitation/case1/evaluation/eval_vs_baseline.py
-      - backend/src/evaluation/vs_baseline.py
+      - bot/pipeline/imitation/case1/policy/weights.pt
+      - bot/pipeline/imitation/case1/evaluation/eval_vs_baseline.py
+      - bot/src/evaluation/vs_baseline.py
     params:
       - evaluation
     metrics:

@@ -1,0 +1,9 @@
+# Pin PyO3 to bot/.venv python so cargo doesn't pick up system python 3.14
+# (which is newer than PyO3 0.22's max-supported 3.13).
+#
+# Cargo `[env]` allows relative paths via `relative = true` (Cargo 1.69+).
+# The base of the relative path is the directory **containing** this config
+# file's parent — i.e. `simulator/rust/`. So `../../bot/.venv/bin/python`
+# resolves to `<repo>/bot/.venv/bin/python`.
+[env]
+PYO3_PYTHON = { value = "../../bot/.venv/bin/python", relative = true }

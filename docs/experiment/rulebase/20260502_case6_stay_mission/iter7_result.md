@@ -2,9 +2,9 @@
 
 > 評価コマンド (3 並列、各 100戦, seed=1000):
 > ```bash
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 5
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 6
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-target-turns 25
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 5
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 6
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-target-turns 25
 > ```
 > 構成: burst-only (`STAY_DEFENSE_ENABLED=False`) + 各 sweep 軸の override
 > 対戦相手: baseline_v5 (case6 直接派生元)
@@ -111,9 +111,9 @@ case6 の rulebase 改善 ROI は局所最適到達で低下、imitation/case1 �
 ```bash
 # 3 並列 (各 ~55分)
 mkdir -p /tmp/case6_iter7
-nohup uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 5 > /tmp/case6_iter7/A_cap5.log 2>&1 &
-nohup uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 6 > /tmp/case6_iter7/B_cap6.log 2>&1 &
-nohup uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-target-turns 25 > /tmp/case6_iter7/C_tgt25.log 2>&1 &
+nohup uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 5 > /tmp/case6_iter7/A_cap5.log 2>&1 &
+nohup uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-hold-turns 6 > /tmp/case6_iter7/B_cap6.log 2>&1 &
+nohup uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 --max-target-turns 25 > /tmp/case6_iter7/C_tgt25.log 2>&1 &
 wait
 ```
 

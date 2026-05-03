@@ -6,11 +6,41 @@ ROOT_DIR="$(pwd)"
 
 echo "== セットアップ開始 =="
 
-# Backend
-if [ -d "backend" ]; then
-  echo "[backend] 依存関係をインストール中..."
-  cd backend && uv sync --quiet && cd "$ROOT_DIR"
-  echo "[backend] 完了"
+# Bot (旧 backend) — Python 側の依存
+if [ -d "bot" ]; then
+  echo "[bot] 依存関係をインストール中..."
+  cd bot && uv sync --quiet && cd "$ROOT_DIR"
+  echo "[bot] 完了"
+fi
+
+# Rust simulator — bot venv に extension module を install
+if [ -d "simulator/rust" ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    if [ -f "$HOME/.cargo/env" ]; then
+      # shellcheck source=/dev/null
+      . "$HOME/.cargo/env"
+    fi
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    cat <<'EOS'
+[simulator/rust] cargo が見つかりません。Rust toolchain を以下でインストールしてください:
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  . "$HOME/.cargo/env"
+  rustup component add rustfmt clippy
+インストール後に `dev/setup` を再実行してください。
+EOS
+  else
+    BOT_VENV="${ROOT_DIR}/bot/.venv"
+    if [ ! -x "${BOT_VENV}/bin/maturin" ]; then
+      echo "[simulator/rust] maturin を bot venv にインストール..."
+      "${BOT_VENV}/bin/python" -m pip install --quiet 'maturin>=1.7,<2'
+    fi
+    echo "[simulator/rust] maturin develop --release..."
+    cd simulator/rust
+    VIRTUAL_ENV="${BOT_VENV}" "${BOT_VENV}/bin/maturin" develop --release --quiet
+    cd "$ROOT_DIR"
+    echo "[simulator/rust] 完了"
+  fi
 fi
 
 echo "== セットアップ完了 =="

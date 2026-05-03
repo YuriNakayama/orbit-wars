@@ -46,13 +46,13 @@ config.py 自体は **変更しない**。試行錯誤の痕跡を残さない�
 
 ```bash
 mkdir -p /tmp/case6_iter6
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-hold-turns 2 > /tmp/case6_iter6/cap2.log 2>&1 &
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-hold-turns 3 > /tmp/case6_iter6/cap3.log 2>&1 &
-nohup uv run --directory backend \
+nohup uv run --directory bot \
   python -m pipeline.rulebase.case6.evaluation.compare_v5 \
   -n 50 --seed 1000 --max-hold-turns 4 > /tmp/case6_iter6/cap4.log 2>&1 &
 ```

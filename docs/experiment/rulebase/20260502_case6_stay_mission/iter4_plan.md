@@ -9,7 +9,7 @@ iter3 で 300戦 vs v5 = 54.7% (95% CI: 49.1%~60.3%) の結果、artifact (fleet
 
 ## 変更点
 
-`backend/pipeline/rulebase/case6/baseline/core/config.py`:
+`bot/pipeline/rulebase/case6/baseline/core/config.py`:
 
 | パラメータ | iter3 (現状) | iter4 (厳しめ) | 意図 |
 |---|---|---|---|
@@ -36,7 +36,7 @@ iter3 で 300戦 vs v5 = 54.7% (95% CI: 49.1%~60.3%) の結果、artifact (fleet
 ### Stage 1: 100戦 vs v5 で feel を見る (~50分)
 
 ```bash
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
 ```
 
 - 判定基準:
@@ -49,9 +49,9 @@ uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_
 iter3 と同じく seed 1000/2000/3000 で 100戦ずつ並列。
 
 ```bash
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 &
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000 &
-uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 2000 &
+uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 3000 &
 ```
 
 判定: 95% CI 下限が **52% を超えれば採用候補**、Kaggle 提出を更新検討。

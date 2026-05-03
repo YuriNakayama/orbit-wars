@@ -98,8 +98,11 @@ tfplan.out
 /.dvc/config.local
 /.dvc/cache
 
+# Rust build artifacts (simulator/rust/)
+simulator/rust/target/
+
 # DVC-managed weights (formerly git-tracked)
-backend/pipeline/imitation/case1/policy/weights.pt
+bot/pipeline/imitation/case1/policy/weights.pt
 
 # Terraform vars (contain secrets)
 infra/**/terraform.tfvars

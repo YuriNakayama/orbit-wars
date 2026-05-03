@@ -2,7 +2,7 @@
 
 > 評価コマンド:
 > ```bash
-> uv run --directory backend python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
+> uv run --directory bot python -m pipeline.rulebase.case6.evaluation.compare_v5 -n 50 --seed 1000
 > ```
 > 構成: burst-only **厳しめ** (`STAY_BURST_MIN_GAIN=2`, `STAY_BURST_MIN_SHIPS=12`, `STAY_BURST_MAX_TARGET_TURNS=20`)
 > 対戦相手: baseline_v5

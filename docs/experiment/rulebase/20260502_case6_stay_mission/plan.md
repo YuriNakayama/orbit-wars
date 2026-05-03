@@ -128,28 +128,28 @@ STAY_BURST_MAX_TARGET_TURNS: int = 30 # 遠すぎる target に対する burst �
 
 ## 実装ステップ
 
-1. `backend/pipeline/rulebase/case6/` を `case4` のコピーから派生 (copy済 — 直前のセットアップで実施)。
+1. `bot/pipeline/rulebase/case6/` を `case4` のコピーから派生 (copy済 — 直前のセットアップで実施)。
 2. `case6/README.md` を case6 用に書き直す (派生元・差分・成績欄をプレースホルダで)。
 3. `case6/baseline/core/config.py` に上記 STAY_* 定数を追加。
 4. `case6/baseline/missions/stay.py` 新設: `StayDecision`, `build_stay_holds(world, planned_commitments, modes) -> dict[int, int]` を実装。
 5. `case6/baseline/strategy.py` の `plan_moves` 冒頭で `build_stay_holds` を呼び、`source_attack_left` をラップする (差分は ~10 行)。`source_inventory_left` は変えない (reinforce 用なので STAY と独立)。
 6. `case6/baseline/missions/__init__.py` で stay は **mission リストには追加しない** (`collect_missions` の戻り値に Mission として混ぜると `_process_*_mission` の枠に乗らない)。代わりに 5. の plan_moves での hook 経由で動かす。
-7. `backend/src/dataset/selfplay/agents.py` の `AGENT_REGISTRY` に `"baseline_v6": "pipeline.rulebase.case6.baseline.agent:agent"` を追加。
-8. `backend/pipeline/rulebase/README.md` の status table に case6 行を追記。
-9. テスト追加: `backend/tests/pipeline/rulebase/case6/test_baseline_agent.py` (case4 のスモークテストを mirror) + `test_stay_decision.py` (build_stay_holds の単体: 敵 fleet 接近で defense hold 発火、ships 少+遠目 target で burst 発火、両方 OFF で hold = 0)。
+7. `bot/src/dataset/selfplay/agents.py` の `AGENT_REGISTRY` に `"baseline_v6": "pipeline.rulebase.case6.baseline.agent:agent"` を追加。
+8. `bot/pipeline/rulebase/README.md` の status table に case6 行を追記。
+9. テスト追加: `bot/tests/pipeline/rulebase/case6/test_baseline_agent.py` (case4 のスモークテストを mirror) + `test_stay_decision.py` (build_stay_holds の単体: 敵 fleet 接近で defense hold 発火、ships 少+遠目 target で burst 発火、両方 OFF で hold = 0)。
 
 ## ローカル検証
 
-1. `dev/test-backend` 全体 (format → lint → mypy → pytest) を pass させる。
-2. dry-run import: `cd backend && uv run python -c "from pipeline.rulebase.case6.baseline.agent import agent; print(agent)"`
+1. `dev/test-bot` 全体 (format → lint → mypy → pytest) を pass させる。
+2. dry-run import: `cd bot && uv run python -c "from pipeline.rulebase.case6.baseline.agent import agent; print(agent)"`
 3. submit dry-run はあえて行わない (case6 は Kaggle に出さない、`.submitignore` 検証は不要)。
 
 ## 評価コマンド
 
-`backend/pipeline/rulebase/case6/evaluation/compare_v4.py` を新設 (case4 の compare_v2.py を mirror、v4 ↔ v6 にリネーム)。
+`bot/pipeline/rulebase/case6/evaluation/compare_v4.py` を新設 (case4 の compare_v2.py を mirror、v4 ↔ v6 にリネーム)。
 
 ```bash
-cd backend
+cd bot
 uv run python -m pipeline.rulebase.case6.evaluation.compare_v4 -n 50 --seed 1000
 ```
 
