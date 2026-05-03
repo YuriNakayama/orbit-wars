@@ -233,6 +233,20 @@ if [ -d /persist ]; then
   mkdir -p .dvc
   rm -rf .dvc/cache 2>/dev/null || true
   ln -sfn /persist/dvc-cache .dvc/cache
+  # backend/.venv を /persist/uv-venv-backend に symlink。uv は venv の
+  # python 絶対 path を pyvenv.cfg に焼き込むので、persist 側で venv を作る
+  # ことで再起動後も再利用できる。lock 不変なら uv sync は no-op に近い。
+  # DVC では管理しない (依存情報は uv.lock が source of truth)。
+  mkdir -p /persist/uv-venv-backend
+  if [ -L backend/.venv ]; then
+    : # already linked
+  elif [ -d backend/.venv ]; then
+    # 既存 venv (古い ephemeral 由来) は破棄して symlink に置換
+    rm -rf backend/.venv
+    ln -sfn /persist/uv-venv-backend backend/.venv
+  else
+    ln -sfn /persist/uv-venv-backend backend/.venv
+  fi
   # data/ は git tree から復元される (各種 .dvc stub を含む)。
   # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
   # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
@@ -277,6 +291,14 @@ fi
 
 mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
+# venv が persist 経由で残っているかを log に残す。lock 不変なら uv sync は
+# 「何もしない」ので、この行は分単位の高速化指標として後段の解析に役立つ。
+if [ -L backend/.venv ] && [ -f backend/.venv/pyvenv.cfg ]; then
+  echo "[onstart] uv venv reuse: backend/.venv -> $(readlink backend/.venv) (pre-existing)"
+else
+  echo "[onstart] uv venv fresh: building backend/.venv from scratch"
+fi
+UV_SYNC_START=$(date +%s)
 for attempt in 1 2 3; do
   if uv sync --locked --no-dev --directory backend; then
     break
@@ -288,6 +310,8 @@ for attempt in 1 2 3; do
     exit 1
   fi
 done
+UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
+echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s"
 
 mark "40_uv_sync_done"
 echo "[onstart] step=dvc_pull cwd=$(pwd)"
