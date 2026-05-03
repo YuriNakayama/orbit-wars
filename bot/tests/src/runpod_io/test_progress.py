@@ -120,7 +120,9 @@ def test_list_artifacts_returns_filenames() -> None:
             {"Key": f"{progress.ARTIFACT_PREFIX}/run42/metrics.json"},
             {"Key": f"{progress.ARTIFACT_PREFIX}/run42/run.json"},
             {"Key": f"{progress.ARTIFACT_PREFIX}/run42/onstart.log"},
-            {"Key": f"{progress.ARTIFACT_PREFIX}/run42/sub/nested.txt"},  # subdir → 除外
+            {
+                "Key": f"{progress.ARTIFACT_PREFIX}/run42/sub/nested.txt"
+            },  # subdir → 除外
         ]
     }
     files = progress.list_artifacts("run42", s3_client=client)
