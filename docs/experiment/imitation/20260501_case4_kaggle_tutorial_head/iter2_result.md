@@ -2,7 +2,7 @@
 
 > 作成日: 2026-05-03
 > 関連: [`iter2_plan.md`](iter2_plan.md), [`iter1_plan.md`](iter1_plan.md)
-> 結論: **学習ジョブ自体は完走 (生存合格)。ただし baseline_v1 相手の interim 30 戦は実施せず 10 戦評価で 0/10 全敗。random 相手の sanity check は 30/30 完勝**。head 設計は崩壊していないが、現状の重みでは rule-based 相手に勝てない。
+> 結論: **学習ジョブ自体は完走 (生存合格)。ただし baseline_v1 相手の interim 30 戦は実施せず 10 戦評価で 0/10 全敗。random 相手の sanity check は 30/30 完勝、Kaggle submit は COMPLETE (publicScore 600.0、ただし採否判断には使用しない)**。head 設計は崩壊していないが、現状の重みでは rule-based 相手に勝てない。
 
 ## 1. 学習ジョブ統計
 
@@ -102,7 +102,19 @@ win_rate: 100.0%  (95% Wilson CI: 88.6 – 100.0%)
 - [x] 30 戦 evaluation (vs random で代用)、vs baseline_v1 は 10 戦のみ
 - [x] 異常: NaN/Inf は 2 つの修正コミットで解消、RunPod Volume stuck は Volume-less で回避
 
-## 6. 結論と次 iter (iter3) への申し送り
+## 6. Kaggle 提出記録 (参考、採否判断には使用しない)
+
+| 項目 | 値 |
+|---|---|
+| 提出日時 (UTC) | 2026-05-04 (file: `case4_20260503-152521.tar.gz`) |
+| 提出 message | `case4 iter2: kaggle tutorial-style head, SHA 231f37c, vs random 30/30, vs baseline_v1 0/10` |
+| status | `SubmissionStatus.COMPLETE` |
+| publicScore | 600.0 |
+| 本日のクォータ消費 | 1/5 |
+
+備考: `.claude/rules/backend/pipeline.md` の通り Kaggle publicScore は opponent pool drift で noise なので **採否判断には使用しない**。COMPLETE 通過は「main.py の Path.cwd() 注入 / weights.pt の同梱 / 1ターン 1秒 actTimeout / torch import 互換性」が全て OK である動作確認の意味のみ。memory `project_case5_validation` で case5 baseline_v5 も 600.0 を記録した先例あり (= 中位 floor 値の可能性高い)。
+
+## 7. 結論と次 iter (iter3) への申し送り
 
 **iter2 の主目的 (= head 設計が崩壊していないか + RunPod 上での学習成功) は達成**。
 
@@ -118,5 +130,7 @@ win_rate: 100.0%  (95% Wilson CI: 88.6 – 100.0%)
 ## 参考
 
 - `data/output/models/imitation/case4/runs/20260503-135913__feature-refactor-imitation-head__231f37c__seed0/{run.json, summary.json, history.jsonl, best.pt}`
+- `bot/pipeline/imitation/case4/policy/weights.pt` (= best.pt から copy、Kaggle submit に使用、git tracked)
+- Kaggle archive: `data/output/submit/imitation/case4/case4_20260503-152521.tar.gz` (1.21 MB)
 - 修正コミット: `6e35f04` (class_weight), `231f37c` (masked_fill), `b4eee7d` / `166e67e` / `5966b80` / `d2bb635` / `4361803` (RunPod インフラ系)
 - memory: `project_imitation_case1_phase3` (n<300 評価不可), `feedback_runpod_prompt_bypass` (有償 prompt skip 禁止), `project_runpod_onstart_pitfalls` (Volume / DVC / cwd の 3 trap)
