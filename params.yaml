@@ -1,5 +1,5 @@
 # DVC params for pipeline stages.
-# Migrated from backend/pipeline/imitation/case1/configs/il_baseline.yaml.
+# Migrated from bot/pipeline/imitation/case1/configs/il_baseline.yaml.
 seed: 0
 
 data:
@@ -45,7 +45,7 @@ train:
     use_ships_class_weights: false
     ships_class_weight_beta: 0.9999
     ships_ordinal_smoothing: 0.0
-  weights_out: backend/pipeline/imitation/case1/policy/weights.pt
+  weights_out: bot/pipeline/imitation/case1/policy/weights.pt
 
 inference:
   # Phase 1 tuning: values reflected as constants in policy/agent.py

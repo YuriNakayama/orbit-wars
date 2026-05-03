@@ -1,0 +1,42 @@
+[package]
+name = "orbit_wars_rust"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Rust implementation of the Kaggle Orbit Wars simulator"
+repository = "https://github.com/YuriNakayama/orbit-wars"
+publish = false
+
+[lib]
+name = "orbit_wars_rust"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["extension-module"]
+# `extension-module` is what lets the cdylib link against the host CPython
+# without depending on `libpython` symbols at link time. It must be ON for
+# `maturin develop` / `maturin build`, and OFF for `cargo test` (otherwise
+# the test binary fails to link). See pyo3.rs/main/building-and-distribution.
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3 = { version = "0.23" }
+rand = "0.8"
+rand_chacha = "0.3"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "step"
+harness = false
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+# Strip debuginfo to shrink binary and reduce icache pressure on hot paths.
+# Doesn't affect correctness; PyO3 panic→PyErr conversion still works.
+strip = "symbols"
+debug = false
+incremental = false

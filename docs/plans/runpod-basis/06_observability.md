@@ -85,12 +85,12 @@ S3 fallback で取得した成果物は **DVC 管理外** なので、後で `<R
 
 | ファイル | 役割 |
 |---------|------|
-| `backend/src/runpod_io/onstart.sh.tmpl` | sshd 早期起動、tee/nvidia-smi、early artifact upload、5s log streaming |
-| `backend/src/runpod_io/ssh.py` | `runtime.ports` から SSH 接続情報を解決 |
-| `backend/src/runpod_io/progress.py` | S3 markers + onstart.log + artifacts の reader |
-| `backend/src/runpod_io/summary.py` | 全 source merge → `RunSummary` |
-| `backend/src/runpod_io/watcher.py` | poll → success/failure/stalled/timeout 判定 + 通知 |
-| `backend/src/runpod_io/cli.py` | `tail` / `summary` / `pull --from` サブコマンド |
+| `bot/src/runpod_io/onstart.sh.tmpl` | sshd 早期起動、tee/nvidia-smi、early artifact upload、5s log streaming |
+| `bot/src/runpod_io/ssh.py` | `runtime.ports` から SSH 接続情報を解決 |
+| `bot/src/runpod_io/progress.py` | S3 markers + onstart.log + artifacts の reader |
+| `bot/src/runpod_io/summary.py` | 全 source merge → `RunSummary` |
+| `bot/src/runpod_io/watcher.py` | poll → success/failure/stalled/timeout 判定 + 通知 |
+| `bot/src/runpod_io/cli.py` | `tail` / `summary` / `pull --from` サブコマンド |
 
 ## 制約
 

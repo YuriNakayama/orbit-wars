@@ -43,7 +43,7 @@ ln -s "$DATA_DIR" "${WORKTREE_PATH}/data"
 echo "  data/ を ${DATA_DIR} に symlink しました"
 
 # .env ファイルのコピー
-ENV_DIRS=("frontend" "backend" "infra")
+ENV_DIRS=("frontend" "bot" "infra")
 COPIED=()
 
 for dir in "${ENV_DIRS[@]}"; do

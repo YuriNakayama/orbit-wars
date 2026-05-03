@@ -1,0 +1,37 @@
+Orbit Wars Simulator (Python vendored copy)
+=============================================
+
+This subdirectory (`simulator/python/orbit_wars_vendor/`) is a verbatim copy of
+the `kaggle_environments/envs/orbit_wars/` directory from the
+Kaggle/kaggle-environments project.
+
+Source:
+  https://github.com/Kaggle/kaggle-environments/tree/master/kaggle_environments/envs/orbit_wars
+
+PyPI package version vendored: kaggle-environments 1.28.0
+License: Apache License, Version 2.0 (see ./LICENSE)
+
+Files vendored:
+  orbit_wars_vendor/orbit_wars.py
+  orbit_wars_vendor/orbit_wars.json
+  orbit_wars_vendor/orbit_wars.js
+  orbit_wars_vendor/README.md
+  orbit_wars_vendor/tests/test_orbit_wars.py
+
+This vendored copy is used in two ways within the Orbit Wars repository:
+
+  1. As the reference implementation for the Rust simulator
+     (`simulator/rust/`), to validate parity (state hash equivalence)
+     between Python and Rust per-step.
+  2. As a runtime fallback when `ORBIT_WARS_BACKEND=python` is set; in
+     that mode the Python facade in `simulator/rust/python/orbit_wars_rust/`
+     dispatches to this vendored interpreter rather than to Rust.
+
+No modifications have been made to the vendored files. To upgrade:
+
+  1. Bump kaggle-environments in `bot/pyproject.toml`.
+  2. Re-copy the four files above from
+     `<venv>/lib/python3.13/site-packages/kaggle_environments/envs/orbit_wars/`.
+  3. Update the version line in this NOTICE.
+  4. Re-run `pytest simulator/python/orbit_wars_vendor/tests` and the
+     parity test in `simulator/rust/python/tests/test_parity.py`.

@@ -84,7 +84,7 @@
 ## Directory Layout (new files only)
 
 ```
-backend/
+bot/
   src/
     runpod_io/                       # NEW package (SDK との衝突回避のため _io suffix)
       __init__.py                    # docstring に SDK alias 規約を明記
@@ -112,11 +112,11 @@ backend/
 dev/
   runpod                             # NEW thin wrapper (CLI 名は短く `runpod`)
 
-backend/
+bot/
   .env.example                       # +RUNPOD_API_KEY=
   pyproject.toml                     # +runpod>=1.7.0, +packages: src/runpod_io
 
-backend/pipeline/imitation/case{1,3,4}/training/
+bot/pipeline/imitation/case{1,3,4}/training/
   train.py                           # MINOR EDIT: ORBIT_WARS_RUNPOD_POD_ID 検出ロジック追加
                                      # (Vast 既存パスは無変更、両 env 同時セットなら assert)
 ```
@@ -130,14 +130,14 @@ backend/pipeline/imitation/case{1,3,4}/training/
   - SDK import: `import runpod as runpod_sdk` を各モジュールで採用。`runpod_io` パッケージは SDK のトップレベルと別名なので、Python の import システムが両方を独立に解決可能。
   - typer の wiring (`uv run python -m runpod_io train ...`) は `__main__.py` から `from runpod_io.cli import app; app()`。
 - **CLI 体験**:
-  - `dev/runpod train <sha>`: thin wrapper の中身は `exec uv run --directory backend python -m runpod_io "$@"`。
+  - `dev/runpod train <sha>`: thin wrapper の中身は `exec uv run --directory bot python -m runpod_io "$@"`。
   - vast 基盤との対称性: `dev/vast` (= `python -m vast`) ⇔ `dev/runpod` (= `python -m runpod_io`)。
-- **テスト命名**: `backend/tests/src/runpod_io/` 配下に置き、test ファイル名は vast の構造をミラー (`test_auth.py`, `test_cli.py`, `test_cost.py`, `test_instance.py`, `test_offers.py`, `test_run_meta.py` (run_meta は薄い wrapper)、`test_volumes.py`, `test_onstart_template.py`)。
-- **mypy / ruff 設定**: `backend/pyproject.toml` の `[tool.mypy]` / `[tool.ruff]` の対象に `src/runpod_io` を追加。
+- **テスト命名**: `bot/tests/src/runpod_io/` 配下に置き、test ファイル名は vast の構造をミラー (`test_auth.py`, `test_cli.py`, `test_cost.py`, `test_instance.py`, `test_offers.py`, `test_run_meta.py` (run_meta は薄い wrapper)、`test_volumes.py`, `test_onstart_template.py`)。
+- **mypy / ruff 設定**: `bot/pyproject.toml` の `[tool.mypy]` / `[tool.ruff]` の対象に `src/runpod_io` を追加。
 
 ## Backend Design
 
-### `backend/src/runpod_io/cli.py` (typer)
+### `bot/src/runpod_io/cli.py` (typer)
 
 ```python
 from __future__ import annotations
@@ -283,7 +283,7 @@ def volume_search_cmd(...) -> None: ...
 def volume_create_cmd(...) -> None: ...
 ```
 
-### `backend/src/runpod_io/auth.py`
+### `bot/src/runpod_io/auth.py`
 
 vast.auth と完全に同じ `load_aws_creds()` + RunPod 用の `load_runpod_api_key()` を追加。
 
@@ -305,7 +305,7 @@ from .auth_aws import (  # = vast.auth から import or 同等関数を独立実
 
 
 def load_runpod_api_key(*, env_path: Path | None = None) -> str:
-    """backend/.env または環境変数から RUNPOD_API_KEY を読む。"""
+    """bot/.env または環境変数から RUNPOD_API_KEY を読む。"""
     if env_path is None:
         env_path = _default_env_path()
     if env_path.is_file():
@@ -334,7 +334,7 @@ def _default_env_path() -> Path:
 `load_aws_creds()` の重複を避けるため、**実装方針 (採用)**: `vast.auth` から再 import:
 
 ```python
-# backend/src/runpod_io/auth.py
+# bot/src/runpod_io/auth.py
 from vast.auth import (  # type: ignore[import-untyped]
     DEFAULT_AWS_PROFILE,
     DEFAULT_AWS_REGION,
@@ -344,9 +344,9 @@ from vast.auth import (  # type: ignore[import-untyped]
 )
 ```
 
-これにより: (a) 重複ロジックなし、(b) vast 側を改修したら runpod 側も追従、(c) `auth_aws` の独立 module 化は将来 phase 2 で `backend/src/cloud/auth.py` に切り出す候補となる。
+これにより: (a) 重複ロジックなし、(b) vast 側を改修したら runpod 側も追従、(c) `auth_aws` の独立 module 化は将来 phase 2 で `bot/src/cloud/auth.py` に切り出す候補となる。
 
-### `backend/src/runpod_io/offers.py`
+### `bot/src/runpod_io/offers.py`
 
 Vast の `search_offers` (DSL query) と異なり、RunPod は `get_gpus()` + `get_gpu(id)` の 2 段階呼び出し。
 
@@ -416,7 +416,7 @@ def format_table(offers: list[Offer]) -> Table: ...
 def pick_offer(offers: list[Offer], *, console: Console | None = None) -> Offer: ...
 ```
 
-### `backend/src/runpod_io/instance.py`
+### `bot/src/runpod_io/instance.py`
 
 Vast の `instance.py` と placeholder + sanitize ロジックは同じ。差分は `create_pod` 呼び出しのみ。
 
@@ -511,7 +511,7 @@ def create_pod(
     return str(pod_id)
 ```
 
-### `backend/src/runpod_io/onstart.sh.tmpl`
+### `bot/src/runpod_io/onstart.sh.tmpl`
 
 vast.onstart.sh.tmpl から差分のみ:
 
@@ -551,15 +551,15 @@ vast.onstart.sh.tmpl から差分のみ:
      ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
      ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
      ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
-     ORBIT_WARS_COMMAND="uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>" \
-     uv run --directory backend python -m <TRAIN_MODULE> <CONFIG_ARG>
+     ORBIT_WARS_COMMAND="uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+     uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG>
    ```
 
 5. **`uv pip install vastai` の行は削除** (runpodctl は image に pre-install されている)。
 
 6. **bot コミット (`<RUN_ID>.dvc` を origin に push)** は vast 同設計のまま、user.email/name を `runpod-bot@orbit-wars.local` に変更。
 
-### `backend/src/runpod_io/run_meta.py`
+### `bot/src/runpod_io/run_meta.py`
 
 vast.run_meta から `RunMetadata` を re-export し、RunPod 用の helper を追加。
 
@@ -602,7 +602,7 @@ def build_runpod_offer_snapshot(
 `vast.run_meta.RunMetadata` の dataclass フィールドに `runpod_pod_id: int | None = None` と `runpod_offer_snapshot: dict[str, Any] | None = None` を **追加** する PR を Step 4 (要件の F3) で行う:
 
 ```python
-# backend/src/vast/run_meta.py (修正後の dataclass)
+# bot/src/vast/run_meta.py (修正後の dataclass)
 @dataclass
 class RunMetadata:
     schema_version: int = SCHEMA_VERSION  # = 1 のまま
@@ -627,7 +627,7 @@ class RunMetadata:
 
 `schema_version=1` を維持し、後方互換のために `RunMetadata(**data)` の `data` から欠如している field がある場合 (古い vast run.json) は default で埋まる (dataclass default 機構)。
 
-### `backend/src/runpod_io/cost.py`
+### `bot/src/runpod_io/cost.py`
 
 vast.cost と同じ structure。差分は: (a) `runpod_offer_snapshot` を読む、(b) `runpod_offer_snapshot is None` なら skip (vast の run を除外)、(c) markdown ヘッダが `# RunPod Cost Report — <month>`、(d) 出力 path が `docs/experiment/runpod_cost_report_<YYYY-MM>.md`。
 
@@ -691,7 +691,7 @@ def parse_month(value: str | None) -> str | None: ...
 def iter_run_dirs(runs_root: Path) -> Iterable[Path]: ...
 ```
 
-### `backend/src/runpod_io/volumes.py`
+### `bot/src/runpod_io/volumes.py`
 
 RunPod の network volume 操作は SDK が薄い。GraphQL 直叩き or REST API:
 
@@ -770,7 +770,7 @@ def pick_volume_offer(offers: list[VolumeOffer], ...) -> VolumeOffer: ...
 def validate_volume_name(name: str) -> None: ...
 ```
 
-### `train.py` 改修箇所 (`backend/pipeline/imitation/case{1,3,4}/training/train.py`)
+### `train.py` 改修箇所 (`bot/pipeline/imitation/case{1,3,4}/training/train.py`)
 
 vast 基盤の改修済み箇所を踏まえ、最小変更:
 
@@ -845,7 +845,7 @@ runpod_offer_snapshot = json.loads(snapshot_env) if snapshot_env else None
     "dph_total": 0.43,
     "data_center_id": "US-KS-2"
   },
-  "command": "uv run --directory backend python -m pipeline.imitation.case1.training.train",
+  "command": "uv run --directory bot python -m pipeline.imitation.case1.training.train",
   "weights_path": "data/output/models/imitation/case1/runs/<run_id>/best.pt",
   "train_metrics": {
     "epochs_run": 15,
@@ -879,7 +879,7 @@ vast 基盤と完全に同じ。`runs/<run_id>/` 単位で `dvc add` → `.dvc` 
 
 ### Local Configuration
 
-- `backend/.env` に `RUNPOD_API_KEY=...` 追加 (vast の `VAST_API_KEY` と並列)。
+- `bot/.env` に `RUNPOD_API_KEY=...` 追加 (vast の `VAST_API_KEY` と並列)。
 - `~/.aws/credentials` の `orbit-wars` profile はそのまま使用。
 - `pyproject.toml`:
   ```toml
@@ -889,7 +889,7 @@ vast 基盤と完全に同じ。`runs/<run_id>/` 単位で `dvc add` → `.dvc` 
     ...
   ]
   ```
-- `backend/.env.example`:
+- `bot/.env.example`:
   ```
   VAST_API_KEY=your-vast-api-key
   RUNPOD_API_KEY=your-runpod-api-key  # NEW
@@ -905,24 +905,24 @@ vast 基盤と完全に同じ。`runs/<run_id>/` 単位で `dvc add` → `.dvc` 
 
 | File | Action | Notes |
 |------|--------|-------|
-| `backend/src/runpod_io/__init__.py` | create | docstring に SDK alias 規約を明記 |
-| `backend/src/runpod_io/__main__.py` | create | `from .cli import app; app()` |
-| `backend/src/runpod_io/cli.py` | create | typer Typer (train/pull/promote/cost-report/volume {list,search,create}) |
-| `backend/src/runpod_io/auth.py` | create | `from vast.auth import load_aws_creds, ...` + `load_runpod_api_key()` |
-| `backend/src/runpod_io/offers.py` | create | `Offer` + `search_offers` (get_gpus + get_gpu loop) |
-| `backend/src/runpod_io/instance.py` | create | `render_onstart` + `create_pod` ラッパ |
-| `backend/src/runpod_io/run_meta.py` | create | `from vast.run_meta import ...` + `build_runpod_offer_snapshot` |
-| `backend/src/runpod_io/cost.py` | create | `aggregate_runs` (runpod_offer_snapshot のみ) |
-| `backend/src/runpod_io/volumes.py` | create | GraphQL 直叩きで CRUD |
-| `backend/src/runpod_io/onstart.sh.tmpl` | create | bash template (vast から差分のみ修正) |
-| `backend/tests/src/runpod_io/*.py` | create | unit tests (vast tests を mirror) |
-| `backend/src/vast/run_meta.py` | edit | `RunMetadata` に `runpod_pod_id` + `runpod_offer_snapshot` 追加 |
-| `backend/pipeline/imitation/case1/training/train.py` | edit | `ORBIT_WARS_RUNPOD_POD_ID` + `ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT` 検出 |
-| `backend/pipeline/imitation/case3/training/train.py` | edit | 同上 |
-| `backend/pipeline/imitation/case4/training/train.py` | edit | 同上 |
-| `backend/pyproject.toml` | edit | `runpod>=1.7.0`, packages に `src/runpod_io` 追加 |
-| `backend/.env.example` | edit | `RUNPOD_API_KEY=` 行追加 |
-| `dev/runpod` | create | bash thin wrapper: `exec uv run --directory backend python -m runpod_io "$@"` |
+| `bot/src/runpod_io/__init__.py` | create | docstring に SDK alias 規約を明記 |
+| `bot/src/runpod_io/__main__.py` | create | `from .cli import app; app()` |
+| `bot/src/runpod_io/cli.py` | create | typer Typer (train/pull/promote/cost-report/volume {list,search,create}) |
+| `bot/src/runpod_io/auth.py` | create | `from vast.auth import load_aws_creds, ...` + `load_runpod_api_key()` |
+| `bot/src/runpod_io/offers.py` | create | `Offer` + `search_offers` (get_gpus + get_gpu loop) |
+| `bot/src/runpod_io/instance.py` | create | `render_onstart` + `create_pod` ラッパ |
+| `bot/src/runpod_io/run_meta.py` | create | `from vast.run_meta import ...` + `build_runpod_offer_snapshot` |
+| `bot/src/runpod_io/cost.py` | create | `aggregate_runs` (runpod_offer_snapshot のみ) |
+| `bot/src/runpod_io/volumes.py` | create | GraphQL 直叩きで CRUD |
+| `bot/src/runpod_io/onstart.sh.tmpl` | create | bash template (vast から差分のみ修正) |
+| `bot/tests/src/runpod_io/*.py` | create | unit tests (vast tests を mirror) |
+| `bot/src/vast/run_meta.py` | edit | `RunMetadata` に `runpod_pod_id` + `runpod_offer_snapshot` 追加 |
+| `bot/pipeline/imitation/case1/training/train.py` | edit | `ORBIT_WARS_RUNPOD_POD_ID` + `ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT` 検出 |
+| `bot/pipeline/imitation/case3/training/train.py` | edit | 同上 |
+| `bot/pipeline/imitation/case4/training/train.py` | edit | 同上 |
+| `bot/pyproject.toml` | edit | `runpod>=1.7.0`, packages に `src/runpod_io` 追加 |
+| `bot/.env.example` | edit | `RUNPOD_API_KEY=` 行追加 |
+| `dev/runpod` | create | bash thin wrapper: `exec uv run --directory bot python -m runpod_io "$@"` |
 | `.gitignore` | unchanged | `data/output/` は既に ignored |
 | `dvc.yaml` | unchanged | – |
 | `infra/` | unchanged | – |
@@ -933,7 +933,7 @@ vast 基盤と完全に同じ。`runs/<run_id>/` 単位で `dvc add` → `.dvc` 
 - **エラーハンドリング**: `typer.Exit(code=N)` + actionable な `CredentialsError`。
 - **テスト**: `runpod` SDK は `unittest.mock` で stub。vast tests と同パターン。
 - **後方互換**:
-  - `backend/src/vast/run_meta.RunMetadata` への field 追加は default=None なので vast 既存 run.json は変わらず読める。
+  - `bot/src/vast/run_meta.RunMetadata` への field 追加は default=None なので vast 既存 run.json は変わらず読める。
   - `train.py` の env 検出は vast / runpod / どちらでもない (ローカル) の 3 ケースを動作。
 - **mypy**: `runpod>=1.7.0` の型 stub が無い場合 `# type: ignore[import-untyped]` で凌ぐ (vast でも同等)。
 
@@ -941,8 +941,8 @@ vast 基盤と完全に同じ。`runs/<run_id>/` 単位で `dvc add` → `.dvc` 
 
 ユーザ確定: **パッケージ名は `runpod_io`、CLI 名は `dev/runpod`**。
 
-- 内部パッケージ: `backend/src/runpod_io/`
+- 内部パッケージ: `bot/src/runpod_io/`
 - entry point: `python -m runpod_io <subcommand>`
-- thin wrapper: `dev/runpod` (中身は `exec uv run --directory backend python -m runpod_io "$@"`)
+- thin wrapper: `dev/runpod` (中身は `exec uv run --directory bot python -m runpod_io "$@"`)
 - SDK 参照: 各モジュール先頭で `import runpod as runpod_sdk`。`runpod_io` パッケージは SDK のトップレベル `runpod` と別名なので衝突しない。
 - 検証: `python -c "import runpod_io; import runpod"` の両方が成功することを Step 6 (Implementation) の最初に CI / smoke test で確認。

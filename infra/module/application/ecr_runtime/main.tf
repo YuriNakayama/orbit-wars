@@ -1,5 +1,5 @@
 # Vast.ai 学習ノードが pull する Docker base image を ECR で管理する.
-# image には orbit-wars/backend の依存ライブラリ (torch + CUDA wheels 等) を
+# image には orbit-wars/bot の依存ライブラリ (torch + CUDA wheels 等) を
 # 焼き込んでおき、Vast インスタンス側の uv sync を skip 〜 短縮する.
 
 resource "aws_ecr_repository" "runtime" {

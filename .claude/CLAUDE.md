@@ -22,10 +22,13 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) competition 
 ## Folder Structure
 
 ```
-backend/                Python implementation (pyproject.toml / uv.lock live here)
+bot/                    Python implementation (pyproject.toml / uv.lock live here)
   src/
   pipeline/
   tests/                Pytest unit tests
+simulator/              Orbit Wars simulator (公式 Python vendored copy + Rust reimplementation)
+  python/               Apache-2.0 vendored copy of kaggle_environments/envs/orbit_wars
+  rust/                 PyO3 + maturin Rust simulator (orbit_wars_rust._lib)
 infra/                  Terraform-based infrastructure (AWS, etc.)
   environment/          Per-environment root modules (dev / staging / prod)
   module/               Reusable shared modules
@@ -35,14 +38,14 @@ data/                   4 layers (lake / processed / mart / output) (gitignored,
   processed/            Pre-processed data
   mart/                 Curated data for training/evaluation (e.g. imitation/case1/train.parquet)
   output/               Generated artifacts (Vast.ai / RunPod GPU training models / Kaggle submission tar.gz + history / ablation aggregates)
-dev/                    Development scripts (each cd's into backend and runs uv internally)
+dev/                    Development scripts (each cd's into bot and runs uv internally)
 docs/
   competition/          Competition spec summaries (abstract.md, etc.)
   experiment/           Experiment plans and results — see `.claude/rules/docs.md` for naming
   plans/                Feature plans (one directory per feature, phases 00 → 06)
 ```
 
-`uv run ...` is expected to run under `backend/`. From the repo root, use `dev/*` or `cd backend` first. See [`.claude/rules/command.md`](rules/command.md) for the command catalog (DVC, Vast.ai, RunPod, Kaggle submission policy).
+`uv run ...` is expected to run under `bot/`. From the repo root, use `dev/*` or `cd bot` first. See [`.claude/rules/command.md`](rules/command.md) for the command catalog (DVC, Vast.ai, RunPod, Kaggle submission policy).
 
 ## Glossary
 
@@ -61,8 +64,8 @@ docs/
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
 | `.claude/rules/python.md` | `**/*.py`, `**/*.ipynb` | Python language general rules |
-| `.claude/rules/backend/pipeline.md` | `backend/pipeline/**` | Submit structure for case directories |
-| `.claude/rules/backend/tests.md` | `backend/tests/**` | Pytest conventions |
+| `.claude/rules/bot/pipeline.md` | `bot/pipeline/**` | Submit structure for case directories |
+| `.claude/rules/bot/tests.md` | `bot/tests/**` | Pytest conventions |
 | `.claude/rules/infra.md` | `infra/**` | Terraform / cloud infrastructure (AWS, etc.) |
 | `.claude/rules/data.md` | `data/**` | data/ 4-layer structure (lake/processed/mart/output), DVC management, worktree symlink rules |
 | `.claude/rules/command.md` | `dev/**` | Command catalog (`dev/*`, DVC, Vast.ai, Kaggle submission policy). Read on demand when running commands |

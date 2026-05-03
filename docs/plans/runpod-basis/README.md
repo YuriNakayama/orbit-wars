@@ -8,9 +8,9 @@ RunPod を使い捨て GPU ノードとして扱い、ローカルから直接 G
 # 1) AWS profile (DVC remote 用) — 既存の dvc-setup を一度だけ
 dev/dvc setup
 
-# 2) RunPod API key を backend/.env に追加
+# 2) RunPod API key を bot/.env に追加
 # https://runpod.io/console/user/settings で発行
-echo "RUNPOD_API_KEY=<your-key>" >> backend/.env
+echo "RUNPOD_API_KEY=<your-key>" >> bot/.env
 
 # 3) (推奨) network volume を 1 個作成 — 立ち上げ時間を 5-15 分短縮
 # 永続化対象: uv-cache / dvc-cache / data/lake (raw episodes) / data/mart (preprocessed)
@@ -45,7 +45,7 @@ dev/runpod pull <run_id> --case case1
 
 # E) ローカル評価
 ORBIT_WARS_WEIGHTS=data/output/models/imitation/case1/runs/<run_id>/best.pt \
-  uv run --directory backend python -m pipeline.imitation.case1.evaluation.eval_vs_baseline \
+  uv run --directory bot python -m pipeline.imitation.case1.evaluation.eval_vs_baseline \
   --episodes 300 --seed 0
 # 結果を JSON にして dev/runpod promote に渡せば run.json に local_eval_results が記録される
 
@@ -81,7 +81,7 @@ trap で **失敗時は自動 destroy しない** 設計。`runpodctl pod logs <
 - `dvc.lock` がローカルに残っていない場合: `git pull` でブランチを最新化してから retry。
 
 ### `dev/runpod train` が "RUNPOD_API_KEY not found" と言う
-`backend/.env` に `RUNPOD_API_KEY=...` を追加 (.env は git ignore 済み)。
+`bot/.env` に `RUNPOD_API_KEY=...` を追加 (.env は git ignore 済み)。
 
 ### コストが想定より高い
 - `--cost-limit 1.0` のように個別に下限を絞る。

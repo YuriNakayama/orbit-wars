@@ -42,7 +42,7 @@ data/
 
 - Track each directory under lake / mart / output with `dvc add` at the directory level. Commit only the generated `*.dvc` files to git
 - S3 remote: `s3://orbit-wars-dvc-286854171013/remote`
-- Fetch real contents with `dev/dvc pull` (or `uv run --directory backend dvc pull`)
+- Fetch real contents with `dev/dvc pull` (or `uv run --directory bot dvc pull`)
 - See CLAUDE.md / `.claude/rules/command.md` for detailed DVC operations
 
 ## .gitignore behavior

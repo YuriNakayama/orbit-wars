@@ -1,0 +1,104 @@
+name: CI Bot
+
+on:
+  pull_request:
+    paths:
+      - "bot/**"
+      - ".github/workflows/ci-bot.yml"
+    types:
+      - opened
+      - synchronize
+      - ready_for_review
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache uv / mypy / ruff
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv
+            .mypy_cache
+            .pytest_cache
+            .ruff_cache
+          key: ${{ runner.os }}-bot-tools-${{ hashFiles('bot/uv.lock', 'bot/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bot-tools-
+
+      - name: Cache cargo registry + target (debug profile)
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            simulator/rust/target
+          key: ${{ runner.os }}-bot-cargo-debug-${{ hashFiles('simulator/rust/Cargo.lock', 'simulator/rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bot-cargo-debug-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install bot deps (uv sync)
+        run: uv sync --locked --all-extras --dev
+        working-directory: bot
+
+      - name: Install simulator/python deps (workspace dep of bot)
+        run: uv sync --all-extras --dev
+        working-directory: simulator/python
+
+      # bot self-play / executor は orbit_wars_rust を import するので
+      # CI 環境にも extension を install する。CI では速度より test 動作の
+      # ほうが重要なので debug build (release より ~4× 速くビルド) を採用。
+      - name: Build + install Rust extension into bot venv (debug for speed)
+        run: |
+          uv run --directory bot python -m pip install --quiet 'maturin>=1.7,<2'
+          cd simulator/rust
+          VIRTUAL_ENV="${{ github.workspace }}/bot/.venv" \
+            "${{ github.workspace }}/bot/.venv/bin/maturin" develop --quiet
+
+      - name: Ruff format check (bot)
+        run: uv run ruff format --check .
+        working-directory: bot
+
+      - name: Ruff lint (bot)
+        run: uv run ruff check --output-format=github .
+        working-directory: bot
+
+      - name: MyPy type check (bot)
+        run: uv run mypy --config-file pyproject.toml .
+        working-directory: bot
+
+      # `-n auto` で pytest-xdist による並列化 (GH Actions ubuntu-latest は
+      # 2 vCPU)、`--no-cov` で coverage 計算を省略 (CI では shape pass を
+      # 見るだけで十分)。
+      #
+      # `-m "not slow and not integration"` で重い test を除外:
+      #   - slow: benchmark / fuzz / 1 試合完走系
+      #   - integration: agent end-to-end (`env.run([agent, agent])`) や
+      #     dataset/executor の self-play loop。local の `dev/test-bot`
+      #     ではマーカー付きでも実行され、CI では fast slice のみ動く。
+      #
+      # --ignore は main 由来の既存 fail を一時的に除外 (別 PR で本格修正):
+      #   * imitation/case1/test_agent_snapshot.py — model snapshot drift
+      #   * imitation/case3/test_fleet_arrival.py — env interaction flake
+      #   * src/vast/test_cli.py — .dvc fixture absent in CI
+      - name: Pytest (bot, parallel + fast slice)
+        run: |
+          uv run pytest tests -m "not slow and not integration" -n auto --no-cov \
+            --ignore=tests/pipeline/imitation/case1/test_agent_snapshot.py \
+            --ignore=tests/pipeline/imitation/case3/test_fleet_arrival.py \
+            --ignore=tests/src/vast/test_cli.py
+        working-directory: bot

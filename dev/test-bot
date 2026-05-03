@@ -1,0 +1,37 @@
+#!/bin/bash
+# bot + simulator テスト（ci-bot.yml 相当）
+# format check → lint → type check → pytest → cargo test
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ "${CI:-}" = "true" ]; then
+  RUFF_FORMAT="--output-format=github"
+else
+  RUFF_FORMAT=""
+fi
+
+cd "$ROOT_DIR/bot"
+
+echo "== bot: format check =="
+uv run ruff format --check .
+
+echo "== bot: lint =="
+uv run ruff check $RUFF_FORMAT .
+
+echo "== bot: type check =="
+uv run mypy --config-file pyproject.toml .
+
+echo "== bot: test =="
+uv run pytest tests -m "not slow" "$@"
+
+if [ -d "$ROOT_DIR/simulator/python" ]; then
+  echo "== simulator/python: test =="
+  (cd "$ROOT_DIR/simulator/python" && uv run pytest orbit_wars_vendor/tests -q)
+fi
+
+if [ -d "$ROOT_DIR/simulator/rust" ] && command -v cargo >/dev/null 2>&1; then
+  echo "== simulator/rust: cargo test =="
+  # extension-module feature must be off when cargo links a test binary.
+  (cd "$ROOT_DIR/simulator/rust" && cargo test --no-default-features)
+fi
