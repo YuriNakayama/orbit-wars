@@ -13,6 +13,7 @@ Pure-Python rule-based agents. Each case is an independent submission package
 | case3 | active | baseline_v3 (rollout) | n/a | n/a | case2 + rollout |
 | case4 | **production** | baseline_v4 (fleet consolidation) | 745 | 2026-04 | 現役チャンピオン (mission resolver 抽出済) |
 | case5 | active (verification) | baseline_v5 (LB1224 port) | 600 | 2026-04 | `agent_full.py` は notebook verbatim port、refactor しない |
+| case6 | active (experiment) | baseline_v6 (case4 + STAY judge) | n/a | n/a | defense hold + burst hold、`docs/experiment/rulebase/20260502_case6_stay_mission/` |
 
 ## Conventions
 
