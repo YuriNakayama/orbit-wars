@@ -9,6 +9,7 @@ RunPod は Vast.ai と異なり offer を 1 件単位の DSL クエリでは取�
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -187,11 +188,21 @@ def format_table(offers: Sequence[Offer]) -> Table:
 
 
 def pick_offer(offers: Sequence[Offer], *, console: Console | None = None) -> Offer:
-    """rich Prompt で番号入力させ、対応する Offer を返す。"""
+    """Rich Prompt で番号入力させ、対応する Offer を返す。
+
+    stdin が tty でない場合 (CI / 自動化スクリプト経由) は対話せず先頭 (=最安)
+    を採用する。`IntPrompt.ask` は non-tty でも default を返す実装ではなく
+    `EOFError` 経由で Abort してしまうため、ここで明示的に分岐する。
+    """
     if not offers:
         raise RuntimeError("no offers to pick from")
     console = console or Console()
     console.print(format_table(offers))
+    if not sys.stdin.isatty():
+        console.print(
+            "[dim]non-interactive stdin detected; auto-picking offer #1[/dim]"
+        )
+        return offers[0]
     while True:
         choice = IntPrompt.ask(
             "Pick offer #",
