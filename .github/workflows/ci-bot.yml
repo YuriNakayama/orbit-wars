@@ -14,7 +14,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 6
 
     steps:
       - uses: actions/checkout@v5
@@ -32,14 +32,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bot-tools-
 
+      - name: Cache cargo registry + target (debug profile)
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            simulator/rust/target
+          key: ${{ runner.os }}-bot-cargo-debug-${{ hashFiles('simulator/rust/Cargo.lock', 'simulator/rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bot-cargo-debug-
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install bot deps (uv sync)
         run: uv sync --locked --all-extras --dev
         working-directory: bot
+
+      - name: Install simulator/python deps (workspace dep of bot)
+        run: uv sync --all-extras --dev
+        working-directory: simulator/python
+
+      # bot self-play / executor は orbit_wars_rust を import するので
+      # CI 環境にも extension を install する。CI では速度より test 動作の
+      # ほうが重要なので debug build (release より ~4× 速くビルド) を採用。
+      - name: Build + install Rust extension into bot venv (debug for speed)
+        run: |
+          uv run --directory bot python -m pip install --quiet 'maturin>=1.7,<2'
+          cd simulator/rust
+          VIRTUAL_ENV="${{ github.workspace }}/bot/.venv" \
+            "${{ github.workspace }}/bot/.venv/bin/maturin" develop --quiet
 
       - name: Ruff format check (bot)
         run: uv run ruff format --check .
@@ -53,18 +81,17 @@ jobs:
         run: uv run mypy --config-file pyproject.toml .
         working-directory: bot
 
-      # Pytest excludes pre-existing failures inherited from main that are
-      # outside the simulator scope (tracked separately):
-      #   * tests/pipeline/imitation/case1/test_agent_snapshot.py — model
-      #     snapshot drift
-      #   * tests/pipeline/imitation/case3/test_fleet_arrival.py — env
-      #     interaction flake
-      #   * tests/pipeline/rulebase/case5/test_fleet_split.py — strategy
-      #     threshold drift
-      #   * tests/src/vast/test_cli.py — depends on .dvc fixture absent in CI
-      - name: Pytest (bot, fast slice)
+      # `-n auto` で pytest-xdist による並列化、`--no-cov` で coverage 計算を
+      # 省略 (CI では shape pass を見るだけで十分)。-m "not slow" で重い
+      # benchmark / fuzz 系を除外。
+      # --ignore は main 由来の既存 fail 4 件を一時的に除外 (別 PR で本格修正):
+      #   * imitation/case1/test_agent_snapshot.py — model snapshot drift
+      #   * imitation/case3/test_fleet_arrival.py — env interaction flake
+      #   * rulebase/case5/test_fleet_split.py — strategy threshold drift
+      #   * src/vast/test_cli.py — .dvc fixture absent in CI
+      - name: Pytest (bot, parallel + fast slice)
         run: |
-          uv run pytest tests -m "not slow" \
+          uv run pytest tests -m "not slow" -n auto --no-cov \
             --ignore=tests/pipeline/imitation/case1/test_agent_snapshot.py \
             --ignore=tests/pipeline/imitation/case3/test_fleet_arrival.py \
             --ignore=tests/pipeline/rulebase/case5/test_fleet_split.py \
