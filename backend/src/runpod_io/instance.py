@@ -178,7 +178,7 @@ def create_pod(
     encoded = base64.b64encode(onstart_script.encode("utf-8")).decode("ascii")
     docker_args = (
         "bash -c '"
-        '[ -x /start.sh ] && (/start.sh > /var/log/start.log 2>&1 &); '
+        "[ -x /start.sh ] && (/start.sh > /var/log/start.log 2>&1 &); "
         f"echo {encoded} | base64 -d | bash"
         "'"
     )

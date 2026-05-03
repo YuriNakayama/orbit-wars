@@ -237,7 +237,9 @@ if [ -d /persist ]; then
   # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
   # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
   # matches.dvc の path=matches なので data/lake/<src>/matches がそれ。
-  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart/imitation
+  # data/lake/{kaggle_episodes,selfplay} と data/mart の親 dir のみ作る
+  # (末端 dir は symlink にする想定なので mkdir しない)。
+  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart
   mkdir -p /persist/lake-kaggle-matches /persist/lake-selfplay-matches \
            /persist/data-mart-imitation
   # data/lake/<src>/matches だけを symlink で persist 化 (raw episodes の本体)
@@ -247,8 +249,19 @@ if [ -d /persist ]; then
   if [ ! -L data/lake/selfplay/matches ] && [ ! -d data/lake/selfplay/matches ]; then
     ln -sfn /persist/lake-selfplay-matches data/lake/selfplay/matches
   fi
-  # data/mart/imitation/<case> は dvc 出力なので直接 symlink で OK
-  if [ ! -L data/mart/imitation ] && [ ! -d data/mart/imitation ]; then
+  # data/mart/imitation 全体を /persist/data-mart-imitation に symlink。
+  # この時点で git tree からは復元されていない (新規 case の場合) か、
+  # 復元されていたとしても .dvc stub のみなので symlink で問題ない。
+  # 既に dir として実体がある (例: 過去 run の遺物) 場合は中身を /persist に
+  # 引っ越してから symlink (再起動で持続化される ⇒ 次回以降 dvc pull が冪等)。
+  if [ -L data/mart/imitation ]; then
+    : # already linked
+  elif [ -d data/mart/imitation ]; then
+    # 既存 dir の中身を /persist にマージしてから symlink に置換
+    cp -an data/mart/imitation/. /persist/data-mart-imitation/ 2>/dev/null || true
+    rm -rf data/mart/imitation
+    ln -sfn /persist/data-mart-imitation data/mart/imitation
+  else
     ln -sfn /persist/data-mart-imitation data/mart/imitation
   fi
 fi
@@ -306,6 +319,7 @@ echo "[onstart] step=mkdir_run"
 RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
+PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
   if [ -d "data/mart/imitation/<CASE>" ] && \
      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
@@ -313,6 +327,66 @@ if [ -n "<PREPROCESS_CMD>" ]; then
   else
     echo "[onstart] step=preprocess case=<CASE>"
     uv run --directory backend python -m <PREPROCESS_CMD>
+    PREPROCESS_RAN=1
+  fi
+fi
+
+# preprocess を実走した場合、生成された parquet を DVC で track して
+# git に .dvc stub を push する。次回以降は git pull → dvc pull だけで
+# data/mart/imitation/<CASE>/ が復元され、preprocess は skip される。
+if [ "${PREPROCESS_RAN}" -eq 1 ]; then
+  echo "[onstart] step=mart_dvc_persist case=<CASE>"
+  MART_DIR="data/mart/imitation/<CASE>"
+  shopt -s nullglob
+  added_any=0
+  for pq in "${MART_DIR}"/*.parquet; do
+    [ -f "${pq}" ] || continue
+    echo "[onstart] dvc add ${pq}"
+    if uv run --project backend dvc add "${pq}"; then
+      added_any=1
+    else
+      echo "[onstart] dvc add ${pq} FAILED" >&2
+    fi
+  done
+  shopt -u nullglob
+  if [ "${added_any}" -eq 1 ]; then
+    echo "[onstart] dvc push ${MART_DIR}"
+    uv run --project backend dvc push "${MART_DIR}" \
+      || echo "[onstart] dvc push mart FAILED (non-fatal; cache に残る)" >&2
+
+    # .dvc stub と .gitignore を git に commit & push
+    git config user.email "runpod-bot@orbit-wars.local"
+    git config user.name "runpod-bot"
+    if [ -n "${GIT_PAT:-}" ]; then
+      PUSH_URL="https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')"
+      git remote set-url origin "${PUSH_URL}" 2>&1 | tail -2
+    fi
+    TARGET_BRANCH="<BRANCH>"
+    git fetch origin "${TARGET_BRANCH}" || true
+    git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+    # data/ は .gitignore で除外されているが whitelist で .dvc / .gitignore は通る
+    git add -f -- "${MART_DIR}"/*.parquet.dvc "${MART_DIR}"/.gitignore 2>/dev/null || true
+    if git diff --cached --quiet; then
+      echo "[onstart] mart_dvc_persist: nothing to commit"
+    else
+      git commit --no-verify \
+        -m ":robot: runpod: add data/mart/imitation/<CASE>/*.parquet.dvc" \
+        || echo "[onstart] mart_dvc_persist: commit failed"
+      for attempt in 1 2 3; do
+        if git push origin "HEAD:${TARGET_BRANCH}"; then
+          echo "[onstart] mart_dvc_persist: pushed to ${TARGET_BRANCH}"
+          break
+        fi
+        echo "[onstart] mart_dvc_persist: attempt=${attempt} rejected; rebasing"
+        git pull --rebase origin "${TARGET_BRANCH}" || true
+        if [ "${attempt}" -eq 3 ]; then
+          echo "[onstart] mart_dvc_persist: push exhausted retries"
+        fi
+      done
+    fi
+    mark "55_mart_dvc_persisted"
+  else
+    echo "[onstart] mart_dvc_persist: no parquet found under ${MART_DIR}; skipping"
   fi
 fi
 
