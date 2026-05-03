@@ -15,7 +15,7 @@ description: >
   "新しい case を切る前に仮説を整理したい",
   "rulebase/case2 改良の plan.md だけ先に書いて", "実験設計を相談したい",
   "次の iter の plan を作って" all count. Don't trigger this skill for
-  full-pipeline execution including Vast.ai training (use `experiment-execution`),
+  full-pipeline execution including RunPod training (use `experiment-execution`),
   result interpretation after a run finishes (use `experiment-analysis`),
   large-scale multi-domain feature planning (use `feature-plan`), read-only
   code review, or plain bug fixes.
@@ -38,7 +38,7 @@ If the user asks to **execute** an experiment end-to-end, **interpret a finished
 
 ## Scope boundaries (what this skill does NOT do)
 
-- Does not run `dev/test-backend`, `dev/vast train`, or any other build / training command.
+- Does not run `dev/test-backend`, `dev/runpod train`, or any other build / training command.
 - Does not edit code under `backend/pipeline/<family>/case<N>/`. The plan refers to files by path; it doesn't create them.
 - Does not commit or push.
 - Does not call the `experimenter` subagent. The skill writes `plan.md` itself.
@@ -93,8 +93,8 @@ Pick the 3–4 most relevant:
 - **Scope**: which files/modules under `backend/pipeline/<family>/case<N>/` change. For existing-case extension, recommend **adding a new module** (`policy_v2.py`, `features_v3.py`) over rewriting in place — preserves a baseline. Surface as comparison-style choice.
 - **Hyperparameter / config changes**: what knobs move, from what to what.
 - **Local validation**: which `pytest` paths cover the change (`tests/pipeline/<family>/case<N>/`). Always recommend `dev/test-backend` before remote launch.
-- **Compute target**: local CPU only / Vast.ai GPU. Pre-fill `⭐推薦: Vast.ai` for model training >few minutes; pre-fill `⭐推薦: local only` for rule-based or evaluation-only changes.
-- **Vast.ai stage name** (only if Vast was selected): existing stage like `train_imitation_case1` vs. new stage.
+- **Compute target**: local CPU only / RunPod GPU. Pre-fill `⭐推薦: RunPod` for model training >few minutes; pre-fill `⭐推薦: local only` for rule-based or evaluation-only changes.
+- **RunPod case identifier** (only if RunPod was selected): existing case like `--case case1` vs. a new case requiring scaffolding under `backend/pipeline/<family>/case<N>/`.
 
 If the user pushes back on a pre-filled `⭐推薦`, follow their lead — recommendations are defaults, not gates.
 
@@ -156,7 +156,7 @@ Write the plan with these sections (keep it to roughly one screen — verbose pl
 ## 検証方法 (Validation method)
 - ローカル: `dev/test-backend` + `uv run --directory backend pytest tests/pipeline/<family>/case<N> -x`
 - (submit-shape change の場合) `uv run --directory backend python -m submit submit <family>/case<N> --dry-run`
-- リモート: stage `{stage_name or 「Vast.ai 不要」}`、想定所要時間 {if known}
+- リモート: `dev/runpod train --case {caseN or 「RunPod 不要」}`、想定所要時間 {if known}
 - 評価: 対戦相手 {opponents}、エピソード数 {N} ({rationale})、主要メトリクス {metric}、採否しきい値 {threshold}
 
 ## 参考 (References) — Step 3 を実施した場合のみ
@@ -172,7 +172,7 @@ After writing the file, report to the user (in Japanese):
 - Path of the written `plan.md`
 - A 2–3 line summary of the locked decisions (hypothesis, primary metric, compute target)
 - One-line offer of next steps:
-  - `/experiment-execution` でこの plan に従って実装 → ローカル検証 → Vast.ai 学習を回せます
+  - `/experiment-execution` でこの plan に従って実装 → ローカル検証 → RunPod 学習を回せます
   - もしくは plan.md を直接編集して再レビューも可能です
 
 Do **not** auto-spawn `experiment-execution`. The user explicitly came in for planning; they'll trigger execution themselves if/when ready.
@@ -182,7 +182,7 @@ Do **not** auto-spawn `experiment-execution`. The user explicitly came in for pl
 - **Never offer Kaggle publicScore as a metric.** Opponent pool drift makes it noise. Local match outcomes only.
 - **Pre-fill ≥300 episodes for fragile claims.** n<300 self-play is not trustworthy for adoption decisions on this project.
 - **Iteration directory hygiene.** When the same hypothesis already has a directory, the plan goes in as `iterN_plan.md`. Gently push back if the user asks for a new directory; comply if they insist.
-- **Don't run any execution-side command.** No `dev/test-backend`, no `dev/vast train`, no `uv run pytest`, no `git commit`. The skill is read-only on code; it only writes the plan (and the `Step 3` web research is read-only).
+- **Don't run any execution-side command.** No `dev/test-backend`, no `dev/runpod train`, no `uv run pytest`, no `git commit`. The skill is read-only on code; it only writes the plan (and the `Step 3` web research is read-only).
 - **Time-box web research.** If Step 3 takes more than ~5 minutes of tool calls, recommend `/research-retrieval` for the deep dive and stop.
 
 ## Common shapes

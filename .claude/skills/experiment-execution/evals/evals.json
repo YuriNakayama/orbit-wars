@@ -3,20 +3,20 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "imitation/case1 で dropout を 0.2 から 0.3 に上げて再学習する実験をやりたい。LB1235 baseline 相手の win-rate 改善を狙う。plan.md を書いてコードを変更し、ローカルで pytest を回してから vast.ai で学習を走らせて、結果を result.md にまとめてほしい。",
-      "expected_output": "Skill clarifies (≤1-2 questions) that this is iter on existing case1 + Vast.ai full run, then spawns experimenter agent via Task with: family=imitation, case=case1, hypothesis verbatim, branch+SHA from Phase 2, non-goals (no Kaggle submit, no dev/vast promote). After agent returns, surfaces plan.md path, pytest status, run_id, ETA in Japanese.",
+      "prompt": "imitation/case1 で dropout を 0.2 から 0.3 に上げて再学習する実験をやりたい。LB1235 baseline 相手の win-rate 改善を狙う。plan.md を書いてコードを変更し、ローカルで pytest を回してから runpod で学習を走らせて、結果を result.md にまとめてほしい。",
+      "expected_output": "Skill clarifies (≤1-2 questions) that this is iter on existing case1 + RunPod full run, then spawns experimenter agent via Task with: family=imitation, case=case1, hypothesis verbatim, branch+SHA from Phase 2, non-goals (no Kaggle submit, no dev/runpod promote). After agent returns, surfaces plan.md path, pytest status, run_id, ETA in Japanese.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "rulebase/case2 を改良する新しい実験を立ち上げたい。harass policy を加えて comet 周りで挑発する戦術を試す。まず plan.md だけ書いてレビューさせてほしい。実装と vast はまだ動かさないで。",
-      "expected_output": "Skill recognizes scope = plan.md only (no impl, no Vast), skips Vast confirmation question, spawns experimenter agent with explicit non-goals: 'do not implement code', 'do not run dev/vast train', 'only write plan.md under docs/experiment/rulebase/<yyyymmdd>_case2_<topic>/'. Agent returns plan.md path; skill reports it in Japanese without launching anything else.",
+      "prompt": "rulebase/case2 を改良する新しい実験を立ち上げたい。harass policy を加えて comet 周りで挑発する戦術を試す。まず plan.md だけ書いてレビューさせてほしい。実装と runpod はまだ動かさないで。",
+      "expected_output": "Skill recognizes scope = plan.md only (no impl, no RunPod), skips RunPod confirmation question, spawns experimenter agent with explicit non-goals: 'do not implement code', 'do not run dev/runpod train', 'only write plan.md under docs/experiment/rulebase/<yyyymmdd>_case2_<topic>/'. Agent returns plan.md path; skill reports it in Japanese without launching anything else.",
       "files": []
     },
     {
       "id": 3,
-      "prompt": "さっき vast.ai で回した run_20260501_abc123 の結果を docs にまとめてほしい。imitation/case1 の iter4 として記録したい。",
-      "expected_output": "Skill skips Phase 1 hypothesis questions and Phase 2 git checks (already past planning), spawns experimenter agent in eval/report-only mode with run_id=run_20260501_abc123, family=imitation, case=case1, iteration=iter4. Agent pulls artifacts via dev/vast pull, runs local evaluation, writes iter4_result.md under the existing experiment directory, and returns a Japanese summary with win-rate numbers and adoption recommendation.",
+      "prompt": "さっき runpod で回した run_20260501_abc123 の結果を docs にまとめてほしい。imitation/case1 の iter4 として記録したい。",
+      "expected_output": "Skill skips Phase 1 hypothesis questions and Phase 2 git checks (already past planning), spawns experimenter agent in eval/report-only mode with run_id=run_20260501_abc123, family=imitation, case=case1, iteration=iter4. Agent pulls artifacts via dev/runpod pull, runs local evaluation, writes iter4_result.md under the existing experiment directory, and returns a Japanese summary with win-rate numbers and adoption recommendation.",
       "files": []
     }
   ]
