@@ -30,7 +30,9 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -272,6 +274,47 @@ def _iter_episode_frames(
     return out, fired_total, outside_total
 
 
+@dataclass(frozen=True)
+class _EpisodeResult:
+    bucket: str  # "train" | "val"
+    frames: list[dict[str, Any]]
+    fired: int
+    outside: int
+    skip_reason: str | None  # None | "no_slots" | "no_replay" | "no_frames"
+
+
+def _process_episode(
+    rec: dict[str, Any],
+    base_dir: Path,
+    val_split: float,
+    num_player_slots: int,
+) -> _EpisodeResult:
+    """Worker: process one episode record into frames.
+
+    Pure function (importable / picklable). Returns a single result.
+    """
+    if num_player_slots == 0 or rec.get("draw"):
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
+        )
+    slots = list(range(num_player_slots))
+    rp = rec.get("replay_path") or ""
+    replay_path = (base_dir / rp).resolve() if rp else None
+    if replay_path is None or not replay_path.exists():
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
+        )
+    frames, fired, outside = _iter_episode_frames(replay_path, slots)
+    if not frames:
+        return _EpisodeResult(
+            bucket="", frames=[], fired=fired, outside=outside, skip_reason="no_frames"
+        )
+    bucket = _split_episode(str(rec["match_id"]), val_split)
+    return _EpisodeResult(
+        bucket=bucket, frames=frames, fired=fired, outside=outside, skip_reason=None
+    )
+
+
 def _filter_index(
     index: pl.DataFrame,
     modes: list[str],
@@ -431,32 +474,102 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             remaining,
         )
 
+    workers_env = os.environ.get("ORBIT_WARS_PREPROCESS_WORKERS")
+    if workers_env is not None:
+        max_workers = max(0, int(workers_env))
+    else:
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
+    # inflight cap = 4x workers — bounds memory of pending future results
+    inflight_cap = max(4, max_workers * 4)
+    logger.info(
+        "preprocess case8 parallel: workers=%d inflight_cap=%d (override via "
+        "ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
+        max_workers,
+        inflight_cap,
+    )
+
+    def _consume_result(result: _EpisodeResult) -> None:
+        nonlocal kept, fired_total, outside_total
+        nonlocal skipped_no_slots, skipped_no_replay, skipped_no_frames
+        if result.skip_reason == "no_slots":
+            skipped_no_slots += 1
+            return
+        if result.skip_reason == "no_replay":
+            skipped_no_replay += 1
+            return
+        if result.skip_reason == "no_frames":
+            skipped_no_frames += 1
+            fired_total += result.fired
+            outside_total += result.outside
+            return
+        writer = val_writer if result.bucket == "val" else train_writer
+        for frame in result.frames:
+            writer.append(frame)
+        kept += 1
+        fired_total += result.fired
+        outside_total += result.outside
+
     try:
-        for processed, rec in enumerate(rows, start=1):
-            try:
-                slots = _player_slots(rec, _num_player_slots(rec, modes))
-                if not slots:
-                    skipped_no_slots += 1
-                    continue
-                rp = rec.get("replay_path") or ""
-                replay_path = (base_dir / rp).resolve() if rp else None
-                if replay_path is None or not replay_path.exists():
-                    skipped_no_replay += 1
-                    continue
-                frames, fired, outside = _iter_episode_frames(replay_path, slots)
-                if not frames:
-                    skipped_no_frames += 1
-                    continue
-                bucket = _split_episode(str(rec["match_id"]), val_split)
-                writer = val_writer if bucket == "val" else train_writer
-                for frame in frames:
-                    writer.append(frame)
-                kept += 1
-                fired_total += fired
-                outside_total += outside
-            finally:
-                if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
-                    _log_progress(processed)
+        if max_workers <= 1:
+            # Serial path — same behavior as the original single-process loop.
+            for processed, rec in enumerate(rows, start=1):
+                try:
+                    result = _process_episode(
+                        rec, base_dir, val_split, _num_player_slots(rec, modes)
+                    )
+                    _consume_result(result)
+                finally:
+                    if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
+                        _log_progress(processed)
+        else:
+            with ProcessPoolExecutor(max_workers=max_workers) as pool:
+                in_iter = iter(enumerate(rows, start=1))
+                inflight: dict[Any, int] = {}
+
+                def _submit_next() -> bool:
+                    try:
+                        idx, rec = next(in_iter)
+                    except StopIteration:
+                        return False
+                    fut = pool.submit(
+                        _process_episode,
+                        rec,
+                        base_dir,
+                        val_split,
+                        _num_player_slots(rec, modes),
+                    )
+                    inflight[fut] = idx
+                    return True
+
+                # prime the pool up to inflight_cap
+                for _ in range(inflight_cap):
+                    if not _submit_next():
+                        break
+
+                completed = 0
+                while inflight:
+                    for fut in as_completed(list(inflight)):
+                        idx = inflight.pop(fut)
+                        try:
+                            result = fut.result()
+                            _consume_result(result)
+                        except Exception:
+                            logger.exception(
+                                "preprocess worker failed on episode idx=%d", idx
+                            )
+                            skipped_no_frames += 1
+                        completed += 1
+                        if (
+                            completed % PROGRESS_LOG_EVERY == 0
+                            or completed == n_to_process
+                        ):
+                            _log_progress(completed)
+                        # Refill so total inflight stays at inflight_cap
+                        _submit_next()
+                        # Re-poll as_completed after refill so that newly
+                        # submitted futures also enter the wait set; break the
+                        # inner loop and re-check the outer `while inflight`.
+                        break
     finally:
         logger.info(
             "preprocess case8 closing parquet writers: "
