@@ -53,7 +53,8 @@ h'_i = ReLU( W_o · concat_h(Σ_j α_ij W_v h_j) )
 ### DVC 経由
 
 ```bash
-uv run --directory bot dvc repro preprocess_imitation_case6
+# case6 は case5 と featurizer 同一なので preprocess は case5 stage で済ませる。
+uv run --directory bot dvc repro preprocess_imitation_case5
 uv run --directory bot dvc repro train_imitation_case6
 ```
 
@@ -62,10 +63,10 @@ uv run --directory bot dvc repro train_imitation_case6
 ```bash
 cd bot
 
-# 1) 前処理
-uv run python -m pipeline.imitation.case6.training.preprocess --config pipeline/imitation/case6/configs/il_case6.yaml
+# 1) 前処理 (case5 の preprocess で兼用、parquet は data/mart/imitation/case5/ に出る)
+uv run python -m pipeline.imitation.case5.training.preprocess --config pipeline/imitation/case5/configs/il_case5.yaml
 
-# 2) 学習
+# 2) 学習 (案件は data/mart/imitation/case5/{train,val}.parquet を読む)
 uv run python -m pipeline.imitation.case6.training.train --config pipeline/imitation/case6/configs/il_case6.yaml
 
 # 3) ローカル評価 (vs baseline_v1)

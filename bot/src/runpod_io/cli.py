@@ -124,9 +124,12 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "stage": "train_imitation_case6",
         "train_module": "pipeline.imitation.case6.training.train",
         "config_arg": "--config pipeline/imitation/case6/configs/il_case6.yaml",
+        # case6 は case5 と featurizer 完全同一なので case5 の preprocess を流用。
+        # 出力先 (data/mart/imitation/case5/) も il_case6.yaml で case5 にしている。
+        # case5 が DVC キャッシュ済なら preprocess はスキップ、初回でも 1 回だけ走る。
         "preprocess_cmd": (
-            "pipeline.imitation.case6.training.preprocess "
-            "--config pipeline/imitation/case6/configs/il_case6.yaml"
+            "pipeline.imitation.case5.training.preprocess "
+            "--config pipeline/imitation/case5/configs/il_case5.yaml"
         ),
         "canonical_weights": "bot/pipeline/imitation/case6/policy/weights.pt",
     },
