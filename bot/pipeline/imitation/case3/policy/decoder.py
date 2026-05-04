@@ -20,7 +20,14 @@ from typing import Any
 import torch
 
 from .featurizer_phase2 import MAX_PLANETS
-from .geometry import Planet, aim_with_prediction
+from .geometry import LAUNCH_CLEARANCE, Planet, aim_with_prediction
+from .safety import (
+    SafetyPlanet,
+    fleet_crosses_other_comet,
+    intercept_holds_within_tolerance,
+    is_trajectory_sun_safe,
+    target_reachable_before_comet_expiry,
+)
 from .templates import T_NO_OP, resolve_template
 from .types import PolicyOutput, WorldSnapshot
 
@@ -28,6 +35,65 @@ NO_OP_LABEL = MAX_PLANETS
 
 # bucket index → fraction of source ships to send (4 buckets, midpoints)
 SHIPS_BUCKET_FRACTIONS: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0)
+
+
+def _safety_planet(p: Planet) -> SafetyPlanet:
+    return SafetyPlanet(
+        id=p.id,
+        owner=p.owner,
+        x=p.x,
+        y=p.y,
+        radius=p.radius,
+        ships=p.ships,
+        production=p.production,
+    )
+
+
+def _is_action_safe(
+    src: Planet,
+    target: Planet,
+    ships: int,
+    angle: float,
+    turns: int,
+    intercept_pos: tuple[float, float],
+    initial_by_id: dict[int, Planet],
+    ang_vel: float,
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
+    step: int,
+) -> bool:
+    """Apply the four post-aim safety filters; return True iff all pass."""
+    # Launch point is just outside the source's radius along the firing angle.
+    clearance = src.radius + LAUNCH_CLEARANCE
+    launch_x = src.x + math.cos(angle) * clearance
+    launch_y = src.y + math.sin(angle) * clearance
+    if not is_trajectory_sun_safe(launch_x, launch_y, angle, turns, ships):
+        return False
+    safety_initial = {pid: _safety_planet(p) for pid, p in initial_by_id.items()}
+    if not intercept_holds_within_tolerance(
+        target=_safety_planet(target),
+        predicted_turns=turns,
+        predicted_pos=intercept_pos,
+        initial_by_id=safety_initial,
+        ang_vel=ang_vel,
+        comets=comets,
+        comet_ids=comet_ids,
+    ):
+        return False
+    if not target_reachable_before_comet_expiry(target.id, turns, comets):
+        return False
+    if fleet_crosses_other_comet(
+        launch_x=launch_x,
+        launch_y=launch_y,
+        angle=angle,
+        turns=turns,
+        ships=ships,
+        current_step=step,
+        comets=comets,
+        exclude_planet_id=target.id,
+    ):
+        return False
+    return True
 
 
 def _build_planet(row: list[Any]) -> Planet:
@@ -184,6 +250,22 @@ def decode(
         )
         if aim is None:
             continue
+        angle, turns, ix, iy = aim
+        step = int(obs.get("step") or 0)
+        if not _is_action_safe(
+            src=src,
+            target=target,
+            ships=ships,
+            angle=angle,
+            turns=turns,
+            intercept_pos=(ix, iy),
+            initial_by_id=initial_by_id,
+            ang_vel=ang_vel,
+            comets=comets,
+            comet_ids=comet_ids,
+            step=step,
+        ):
+            continue
         committed[target_pid] = committed.get(target_pid, 0) + ships
-        actions.append([src_pid, float(aim[0]), int(ships)])
+        actions.append([src_pid, float(angle), int(ships)])
     return actions
