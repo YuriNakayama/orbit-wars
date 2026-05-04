@@ -73,28 +73,10 @@ stages:
     outs:
       - bot/pipeline/imitation/case5/policy/weights.pt
 
-  preprocess_imitation_case8:
-    cmd: uv run --directory bot python -m pipeline.imitation.case8.training.preprocess --config pipeline/imitation/case8/configs/il_case8.yaml
-    deps:
-      - data/lake/kaggle_episodes/matches
-      - bot/pipeline/imitation/case8/training/preprocess.py
-      - bot/pipeline/imitation/case8/policy/featurizer.py
-      - bot/pipeline/imitation/case8/policy/candidates.py
-      - bot/pipeline/imitation/case8/policy/geometry.py
-      - bot/pipeline/imitation/case8/configs/il_case8.yaml
-    outs:
-      - data/mart/imitation/case8/train.parquet
-      - data/mart/imitation/case8/val.parquet
-
-  train_imitation_case8:
-    cmd: uv run --directory bot python -m pipeline.imitation.case8.training.train --config pipeline/imitation/case8/configs/il_case8.yaml
-    deps:
-      - data/mart/imitation/case8/train.parquet
-      - data/mart/imitation/case8/val.parquet
-      - bot/pipeline/imitation/case8/training/train.py
-      - bot/pipeline/imitation/case8/training/losses.py
-      - bot/pipeline/imitation/case8/training/dataset.py
-      - bot/pipeline/imitation/case8/policy/model.py
-      - bot/pipeline/imitation/case8/configs/il_case8.yaml
-    outs:
-      - bot/pipeline/imitation/case8/policy/weights.pt
+  # case8 の preprocess / train stage は onstart が直接 python module を
+  # 呼び出して実行するため dvc.yaml には登録しない。stage に outs を宣言すると
+  # onstart の `dvc add data/mart/imitation/case8/*.parquet` が
+  # "overlaps with an output of stage" で拒否されるため。
+  # case5 と同等の pathway: stage 未登録、onstart 内部で preprocess → dvc add
+  # → dvc push、parquet.dvc stub と weights.pt.dvc stub が git に push される
+  # 仕組み。手動 `dvc repro` 用途は当面想定しない。
