@@ -72,3 +72,29 @@ stages:
       - bot/pipeline/imitation/case5/configs/il_case5.yaml
     outs:
       - bot/pipeline/imitation/case5/policy/weights.pt
+
+  preprocess_imitation_case8:
+    cmd: uv run --directory bot python -m pipeline.imitation.case8.training.preprocess --config pipeline/imitation/case8/configs/il_case8.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case8/training/preprocess.py
+      - bot/pipeline/imitation/case8/policy/featurizer.py
+      - bot/pipeline/imitation/case8/policy/candidates.py
+      - bot/pipeline/imitation/case8/policy/geometry.py
+      - bot/pipeline/imitation/case8/configs/il_case8.yaml
+    outs:
+      - data/mart/imitation/case8/train.parquet
+      - data/mart/imitation/case8/val.parquet
+
+  train_imitation_case8:
+    cmd: uv run --directory bot python -m pipeline.imitation.case8.training.train --config pipeline/imitation/case8/configs/il_case8.yaml
+    deps:
+      - data/mart/imitation/case8/train.parquet
+      - data/mart/imitation/case8/val.parquet
+      - bot/pipeline/imitation/case8/training/train.py
+      - bot/pipeline/imitation/case8/training/losses.py
+      - bot/pipeline/imitation/case8/training/dataset.py
+      - bot/pipeline/imitation/case8/policy/model.py
+      - bot/pipeline/imitation/case8/configs/il_case8.yaml
+    outs:
+      - bot/pipeline/imitation/case8/policy/weights.pt
