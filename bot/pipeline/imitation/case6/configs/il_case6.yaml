@@ -7,10 +7,9 @@ seed: 0
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
   replay_dir: data/lake/kaggle_episodes/matches/replays
-  # case6 と case5 は featurizer 完全同一 (PLANET_FEAT_DIM=17) なので
-  # parquet を共有して二重 preprocess を回避する。
-  out_train: data/mart/imitation/case5/train.parquet
-  out_val: data/mart/imitation/case5/val.parquet
+  # case 独立性原則 (.claude/rules/bot/pipeline.md) に従い case6 専用パスを持つ。
+  out_train: data/mart/imitation/case6/train.parquet
+  out_val: data/mart/imitation/case6/val.parquet
   rating_quantile: 0.50
   val_split: 0.10
   modes: ["1v1"]

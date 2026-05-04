@@ -345,7 +345,11 @@ if ! uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc; then
   mark "45_dvc_pull_kaggle_failed"
   exit 1
 fi
-if ! uv run --project bot dvc pull; then
+# --allow-missing: dvc.yaml stage の outs が S3 にまだ無い (= 未学習の case の weights.pt
+# などが orphan stub として残っている) ケースで FAIL せず WARNING に降格させる。
+# memory `project_runpod_onstart_pitfalls` の典型 trap (新規 case で他 case stage の
+# 未走行 outs に巻き込まれる)。kaggle_episodes 側は明示 path で pull するので影響なし。
+if ! uv run --project bot dvc pull --allow-missing; then
   echo "[onstart] dvc pull (full) FAILED" >&2
   mark "45_dvc_pull_full_failed"
   exit 1
