@@ -109,17 +109,36 @@ class CaseFourDataset(Dataset[Sample]):
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
-        """Effective-number-of-samples class weights over cand_slot labels."""
+        """Effective-number-of-samples class weights over cand_slot labels.
+
+        Effective-number 公式 `(1 - beta^n) / (1 - beta)` は n が大きいと
+        beta^n → 0 で飽和し、すべての class について `~ (1-beta)` という
+        ほぼ同じ値を返す。本番 (n_slot ~ 数百万) で実際にこれが起き、
+        weights が `[1, 1, ..., 1]` に縮退して loss が `cross_entropy` から
+        Inf を吐き、backprop で全 param が NaN/Inf になっていた。
+
+        修正: 数値安定 + 縮退回避のため inverse-frequency weight を採用。
+        各 class i について `w_i = total_present / (counts[i] * num_present)`
+        を計算する。これは:
+          - counts が大きい class は w が小さく
+          - counts が小さい (rare) class は w が大きい
+          - counts==0 (= train data に未出現) の class は 0 で除外
+          - 全 present class 平均が 1.0 になるよう正規化
+        beta は API 互換性のため受け取るが現状未使用 (将来の effective-number
+        ハイブリッドで再活用余地あり)。
+        """
+        del beta  # unused; kept for backward compat
         flat = self._cand_slot_per_src.reshape(-1)
         flat = flat[flat != ignore_index]
         counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
-        eff_num = (1.0 - np.power(beta, counts)) / (1.0 - beta)
-        eff_num = np.clip(eff_num, 1.0, None)
-        weights = (1.0 - beta) / np.clip(1.0 - np.power(beta, counts), 1e-12, None)
-        weights = np.where(counts > 0, weights, 0.0)
-        present = np.sum(counts > 0)
-        denom = max(weights.sum(), 1e-12)
-        weights = weights * (max(present, 1) / denom)
+        present_mask = counts > 0
+        if not present_mask.any():
+            return torch.ones(num_classes, dtype=torch.float32)
+        # inverse-frequency, then normalize so present classes average to 1.0
+        raw = np.zeros(num_classes, dtype=np.float64)
+        raw[present_mask] = 1.0 / counts[present_mask]
+        mean_raw = float(raw[present_mask].mean())
+        weights = raw / max(mean_raw, 1e-12)
         return torch.tensor(weights, dtype=torch.float32)
 
     def __len__(self) -> int:

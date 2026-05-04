@@ -2,12 +2,12 @@
 name: experiment-analysis
 description: >
   Interactive post-mortem skill for finished Orbit Wars experiments. Reads an
-  existing `result.md` (or freshly-pulled Vast.ai run artifacts) under
+  existing `result.md` (or freshly-pulled RunPod run artifacts) under
   `docs/experiment/{family}/`, walks the user through hypothesis-vs-outcome
   comparison, statistical significance checks, replay/seed drill-downs, and
   failure-mode pattern extraction via `AskUserQuestion`, then writes
   `analysis.md` (or `iterN_analysis.md`) capturing conclusions and proposing
-  next-experiment hooks. Read-only on code: does NOT re-train, NOT launch Vast,
+  next-experiment hooks. Read-only on code: does NOT re-train, NOT launch RunPod,
   NOT edit `backend/pipeline/`. Use whenever the user types
   `/experiment-analysis`, or asks to interpret / dig into / discuss / explain
   a finished experiment result — phrases like "iter9 の結果なんで負けてるか
@@ -21,7 +21,7 @@ description: >
 
 # Experiment Analysis Skill (Orbit Wars)
 
-Interactive post-mortem for an experiment whose `result.md` already exists (or whose Vast.ai run just finished and the user wants to think through the numbers). The skill is the dialog layer between the user and a pile of metrics / replays / artifacts. It produces an `analysis.md` that captures interpretation and points at the next experiment.
+Interactive post-mortem for an experiment whose `result.md` already exists (or whose RunPod run just finished and the user wants to think through the numbers). The skill is the dialog layer between the user and a pile of metrics / replays / artifacts. It produces an `analysis.md` that captures interpretation and points at the next experiment.
 
 ## When this skill is in charge
 
@@ -38,10 +38,10 @@ If the user wants a **new experiment from scratch** → `experiment-plan`. **Re-
 
 ## Scope boundaries (what this skill does NOT do)
 
-- Does not run `dev/test-backend`, `dev/vast train`, `dev/vast promote`, or any submission command.
+- Does not run `dev/test-backend`, `dev/runpod train`, `dev/runpod promote`, or any submission command.
 - Does not edit code under `backend/pipeline/<family>/case<N>/`. May read it for context, never write.
 - Does not commit or push.
-- Read-only `dev/vast pull <run_id>` is allowed (it's how artifacts get to the local tree). `dvc pull` for missing artifacts is also allowed. Anything mutating beyond that needs explicit user confirmation per `.claude/rules/command.md`.
+- Read-only `dev/runpod pull <run_id>` is allowed (it's how artifacts get to the local tree). `dvc pull` for missing artifacts is also allowed. Anything mutating beyond that needs explicit user confirmation per `.claude/rules/command.md`.
 - Does not auto-spawn `experiment-execution`. The skill ends with a written `analysis.md` and an offer of next steps.
 
 ## Skill flow
@@ -54,11 +54,11 @@ Resolve which experiment is being analyzed. Two starting points:
 
 **A. The user named a result.md path or experiment directory.** Read `result.md` (or `iterN_result.md`) directly. If it doesn't exist yet but the directory does, ask whether to write an analysis on the **most recent** existing result file in that directory.
 
-**B. The user named a Vast.ai run_id but no result.md exists yet.** Run `dev/vast pull <run_id>` (read-only) to fetch artifacts to `data/output/models/<family>/case<N>/runs/<run_id>/`. If `result.md` should exist but doesn't, redirect: `experiment-execution` is the right path for the first write of `result.md`. Analysis comes after.
+**B. The user named a RunPod run_id but no result.md exists yet.** Run `dev/runpod pull <run_id>` (read-only) to fetch artifacts to `data/output/models/<family>/case<N>/runs/<run_id>/`. If `result.md` should exist but doesn't, redirect: `experiment-execution` is the right path for the first write of `result.md`. Analysis comes after.
 
 If neither is given, do a quick `ls docs/experiment/{imitation,rulebase,reinforce}/` and surface the 5 most recent directories via `AskUserQuestion` for the user to pick.
 
-Do **not** pull data the user didn't ask for. Pulling is a side effect, even if read-only — confirm before `dev/vast pull` if it's not already implied by the user's request.
+Do **not** pull data the user didn't ask for. Pulling is a side effect, even if read-only — confirm before `dev/runpod pull` if it's not already implied by the user's request.
 
 ### Phase 2 — Read context
 
@@ -142,7 +142,7 @@ Write the file with these sections — **keep it ≤ one screen unless the user 
 
 ## 採否判断
 - 本実験の構成: 採用 / 不採用 / さらに iter
-- (採用なら) `dev/vast promote <run_id>` 実行可否は別途ユーザー確認が必要
+- (採用なら) `dev/runpod promote <run_id>` 実行可否は別途ユーザー確認が必要
 ```
 
 Write directly with `Write` (or `Edit` for renames). Do not delegate to the `experimenter` agent — the analysis is interactive output, marshalling through Task adds latency.
@@ -155,7 +155,7 @@ After writing, report to the user (in Japanese):
 - 2–3 line summary of the verdict and top finding
 - One-line offer of next steps, specific to what was decided:
   - If `next experiment hooks` is non-empty: `/experiment-plan` で次の iter の plan を書き起こせます
-  - If verdict was "adopt": 必要なら `dev/vast promote <run_id>` を実行（要明示確認）
+  - If verdict was "adopt": 必要なら `dev/runpod promote <run_id>` を実行（要明示確認）
   - If verdict was "needs more episodes": `/experiment-execution` で同じ commit から n を増やして再評価できます
   - If the user surfaced a project-level finding: 必要なら memory に記録します（auto-memory プロトコルに従う）
 
@@ -179,10 +179,10 @@ Bias toward not adding memory unless the finding is durable and load-bearing for
 ## Risk gates this skill enforces
 
 - **Read-only on code**. Never edit `backend/pipeline/`, never re-train, never push, never submit. The only mutating action allowed is writing the `analysis.md` file (and the optional `iter1_*.md` rename).
-- **Confirm before `dev/vast pull`**. Even though it's read-only on remote state, it changes the local file tree. Confirm if the user didn't already imply it.
+- **Confirm before `dev/runpod pull`**. Even though it's read-only on remote state, it changes the local file tree. Confirm if the user didn't already imply it.
 - **n<300 caveat**. When the user is about to declare "the experiment worked" based on a 100-episode result, surface the project memory: 100戦は seed variance に飲まれる可能性が高い。
 - **Kaggle publicScore is not evidence**. If `result.md` cites it, flag the citation as unreliable; do not let it influence the verdict.
-- **Don't propose `dev/vast promote` autonomously**. If the analysis concludes "adopt", recommend that the user run `dev/vast promote <run_id>` themselves with explicit confirmation — promotion overwrites canonical weights.
+- **Don't propose `dev/runpod promote` autonomously**. If the analysis concludes "adopt", recommend that the user run `dev/runpod promote <run_id>` themselves with explicit confirmation — promotion overwrites canonical weights.
 - **Memory writes need confirmation**. Per the auto-memory protocol, project-level findings get memoryized only when the user confirms.
 
 ## Common shapes
@@ -190,7 +190,7 @@ Bias toward not adding memory unless the finding is durable and load-bearing for
 | User says… | Skill behavior |
 |---|---|
 | "iter9 の result.md なんで負けてるのか分析して" | Phase 1 locates `docs/experiment/imitation/<dir>/iter9_result.md`, Phase 2 reads it + `iter9_plan.md`. Round 1 covers verdict + statistical reliability + opponent-pool. Round 2 drills into action distribution / passive gating / target diversity. Writes `iter9_analysis.md` (or `analysis.md` if directory has no iter scheme). |
-| "さっき pull した run_xxx の結果分析して" | Phase 1 confirms `dev/vast pull` already ran (check artifacts exist locally); if not, asks user to pull first or do it with confirmation. Then Phases 2–5 normally on the matching `result.md`. If `result.md` doesn't exist yet, redirect to `experiment-execution`. |
+| "さっき pull した run_xxx の結果分析して" | Phase 1 confirms `dev/runpod pull` already ran (check artifacts exist locally); if not, asks user to pull first or do it with confirmation. Then Phases 2–5 normally on the matching `result.md`. If `result.md` doesn't exist yet, redirect to `experiment-execution`. |
 | "case2 の ablation 結果、harass+half_step 採用していい?" | Phase 2 reads the ablation `result.md`, surfaces 300戦 50.7% (+1.4pp 非有意) headline. Round 1 verdict → likely "inconclusive (variance)". Round 2 drills into seed variance vs. real signal. Writes `analysis.md` recommending "実装維持、構造改修が次のフック"。 |
 | "loss seed=0 の replay 詳しく見て敗因まとめて" | Phase 1 finds the replay path under `data/lake/selfplay/matches/` or `data/output/...`. Reads it, decodes turn-by-turn state. Round 1 covers the failure pattern; Round 2 generalizes (is it specific to seed=0 or systemic?). Writes a focused `analysis.md` with the trace table + diagnosis. |
 | "結果踏まえて次どうすべき?" (vague) | Phase 1 asks which experiment via AskUserQuestion (list 5 most recent dirs). Then standard flow. |
@@ -202,7 +202,7 @@ Bias toward not adding memory unless the finding is durable and load-bearing for
 - Declaring a result "significant" without checking n and Wilson CI.
 - Being optimistic about a 100-episode result. Default to "inconclusive" until n≥300 evidence shows up.
 - Writing a long-form report when a one-screen analysis suffices. Brevity > comprehensiveness for these documents.
-- Auto-running `dev/vast promote` after concluding "adopt". Promotion overwrites canonical weights and needs explicit user confirmation per `.claude/rules/command.md`.
+- Auto-running `dev/runpod promote` after concluding "adopt". Promotion overwrites canonical weights and needs explicit user confirmation per `.claude/rules/command.md`.
 - Auto-spawning `experiment-plan` or `experiment-execution` after the analysis. Always wait for explicit user follow-up.
 - Creating a new directory for the analysis. It always goes in the same directory as the `result.md` being analyzed.
 

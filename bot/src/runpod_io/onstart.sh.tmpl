@@ -233,11 +233,27 @@ if [ -d /persist ]; then
   mkdir -p .dvc
   rm -rf .dvc/cache 2>/dev/null || true
   ln -sfn /persist/dvc-cache .dvc/cache
+  # bot/.venv を /persist/uv-venv-bot に symlink。uv は venv の
+  # python 絶対 path を pyvenv.cfg に焼き込むので、persist 側で venv を作る
+  # ことで再起動後も再利用できる。lock 不変なら uv sync は no-op に近い。
+  # DVC では管理しない (依存情報は uv.lock が source of truth)。
+  mkdir -p /persist/uv-venv-bot
+  if [ -L bot/.venv ]; then
+    : # already linked
+  elif [ -d bot/.venv ]; then
+    # 既存 venv (古い ephemeral 由来) は破棄して symlink に置換
+    rm -rf bot/.venv
+    ln -sfn /persist/uv-venv-bot bot/.venv
+  else
+    ln -sfn /persist/uv-venv-bot bot/.venv
+  fi
   # data/ は git tree から復元される (各種 .dvc stub を含む)。
   # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
   # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
   # matches.dvc の path=matches なので data/lake/<src>/matches がそれ。
-  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart/imitation
+  # data/lake/{kaggle_episodes,selfplay} と data/mart の親 dir のみ作る
+  # (末端 dir は symlink にする想定なので mkdir しない)。
+  mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart
   mkdir -p /persist/lake-kaggle-matches /persist/lake-selfplay-matches \
            /persist/data-mart-imitation
   # data/lake/<src>/matches だけを symlink で persist 化 (raw episodes の本体)
@@ -247,9 +263,36 @@ if [ -d /persist ]; then
   if [ ! -L data/lake/selfplay/matches ] && [ ! -d data/lake/selfplay/matches ]; then
     ln -sfn /persist/lake-selfplay-matches data/lake/selfplay/matches
   fi
-  # data/mart/imitation/<case> は dvc 出力なので直接 symlink で OK
-  if [ ! -L data/mart/imitation ] && [ ! -d data/mart/imitation ]; then
+  # data/mart/imitation 全体を /persist/data-mart-imitation に symlink。
+  # この時点で git tree からは復元されていない (新規 case の場合) か、
+  # 復元されていたとしても .dvc stub のみなので symlink で問題ない。
+  # 既に dir として実体がある (例: 過去 run の遺物) 場合は中身を /persist に
+  # 引っ越してから symlink (再起動で持続化される ⇒ 次回以降 dvc pull が冪等)。
+  if [ -L data/mart/imitation ]; then
+    : # already linked
+  elif [ -d data/mart/imitation ]; then
+    # 既存 dir の中身を /persist にマージしてから symlink に置換
+    cp -an data/mart/imitation/. /persist/data-mart-imitation/ 2>/dev/null || true
+    rm -rf data/mart/imitation
     ln -sfn /persist/data-mart-imitation data/mart/imitation
+  else
+    ln -sfn /persist/data-mart-imitation data/mart/imitation
+  fi
+
+  # data/output/models/imitation も /persist に持続化。
+  # train artifact の正本は DVC + S3 (`step=dvc_add_run` で push 済み) だが、
+  # 学習中に pod が落ちた場合の checkpoint 救出や、複数 run の train.log /
+  # gpu.log を残しておきたいケースに有用。サイズ管理は cost-report で観測。
+  mkdir -p data/output/models /persist/data-output-models-imitation
+  if [ -L data/output/models/imitation ]; then
+    : # already linked
+  elif [ -d data/output/models/imitation ]; then
+    cp -an data/output/models/imitation/. /persist/data-output-models-imitation/ \
+      2>/dev/null || true
+    rm -rf data/output/models/imitation
+    ln -sfn /persist/data-output-models-imitation data/output/models/imitation
+  else
+    ln -sfn /persist/data-output-models-imitation data/output/models/imitation
   fi
 fi
 
@@ -264,6 +307,14 @@ fi
 
 mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
+# venv が persist 経由で残っているかを log に残す。lock 不変なら uv sync は
+# 「何もしない」ので、この行は分単位の高速化指標として後段の解析に役立つ。
+if [ -L bot/.venv ] && [ -f bot/.venv/pyvenv.cfg ]; then
+  echo "[onstart] uv venv reuse: bot/.venv -> $(readlink bot/.venv) (pre-existing)"
+else
+  echo "[onstart] uv venv fresh: building bot/.venv from scratch"
+fi
+UV_SYNC_START=$(date +%s)
 for attempt in 1 2 3; do
   if uv sync --locked --no-dev --directory bot; then
     break
@@ -275,6 +326,8 @@ for attempt in 1 2 3; do
     exit 1
   fi
 done
+UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
+echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s"
 
 mark "40_uv_sync_done"
 echo "[onstart] step=dvc_pull cwd=$(pwd)"
@@ -306,14 +359,129 @@ echo "[onstart] step=mkdir_run"
 RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
+PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
+  # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
+  # `.dvc` stub は git にあるが本体 blob が S3 にない (orphan) ケースで
+  # `data/mart/imitation/<CASE>/*.parquet` が dangling symlink として
+  # 残ることがある。`find -name '*.parquet'` は dangling symlink も拾うので
+  # `-xtype f` で「symlink を辿った先が file かつ存在」のみ採用、さらに
+  # `-size +0c` で 0 byte を弾く (DVC cache 経由なら本体は MB〜GB のはず)。
   if [ -d "data/mart/imitation/<CASE>" ] && \
-     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' -print -quit | grep -q . ; then
-    echo "[onstart] step=preprocess_skip (parquet already present)"
+     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+       \( -type f -o -xtype f \) -size +0c -print -quit | grep -q . ; then
+    echo "[onstart] step=preprocess_skip (parquet already present and non-empty)"
   else
     echo "[onstart] step=preprocess case=<CASE>"
+    # 既存の dangling symlink を消してから preprocess を走らせる。残ったまま
+    # だと preprocess.py が write_parquet で symlink target に書き込もうとして
+    # 元の blob path に書き込もうとするため (dvc cache の symlink type の場合)。
+    if [ -d "data/mart/imitation/<CASE>" ]; then
+      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+        \( -type l -xtype l \) -print -delete 2>&1 || true
+    fi
     uv run --directory bot python -m <PREPROCESS_CMD>
+    PREPROCESS_RAN=1
   fi
+fi
+
+# preprocess を実走した場合、生成された parquet を DVC で track して
+# git に .dvc stub を push する。次回以降は git pull → dvc pull だけで
+# data/mart/imitation/<CASE>/ が復元され、preprocess は skip される。
+if [ "${PREPROCESS_RAN}" -eq 1 ]; then
+  echo "[onstart] step=mart_dvc_persist case=<CASE>"
+  MART_DIR="data/mart/imitation/<CASE>"
+  shopt -s nullglob
+  added_any=0
+  for pq in "${MART_DIR}"/*.parquet; do
+    [ -f "${pq}" ] || continue
+    echo "[onstart] dvc add ${pq}"
+    if uv run --project bot dvc add "${pq}" 2>&1; then
+      added_any=1
+    else
+      echo "[onstart] dvc add ${pq} FATAL" >&2
+      mark "55_mart_dvc_add_failed"
+      exit 1
+    fi
+  done
+  shopt -u nullglob
+  if [ "${added_any}" -eq 1 ]; then
+    # dvc push は fatal: ここで成功しないと .dvc stub だけが orphan で残り
+    # 後続 run の `dvc pull` が `FileNotFoundError` で死ぬ (前 case4 train run
+    # の bvsfn7nd4g4kqw が学習開始 +6 秒で exit=1 した直接原因)。3 回までリトライ
+    # して全滅したら mart_dvc_persist 自体を失敗させる (= exit 1 で pod が
+    # cleanup_destroy 経由で onstart.log を S3 にあげて self-destroy)。
+    #
+    # `dvc push <DIR>` は dvc.yaml の stage を要求するため不可。`dvc add` で
+    # 生成された `*.parquet.dvc` を 1 つずつ渡す (これらは tracked file の
+    # メタデータ、push の引数として正当)。
+    shopt -s nullglob
+    dvc_files=("${MART_DIR}"/*.parquet.dvc)
+    shopt -u nullglob
+    if [ "${#dvc_files[@]}" -eq 0 ]; then
+      echo "[onstart] dvc push mart: no .dvc files generated by dvc add" >&2
+      mark "55_mart_dvc_push_failed"
+      exit 1
+    fi
+    push_ok=0
+    for attempt in 1 2 3; do
+      echo "[onstart] dvc push ${dvc_files[*]} (attempt ${attempt}/3)"
+      if uv run --project bot dvc push "${dvc_files[@]}" 2>&1; then
+        push_ok=1
+        break
+      fi
+      echo "[onstart] dvc push attempt=${attempt} FAILED; retrying in 30s" >&2
+      sleep 30
+    done
+    if [ "${push_ok}" -ne 1 ]; then
+      echo "[onstart] dvc push mart FATAL — exiting so .dvc stub is NOT git-pushed" >&2
+      mark "55_mart_dvc_push_failed"
+      exit 1
+    fi
+
+    # .dvc stub と .gitignore を git に commit & push (dvc push 成功時のみ)
+    git config user.email "runpod-bot@orbit-wars.local"
+    git config user.name "runpod-bot"
+    if [ -n "${GIT_PAT:-}" ]; then
+      PUSH_URL="https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')"
+      git remote set-url origin "${PUSH_URL}" 2>&1 | tail -2
+    fi
+    TARGET_BRANCH="<BRANCH>"
+    git fetch origin "${TARGET_BRANCH}" || true
+    git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+    # data/ は .gitignore で除外されているが whitelist で .dvc / .gitignore は通る
+    git add -f -- "${MART_DIR}"/*.parquet.dvc "${MART_DIR}"/.gitignore 2>/dev/null || true
+    if git diff --cached --quiet; then
+      echo "[onstart] mart_dvc_persist: nothing to commit"
+    else
+      git commit --no-verify \
+        -m ":robot: runpod: add data/mart/imitation/<CASE>/*.parquet.dvc" \
+        || echo "[onstart] mart_dvc_persist: commit failed"
+      for attempt in 1 2 3; do
+        if git push origin "HEAD:${TARGET_BRANCH}"; then
+          echo "[onstart] mart_dvc_persist: pushed to ${TARGET_BRANCH}"
+          break
+        fi
+        echo "[onstart] mart_dvc_persist: attempt=${attempt} rejected; rebasing"
+        git pull --rebase origin "${TARGET_BRANCH}" || true
+        if [ "${attempt}" -eq 3 ]; then
+          echo "[onstart] mart_dvc_persist: push exhausted retries"
+        fi
+      done
+    fi
+    mark "55_mart_dvc_persisted"
+  else
+    echo "[onstart] mart_dvc_persist: no parquet found under ${MART_DIR}; skipping"
+  fi
+fi
+
+# preprocess-only mode: <TRAIN_MODULE> が空なら train セクションを全スキップ。
+# preprocess の成果物 (data/mart/...) は前段で DVC 永続化済み。
+if [ -z "<TRAIN_MODULE>" ]; then
+  echo "[onstart] step=train_skip (preprocess-only mode, TRAIN_MODULE empty)"
+  mark "70_train_done"
+  mark "99_done"
+  exit 0
 fi
 
 mark "60_before_train"
@@ -402,10 +570,42 @@ echo "[onstart] step=dvc_add_run"
 # dvc add は cwd 基準 path を取る。RUN_DIR_ABS の絶対 path から repo root を
 # 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
 RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
-uv run --project bot dvc add "${RUN_DIR_REL}"
+if ! uv run --project bot dvc add "${RUN_DIR_REL}" 2>&1; then
+  echo "[onstart] dvc_add_run FATAL" >&2
+  mark "75_dvc_add_run_failed"
+  exit 1
+fi
 
 echo "[onstart] step=dvc_push_runs"
-uv run --project bot dvc push "${RUN_DIR_REL}"
+# dvc push を fatal 化。DVC remote (S3) に本体が無いまま .dvc stub だけ
+# git push されると次回 run の `dvc pull` が `FileNotFoundError` で死ぬ
+# (mart_dvc_persist と同じ問題)。3 回までリトライ後 exit 1。
+#
+# dvc push は引数に dvc.yaml の stage か `*.dvc` ファイル path を取る。
+# directory path は受け付けない (そちらだと "Stage X not found" エラー)。
+# `dvc add ${RUN_DIR_REL}` で `${RUN_DIR_REL}.dvc` stub が生成されるので
+# それを push 引数に使う。
+RUN_DVC_FILE="${RUN_DIR_REL}.dvc"
+if [ ! -f "${RUN_DVC_FILE}" ]; then
+  echo "[onstart] dvc_push_runs: ${RUN_DVC_FILE} not found (dvc add failed?)" >&2
+  mark "75_dvc_push_runs_failed"
+  exit 1
+fi
+push_runs_ok=0
+for attempt in 1 2 3; do
+  echo "[onstart] dvc push ${RUN_DVC_FILE} (attempt ${attempt}/3)"
+  if uv run --project bot dvc push "${RUN_DVC_FILE}" 2>&1; then
+    push_runs_ok=1
+    break
+  fi
+  echo "[onstart] dvc_push_runs attempt=${attempt} FAILED; retrying in 30s" >&2
+  sleep 30
+done
+if [ "${push_runs_ok}" -ne 1 ]; then
+  echo "[onstart] dvc_push_runs FATAL — exiting" >&2
+  mark "75_dvc_push_runs_failed"
+  exit 1
+fi
 
 echo "[onstart] step=git_push_dvc_meta"
 RUN_DVC_FILE="${RUN_DIR_REL}.dvc"

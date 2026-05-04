@@ -8,6 +8,7 @@ import os
 import random
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -130,12 +131,18 @@ def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeat
     )
 
 
+BATCH_LOG_EVERY = 100
+
+
 def _run_epoch(
     model: CandidatePolicy,
     loader: DataLoader,  # type: ignore[type-arg]
     loss_weights: LossWeights,
     optimizer: optim.Optimizer | None,
     device: torch.device,
+    *,
+    epoch: int = -1,
+    phase: str = "epoch",
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -147,6 +154,8 @@ def _run_epoch(
         "cand_fire_acc": 0.0,
     }
     n_batches = 0
+    started = time.monotonic()
+    n_total = len(loader)
     grad_ctx = torch.enable_grad if is_train else torch.no_grad
     with grad_ctx():
         for batch in loader:
@@ -168,6 +177,30 @@ def _run_epoch(
             totals["cand_noop_acc"] += report.cand_noop_acc
             totals["cand_fire_acc"] += report.cand_fire_acc
             n_batches += 1
+
+            if n_batches % BATCH_LOG_EVERY == 0:
+                elapsed = time.monotonic() - started
+                rate = n_batches / elapsed if elapsed > 0 else 0.0
+                eta = (n_total - n_batches) / rate if rate > 0 else float("inf")
+                logger.info(
+                    json.dumps(
+                        {
+                            "phase": phase,
+                            "epoch": epoch,
+                            "batch": n_batches,
+                            "of": n_total,
+                            "running_loss": round(
+                                totals["total"] / max(1, n_batches), 4
+                            ),
+                            "running_acc": round(
+                                totals["cand_acc"] / max(1, n_batches), 4
+                            ),
+                            "elapsed_s": round(elapsed, 1),
+                            "rate_b_per_s": round(rate, 2),
+                            "eta_s": round(eta, 1),
+                        }
+                    )
+                )
 
     n_batches = max(n_batches, 1)
     return {k: v / n_batches for k, v in totals.items()}
@@ -279,10 +312,36 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     best_val = float("inf")
     best_epoch = -1
     epochs = int(train_cfg["epochs"])
+    train_started = time.monotonic()
     for epoch in range(epochs):
-        train_metrics = _run_epoch(model, train_loader, weights, optimizer, device)
+        epoch_started = time.monotonic()
+        logger.info(
+            json.dumps(
+                {
+                    "event": "epoch_start",
+                    "epoch": epoch,
+                    "of": epochs,
+                    "elapsed_total_s": round(time.monotonic() - train_started, 1),
+                }
+            )
+        )
+        train_metrics = _run_epoch(
+            model,
+            train_loader,
+            weights,
+            optimizer,
+            device,
+            epoch=epoch,
+            phase="train",
+        )
         val_metrics = _run_epoch(
-            model, val_loader, weights, optimizer=None, device=device
+            model,
+            val_loader,
+            weights,
+            optimizer=None,
+            device=device,
+            epoch=epoch,
+            phase="val",
         )
         log_row = {
             "epoch": epoch,
@@ -293,6 +352,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "val_cand_acc": round(val_metrics["cand_acc"], 4),
             "val_cand_noop_acc": round(val_metrics["cand_noop_acc"], 4),
             "val_cand_fire_acc": round(val_metrics["cand_fire_acc"], 4),
+            "epoch_elapsed_s": round(time.monotonic() - epoch_started, 1),
         }
         logger.info(json.dumps(log_row))
         with history_path.open("a") as f:
@@ -304,6 +364,15 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             torch.save(cpu_state, weights_out)
             if weights_out.resolve() != run_weights_path.resolve():
                 shutil.copyfile(weights_out, run_weights_path)
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "best_updated",
+                        "epoch": epoch,
+                        "best_val": round(best_val, 4),
+                    }
+                )
+            )
 
     summary = {
         "epochs_run": epochs,

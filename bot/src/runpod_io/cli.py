@@ -282,6 +282,12 @@ def train(
         "--max-wait",
         help="--watch のタイムアウト (秒)。デフォルトは onstart の 2h ガードと一致",
     ),
+    preprocess_only: bool = typer.Option(
+        False,
+        "--preprocess-only",
+        help="train を実行せず preprocess + DVC 永続化までで終了する。"
+        " train 不要 (data/mart の事前生成のみ目的) のとき。",
+    ),
 ) -> None:
     """Search RunPod GPU offers, pick one, and launch training for a given commit."""
     defaults = _case_defaults(case)
@@ -382,6 +388,11 @@ def train(
         raise typer.Exit(code=1)
 
     run_id = generate_run_id(branch, commit_sha, seed)
+    if preprocess_only and not defaults["preprocess_cmd"]:
+        raise typer.BadParameter(
+            f"case={case!r} には preprocess_cmd が定義されていないため "
+            "--preprocess-only は使用できません。"
+        )
     onstart_cmd = render_onstart(
         DEFAULT_TEMPLATE_PATH,
         commit_sha=commit_sha,
@@ -390,7 +401,7 @@ def train(
         branch=branch,
         repo_url=repo_url,
         case=case,
-        train_module=defaults["train_module"],
+        train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
     )
@@ -422,19 +433,56 @@ def train(
             "は skip されます。`bot/.env` に GIT_PAT を追加してください。"
         )
     env = build_env_dict(env_dict)
-    pod_id = create_pod(
-        sdk,
-        name=label or run_id,
-        gpu_type_id=chosen.gpu_type_id,
-        cloud_type=chosen.cloud_type,
-        onstart_script=onstart_cmd,
-        env=env,
-        image=image,
-        container_disk_gb=disk_gb,
-        network_volume_id=volume_id_resolved,
-        volume_mount_path=mount_path,
-        data_center_id=data_center_id,
-    )
+    # 在庫切れ (QueryError "no longer any instances available") に当たることが
+    # あるため、search_offers の cheapest-first 順で fallback を試す。chosen は
+    # pick_offer の戻り (= 通常 offers[0])、それ以外を 2 番手以降として順に試す。
+    from runpod.error import QueryError as _RunPodQueryError
+
+    fallback_chain: list[Any] = [chosen]
+    for o in offers:
+        if o is not chosen:
+            fallback_chain.append(o)
+    pod_id: str | None = None
+    last_err: Exception | None = None
+    used_offer = chosen
+    for attempt_idx, offer_try in enumerate(fallback_chain, start=1):
+        try:
+            pod_id = create_pod(
+                sdk,
+                name=label or run_id,
+                gpu_type_id=offer_try.gpu_type_id,
+                cloud_type=offer_try.cloud_type,
+                onstart_script=onstart_cmd,
+                env=env,
+                image=image,
+                container_disk_gb=disk_gb,
+                network_volume_id=volume_id_resolved,
+                volume_mount_path=mount_path,
+                data_center_id=data_center_id,
+            )
+            used_offer = offer_try
+            if attempt_idx > 1:
+                console.print(
+                    f"[green]launched on fallback #{attempt_idx}:[/] "
+                    f"{offer_try.gpu_type_id} ({offer_try.cloud_type})"
+                )
+            break
+        except _RunPodQueryError as exc:
+            last_err = exc
+            console.print(
+                f"[yellow]offer {offer_try.gpu_type_id} unavailable "
+                f"(attempt {attempt_idx}/{len(fallback_chain)}):[/] {exc}"
+            )
+            continue
+    if pod_id is None:
+        console.print(
+            "[red]all offers exhausted; no pod was created.[/] "
+            "Try later, broaden --gpu-name, or switch --cloud-type=ALL."
+        )
+        if last_err is not None:
+            raise last_err
+        raise typer.Exit(code=1)
+    chosen = used_offer
     run_dir_local = find_run_dir(_repo_root(), run_id, case)
     write_launch_json(
         run_dir_local,
