@@ -1,0 +1,58 @@
+# case6: case5 backbone (ship-prediction featurizer) + Graph Attention U-Net
+# 参考: docs/experiment/imitation/20260504_case6_attention_backbone/plan.md
+# 構成: case5 の il_case5.yaml を踏襲し、out path / weights / metrics を case6 用に変更。
+#       model セクションに attn_heads=4 を追加 (Graph Attention 層の multi-head)。
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case6/train.parquet
+  out_val: data/mart/imitation/case6/val.parquet
+  rating_quantile: 0.50
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: null
+
+model:
+  # case6 は case5 と同じ PLANET_FEAT_DIM=17 (case1 base 11 + ship-prediction 6)。
+  # backbone のみ GraphConv → GraphAttention に置換。
+  planet_in_dim: 17
+  global_in_dim: 6
+  hidden: 128
+  ships_buckets: 4
+  attn_heads: 4
+
+train:
+  batch_size: 256
+  epochs: 15
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  num_workers: 0
+  loss_weights:
+    from: 1.0
+    target: 2.0
+    ships: 0.5
+    from_pos_weight: 8.5
+    from_focal_gamma: 3.0
+    from_focal_alpha: 0.75
+    target_label_smoothing: 0.15
+    target_entropy_bonus: 0.05
+    use_target_class_weights: true
+    target_class_weight_beta: 0.9999
+    use_ships_class_weights: false
+    ships_class_weight_beta: 0.9999
+    ships_ordinal_smoothing: 0.0
+  weights_out: bot/pipeline/imitation/case6/policy/weights.pt
+
+inference:
+  from_threshold: 0.31
+  min_fire_topk: 1
+  max_fire_count: null
+  target_temperature: 0.8
+  ships_temperature: 1.1
+
+evaluation:
+  metrics_out: data/mart/imitation/case6/eval_metrics.json
+  episodes: 100
+  seed: 0
