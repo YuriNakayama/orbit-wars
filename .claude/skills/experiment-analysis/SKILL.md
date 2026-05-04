@@ -145,7 +145,7 @@ Write the file with these sections — **keep it ≤ one screen unless the user 
 - (採用なら) `dev/runpod promote <run_id>` 実行可否は別途ユーザー確認が必要
 ```
 
-Write directly with `Write` (or `Edit` for renames). Do not delegate to the `experimenter` agent — the analysis is interactive output, marshalling through Task adds latency.
+Write directly with `Write` (or `Edit` for renames) in the main session — the analysis is interactive output and stays where the user can interject.
 
 ### Phase 5 — Report and offer next steps
 
