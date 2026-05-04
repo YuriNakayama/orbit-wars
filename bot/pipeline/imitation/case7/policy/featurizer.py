@@ -28,6 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import torch
 
 from .templates import TEMPLATE_CTX_DIM, template_context_features
@@ -117,6 +118,40 @@ def _fleet_target_eta(
     return hit_d / speed
 
 
+def _batch_fleet_target_eta(
+    fleet_x: np.ndarray,  # (F,)
+    fleet_y: np.ndarray,
+    angle: np.ndarray,
+    ships: np.ndarray,
+    planet_x: np.ndarray,  # (P,)
+    planet_y: np.ndarray,
+    planet_radius: np.ndarray,
+) -> np.ndarray:
+    """Vectorized version of _fleet_target_eta. Returns (F, P) ETA matrix.
+
+    Cells where the fleet does not hit the planet within HORIZON_TURNS are set to
+    +inf so the caller can apply a single threshold mask.
+    """
+    if fleet_x.size == 0 or planet_x.size == 0:
+        return np.empty((fleet_x.size, planet_x.size), dtype=np.float64)
+    dx = planet_x[None, :] - fleet_x[:, None]  # (F, P)
+    dy = planet_y[None, :] - fleet_y[:, None]
+    dir_x = np.cos(angle)[:, None]  # (F, 1)
+    dir_y = np.sin(angle)[:, None]
+    proj = dx * dir_x + dy * dir_y
+    perp_sq = dx * dx + dy * dy - proj * proj
+    radius_sq = (planet_radius * planet_radius)[None, :]  # (1, P)
+
+    speed = np.maximum(0.5, 2.0 - 0.05 * np.sqrt(np.maximum(1, ships)))[
+        :, None
+    ]  # (F, 1)
+    hit_d = np.maximum(0.0, proj - np.sqrt(np.maximum(0.0, radius_sq - perp_sq)))
+    eta = hit_d / np.where(speed > 0, speed, np.inf)
+    invalid = (proj < 0) | (perp_sq >= radius_sq) | (eta > HORIZON_TURNS)
+    eta = np.where(invalid, np.inf, eta)
+    return eta
+
+
 def _future_position(
     x: float, y: float, ang_vel: float, turns: int
 ) -> tuple[float, float]:
@@ -202,33 +237,67 @@ def featurize(
     ]
 
     planet_index_by_id: dict[int, int] = {}
+    planet_x_arr = np.zeros(n, dtype=np.float64)
+    planet_y_arr = np.zeros(n, dtype=np.float64)
+    planet_r_arr = np.zeros(n, dtype=np.float64)
     for slot in range(n):
         pid = int(raw_planets[slot][0])
         planet_index_by_id[pid] = slot
+        planet_x_arr[slot] = float(raw_planets[slot][2])
+        planet_y_arr[slot] = float(raw_planets[slot][3])
+        planet_r_arr[slot] = float(raw_planets[slot][4])
 
-    for fleet_row in raw_fleets:
-        fid, fowner, fx, fy, fangle, _from_pid, fships = fleet_row
-        f_owner = int(fowner)
-        f_ships = int(fships)
-        f_x = float(fx)
-        f_y = float(fy)
-        f_angle = float(fangle)
+    if raw_fleets:
+        n_fleets = len(raw_fleets)
+        fx_arr = np.zeros(n_fleets, dtype=np.float64)
+        fy_arr = np.zeros(n_fleets, dtype=np.float64)
+        fa_arr = np.zeros(n_fleets, dtype=np.float64)
+        fs_arr = np.zeros(n_fleets, dtype=np.int64)
+        fo_arr = np.zeros(n_fleets, dtype=np.int64)
+        for i, fleet_row in enumerate(raw_fleets):
+            fid, fowner, fx, fy, fangle, _from_pid, fships = fleet_row
+            fo_arr[i] = int(fowner)
+            fs_arr[i] = int(fships)
+            fx_arr[i] = float(fx)
+            fy_arr[i] = float(fy)
+            fa_arr[i] = float(fangle)
+
+        eta_mat = _batch_fleet_target_eta(
+            fx_arr,
+            fy_arr,
+            fa_arr,
+            fs_arr,
+            planet_x_arr,
+            planet_y_arr,
+            planet_r_arr,
+        )  # (F, P), inf for misses
+
+        # Aggregate per (fleet, slot) hits
+        valid = np.isfinite(eta_mat)
+        # For each slot, find nearest_eta and accumulate per-owner ships
         for slot in range(n):
-            pid_, _, px, py, pradius, _, _ = raw_planets[slot]
-            eta = _fleet_target_eta(
-                f_x, f_y, f_angle, f_ships, float(px), float(py), float(pradius)
-            )
-            if eta is None or eta > HORIZON_TURNS:
+            slot_valid = valid[:, slot]
+            if not slot_valid.any():
                 continue
-            if f_owner == player:
-                incoming[slot][0] += f_ships
-            elif f_owner == -1:
-                incoming[slot][2] += f_ships
-            else:
-                incoming[slot][1] += f_ships
-            if eta < nearest_eta[slot]:
-                nearest_eta[slot] = eta
-            arrivals_by_slot[slot].append((eta, f_owner, f_ships))
+            slot_etas = eta_mat[slot_valid, slot]
+            slot_owners = fo_arr[slot_valid]
+            slot_ships = fs_arr[slot_valid]
+            # min eta
+            min_eta = float(slot_etas.min())
+            if min_eta < nearest_eta[slot]:
+                nearest_eta[slot] = min_eta
+            # owner-bucketed ship sums
+            mine_mask = slot_owners == player
+            neut_mask = slot_owners == -1
+            enemy_mask = ~mine_mask & ~neut_mask
+            incoming[slot][0] += float(slot_ships[mine_mask].sum())
+            incoming[slot][2] += float(slot_ships[neut_mask].sum())
+            incoming[slot][1] += float(slot_ships[enemy_mask].sum())
+            # arrivals (timeline 用)
+            for eta_v, ow_v, sh_v in zip(
+                slot_etas, slot_owners, slot_ships, strict=True
+            ):
+                arrivals_by_slot[slot].append((float(eta_v), int(ow_v), int(sh_v)))
 
     # === Predicted-distance columns: pre-compute future positions and centroids ===
     future_xy: list[tuple[float, float]] = []
@@ -279,41 +348,63 @@ def featurize(
 
     if history is not None and len(history.prev_fleet_snapshots) >= 2:
         fleet_hist = list(history.prev_fleet_snapshots)
-        # Walk the most-recent LAUNCH_HISTORY_WINDOW pairs of (older, newer) snapshots.
-        # Each pair contributes the launches between those two turns.
-        # We use snapshots up to index -1 (prev_fleets_{N-1}); skip the latest pair if
-        # we ever push current obs into history (we don't — agent pushes *after* featurize).
-        pairs = []
-        # Iterate from newest backwards; collect up to LAUNCH_HISTORY_WINDOW pairs.
+        # Collect all launches across the most-recent LAUNCH_HISTORY_WINDOW pairs
+        # of (older, newer) snapshots into a single batch, then vectorize the
+        # per-planet ETA reverse-resolution.
+        all_launches: list[tuple[int, int, float, float, float, int, int]] = []
+        pair_count = 0
         for i in range(len(fleet_hist) - 1, 0, -1):
-            pairs.append((fleet_hist[i - 1], fleet_hist[i]))
-            if len(pairs) >= LAUNCH_HISTORY_WINDOW:
+            all_launches.extend(_diff_launches(fleet_hist[i - 1], fleet_hist[i]))
+            pair_count += 1
+            if pair_count >= LAUNCH_HISTORY_WINDOW:
                 break
-        for snap_a, snap_b in pairs:
-            launches = _diff_launches(snap_a, snap_b)
-            for fl in launches:
-                fid_, fowner_, fx_, fy_, fangle_, _from_pid_, fships_ = fl
-                fowner_i = int(fowner_)
-                fships_i = int(fships_)
-                if fowner_i == -1:
-                    continue
-                if fowner_i == player:
-                    ally_launch_count_g += 1.0
-                    ally_launch_ships_g += float(fships_i)
-                else:
-                    enemy_launch_count_g += 1.0
-                    enemy_launch_ships_g += float(fships_i)
-                    # Per-planet attribution (only enemy launches targeting my planets)
-                    tgt_pid = _fleet_action_target(
-                        float(fx_), float(fy_), float(fangle_), fships_i, raw_planets
-                    )
-                    if tgt_pid is None:
+
+        if all_launches:
+            n_lc = len(all_launches)
+            lc_owner = np.zeros(n_lc, dtype=np.int64)
+            lc_ships = np.zeros(n_lc, dtype=np.int64)
+            lc_x = np.zeros(n_lc, dtype=np.float64)
+            lc_y = np.zeros(n_lc, dtype=np.float64)
+            lc_a = np.zeros(n_lc, dtype=np.float64)
+            for i, fl in enumerate(all_launches):
+                _, fowner_, fx_, fy_, fangle_, _, fships_ = fl
+                lc_owner[i] = int(fowner_)
+                lc_ships[i] = int(fships_)
+                lc_x[i] = float(fx_)
+                lc_y[i] = float(fy_)
+                lc_a[i] = float(fangle_)
+
+            # Global aggregates first (skip neutral)
+            non_neutral = lc_owner != -1
+            mine_l = (lc_owner == player) & non_neutral
+            enemy_l = (~mine_l) & non_neutral
+            ally_launch_count_g = float(mine_l.sum())
+            ally_launch_ships_g = float(lc_ships[mine_l].sum())
+            enemy_launch_count_g = float(enemy_l.sum())
+            enemy_launch_ships_g = float(lc_ships[enemy_l].sum())
+
+            # Per-planet attribution: vectorize ETA reverse-resolution for enemy launches only
+            enemy_idx = np.where(enemy_l)[0]
+            if enemy_idx.size > 0:
+                eta_mat_lc = _batch_fleet_target_eta(
+                    lc_x[enemy_idx],
+                    lc_y[enemy_idx],
+                    lc_a[enemy_idx],
+                    lc_ships[enemy_idx],
+                    planet_x_arr,
+                    planet_y_arr,
+                    planet_r_arr,
+                )  # (E, P), inf for misses
+                # For each enemy launch, pick its argmin planet (best ETA)
+                best_slot = np.argmin(eta_mat_lc, axis=1)  # (E,)
+                best_eta = eta_mat_lc[np.arange(eta_mat_lc.shape[0]), best_slot]
+                hit = np.isfinite(best_eta)
+                for k in range(enemy_idx.size):
+                    if not hit[k]:
                         continue
-                    tgt_slot = planet_index_by_id.get(tgt_pid)
-                    if tgt_slot is None:
-                        continue
+                    tgt_slot = int(best_slot[k])
                     enemy_targeted_count[tgt_slot] += 1.0
-                    enemy_targeted_ships[tgt_slot] += float(fships_i)
+                    enemy_targeted_ships[tgt_slot] += float(lc_ships[enemy_idx[k]])
 
     # === Per-planet feature assembly ===
     for slot in range(n):

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import math
+import multiprocessing as mp
 import os
 import resource
 import time
@@ -40,7 +41,15 @@ from pipeline.imitation.case7.policy.templates import (
     T_NO_OP,
     classify_actual_target,
 )
-from runpod_io.progress import mark_progress
+
+try:
+    from runpod_io.progress import mark_progress  # type: ignore[attr-defined]
+except ImportError:  # local/test env where the helper is absent
+
+    def mark_progress(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
@@ -241,6 +250,22 @@ def _iter_episode_frames(
     return out
 
 
+def _episode_worker(
+    args: tuple[str, list[int], str],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Pool worker: process one replay end-to-end and return (match_id, frames).
+
+    Memory note: each worker holds at most one episode's frames in memory; the
+    parent consumes them via imap_unordered(chunksize=1) and discards as it
+    streams to the parquet writer.
+    """
+    replay_path_s, slots, match_id = args
+    replay_path = Path(replay_path_s)
+    if not replay_path.exists():
+        return match_id, []
+    return match_id, _iter_episode_frames(replay_path, slots)
+
+
 def _filter_index(
     index: pl.DataFrame,
     modes: list[str],
@@ -363,6 +388,24 @@ def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
     return 2
 
 
+def _resolve_num_workers() -> int:
+    """Episode-level multiprocessing pool size.
+
+    Default = min(cpu_count, 8) which scales linearly on RunPod (typically
+    4-12 vCPU) without exhausting memory: each worker holds ~1 episode of
+    frames (~few MB). Override via env ORBIT_WARS_PREPROCESS_WORKERS, set
+    to "1" to disable multiprocessing entirely (debug/CI).
+    """
+    raw = os.environ.get("ORBIT_WARS_PREPROCESS_WORKERS")
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    cpu = os.cpu_count() or 1
+    return max(1, min(cpu, 8))
+
+
 def _repo_root() -> Path:
     return find_repo_root(Path(__file__))
 
@@ -441,50 +484,78 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     # ため、それだけ memory に retain する (val 側は streaming のまま)。
     train_collect: list[dict[str, Any]] | None = [] if duplicate_enabled else None
 
+    # Build worker job list: (replay_path_str, slots, match_id, bucket)
+    jobs: list[tuple[str, list[int], str]] = []
+    bucket_by_match: dict[str, str] = {}
+    for rec in rows:
+        slots = _player_slots(rec, _num_player_slots(rec, modes))
+        if not slots:
+            continue
+        rp = rec.get("replay_path") or ""
+        replay_path = (base_dir / rp).resolve() if rp else None
+        if replay_path is None or not replay_path.exists():
+            continue
+        match_id = str(rec["match_id"])
+        jobs.append((str(replay_path), slots, match_id))
+        bucket_by_match[match_id] = _split_episode(match_id, val_split)
+
+    n_workers = _resolve_num_workers()
+    logger.info(
+        "preprocess: %d episodes, %d workers (memory-budgeted)",
+        len(jobs),
+        n_workers,
+    )
+
     kept = 0
     try:
-        for rec in rows:
-            slots = _player_slots(rec, _num_player_slots(rec, modes))
-            if not slots:
-                continue
-            rp = rec.get("replay_path") or ""
-            replay_path = (base_dir / rp).resolve() if rp else None
-            if replay_path is None or not replay_path.exists():
-                continue
-            frames = _iter_episode_frames(replay_path, slots)
-            if not frames:
-                continue
-            bucket = _split_episode(str(rec["match_id"]), val_split)
-            if bucket == "val":
-                val_buffer.extend(frames)
-            else:
-                if train_collect is not None:
-                    train_collect.extend(frames)
+        if n_workers <= 1:
+            iterator = (_episode_worker(job) for job in jobs)
+        else:
+            # `spawn` start method ensures a clean fork on macOS and avoids
+            # CoW pages from the parent (keeps per-worker memory bounded).
+            ctx = mp.get_context("spawn")
+            pool = ctx.Pool(processes=n_workers)
+            iterator = pool.imap_unordered(_episode_worker, jobs, chunksize=1)
+        try:
+            for match_id, frames in iterator:
+                if not frames:
+                    continue
+                bucket = bucket_by_match.get(match_id, "train")
+                if bucket == "val":
+                    val_buffer.extend(frames)
                 else:
-                    train_buffer.extend(frames)
-            kept += 1
+                    if train_collect is not None:
+                        train_collect.extend(frames)
+                    else:
+                        train_buffer.extend(frames)
+                kept += 1
 
-            if kept % CHUNK_EPISODES == 0:
-                if train_collect is None:
-                    train_writer.write(train_buffer)
-                    train_buffer.clear()
-                val_writer.write(val_buffer)
-                val_buffer.clear()
-                mark_progress(
-                    run_id,
-                    "preprocess.episode",
-                    {
-                        "episodes_done": kept,
-                        "frames_train": (
-                            len(train_collect)
-                            if train_collect is not None
-                            else train_writer.rows_written
-                        ),
-                        "frames_val": val_writer.rows_written,
-                        "mem_rss_mb": round(_rss_mb(), 1),
-                        "elapsed_s": round(time.monotonic() - started, 1),
-                    },
-                )
+                if kept % CHUNK_EPISODES == 0:
+                    if train_collect is None:
+                        train_writer.write(train_buffer)
+                        train_buffer.clear()
+                    val_writer.write(val_buffer)
+                    val_buffer.clear()
+                    mark_progress(
+                        run_id,
+                        "preprocess.episode",
+                        {
+                            "episodes_done": kept,
+                            "frames_train": (
+                                len(train_collect)
+                                if train_collect is not None
+                                else train_writer.rows_written
+                            ),
+                            "frames_val": val_writer.rows_written,
+                            "mem_rss_mb": round(_rss_mb(), 1),
+                            "elapsed_s": round(time.monotonic() - started, 1),
+                        },
+                    )
+        finally:
+            if n_workers > 1:
+                pool.close()
+                pool.join()
+
         if train_collect is not None:
             duplicated = _duplicate_minority_frames(train_collect, duplicate_cfg)
             train_writer.write(duplicated)
