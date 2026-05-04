@@ -122,6 +122,18 @@
                 "description": "Save state before context compaction"
             }
         ],
+        "PostCompact": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/post-compact-inject-claudemd.js"
+                    }
+                ],
+                "description": "Re-inject CLAUDE.md into model context after compaction"
+            }
+        ],
         "SessionStart": [
             {
                 "matcher": "*",
