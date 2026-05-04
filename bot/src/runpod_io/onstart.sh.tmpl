@@ -391,6 +391,22 @@ fi
 if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   echo "[onstart] step=mart_dvc_persist case=<CASE>"
   MART_DIR="data/mart/imitation/<CASE>"
+  # `data/mart/imitation` 全体が /persist への symlink dir のとき
+  # `dvc add data/mart/imitation/<CASE>/foo.parquet` は "Cannot add files
+  # inside symlinked directories" で拒否される。symlink を実 dir に書き換えて
+  # から `dvc add` を実行する (parquet 本体は cp -L で物理コピー)。
+  # 永続化は DVC remote (S3) に push されることで担保される。
+  MART_PARENT="$(dirname "${MART_DIR}")"
+  if [ -L "${MART_PARENT}" ]; then
+    echo "[onstart] mart parent ${MART_PARENT} is symlink — materialize as real dir"
+    SYMLINK_TARGET="$(readlink -f "${MART_PARENT}")"
+    # 既存 symlink を削除し、物理 dir に置換 + 中身を cp -RL で取り戻す
+    rm "${MART_PARENT}"
+    mkdir -p "${MART_PARENT}"
+    if [ -d "${SYMLINK_TARGET}" ]; then
+      cp -RL "${SYMLINK_TARGET}"/. "${MART_PARENT}/" 2>&1 | tail -3 || true
+    fi
+  fi
   shopt -s nullglob
   added_any=0
   for pq in "${MART_DIR}"/*.parquet; do
