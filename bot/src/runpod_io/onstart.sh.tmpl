@@ -388,8 +388,24 @@ fi
 # preprocess を実走した場合、生成された parquet を DVC で track して
 # git に .dvc stub を push する。次回以降は git pull → dvc pull だけで
 # data/mart/imitation/<CASE>/ が復元され、preprocess は skip される。
+#
+# DVC は symlinked dir 内のファイルに `dvc add` できないため、persist_setup
+# で張った data/mart/imitation -> /persist/data-mart-imitation の symlink を
+# 一時的に解除し、中身を実 dir にコピーで戻してから dvc add する。完了後に
+# symlink を再構築 (next run の cache 利用は維持)。観測: 2026-05-04 case7 で
+# `Cannot add files inside symlinked directories` で onstart 失敗。
 if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   echo "[onstart] step=mart_dvc_persist case=<CASE>"
+  MART_LINK_TARGET=""
+  if [ -L data/mart/imitation ]; then
+    MART_LINK_TARGET=$(readlink data/mart/imitation)
+    echo "[onstart] mart_dvc_persist: unlinking data/mart/imitation -> ${MART_LINK_TARGET}"
+    rm data/mart/imitation
+    mkdir -p data/mart/imitation
+    # 中身を実 dir にコピーで戻す。`-a` で permissions / mtime を保持
+    cp -a "${MART_LINK_TARGET}/." data/mart/imitation/ 2>&1 | tail -3 || true
+  fi
+
   MART_DIR="data/mart/imitation/<CASE>"
   shopt -s nullglob
   added_any=0
@@ -401,6 +417,12 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
     else
       echo "[onstart] dvc add ${pq} FATAL" >&2
       mark "55_mart_dvc_add_failed"
+      # symlink を再構築してから exit (次回 run の cache 維持)
+      if [ -n "${MART_LINK_TARGET}" ]; then
+        rsync -a --delete data/mart/imitation/ "${MART_LINK_TARGET}/" 2>&1 | tail -3 || true
+        rm -rf data/mart/imitation
+        ln -sfn "${MART_LINK_TARGET}" data/mart/imitation
+      fi
       exit 1
     fi
   done
@@ -472,6 +494,16 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
     mark "55_mart_dvc_persisted"
   else
     echo "[onstart] mart_dvc_persist: no parquet found under ${MART_DIR}; skipping"
+  fi
+
+  # symlink を再構築して /persist の cache 利用を維持する。先に rsync で
+  # data/mart/imitation/ の最新内容を /persist/data-mart-imitation/ に
+  # 反映してから symlink に張り直す (--delete で stale entry も掃除)。
+  if [ -n "${MART_LINK_TARGET}" ]; then
+    echo "[onstart] mart_dvc_persist: re-linking data/mart/imitation -> ${MART_LINK_TARGET}"
+    rsync -a --delete data/mart/imitation/ "${MART_LINK_TARGET}/" 2>&1 | tail -3 || true
+    rm -rf data/mart/imitation
+    ln -sfn "${MART_LINK_TARGET}" data/mart/imitation
   fi
 fi
 
