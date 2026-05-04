@@ -103,6 +103,7 @@ simulator/rust/target/
 
 # DVC-managed weights (formerly git-tracked)
 bot/pipeline/imitation/case1/policy/weights.pt
+bot/pipeline/imitation/case5/policy/weights.pt
 
 # Terraform vars (contain secrets)
 infra/**/terraform.tfvars
