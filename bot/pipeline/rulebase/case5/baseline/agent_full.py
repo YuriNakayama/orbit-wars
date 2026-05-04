@@ -77,6 +77,7 @@ from .core.config import (
     LATE_CAPTURE_BUFFER,
     LATE_IMMEDIATE_SHIP_VALUE,
     LATE_REMAINING_TURNS,
+    LAUNCH_CLEARANCE,
     LET_THEM_FIGHT_PENALTY,
     LONG_TRAVEL_MARGIN_CAP,
     LONG_TRAVEL_MARGIN_DIVISOR,
@@ -166,6 +167,12 @@ from .core.physics import (  # noqa: E402
     aim_with_prediction,
     comet_remaining_life,
     is_static_planet,
+)
+from .core.safety import (  # noqa: E402
+    fleet_crosses_other_comet,
+    intercept_holds_within_tolerance,
+    is_trajectory_sun_safe,
+    target_reachable_before_comet_expiry,
 )
 
 # ============================================================
@@ -300,7 +307,7 @@ class WorldModel:
             return self.shot_cache[key]
         src = self.planet_by_id[src_id]
         tgt = self.planet_by_id[target_id]
-        result = aim_with_prediction(
+        aim = aim_with_prediction(
             src,
             tgt,
             ships,
@@ -309,6 +316,39 @@ class WorldModel:
             self.comets,
             self.comet_ids,
         )
+        result = aim
+        if aim is not None:
+            angle, turns, ix, iy = aim
+            clearance = src.radius + LAUNCH_CLEARANCE
+            launch_x = src.x + math.cos(angle) * clearance
+            launch_y = src.y + math.sin(angle) * clearance
+            unsafe = (
+                not is_trajectory_sun_safe(launch_x, launch_y, angle, turns, ships)
+                or not intercept_holds_within_tolerance(
+                    target=tgt,
+                    predicted_turns=turns,
+                    predicted_pos=(ix, iy),
+                    initial_by_id=self.initial_by_id,
+                    ang_vel=self.ang_vel,
+                    comets=self.comets,
+                    comet_ids=self.comet_ids,
+                )
+                or not target_reachable_before_comet_expiry(
+                    target_id, turns, self.comets
+                )
+                or fleet_crosses_other_comet(
+                    launch_x=launch_x,
+                    launch_y=launch_y,
+                    angle=angle,
+                    turns=turns,
+                    ships=ships,
+                    current_step=self.step,
+                    comets=self.comets,
+                    exclude_planet_id=target_id,
+                )
+            )
+            if unsafe:
+                result = None
         self.shot_cache[key] = result
         return result
 
