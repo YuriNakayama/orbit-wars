@@ -74,6 +74,7 @@ docs/
 
 ## Response Language And Interface
 
+- Answer user questions concisely, organizing the response as a table, chart, list, short sentence, ASCII art, or similar structured format.
 - Use the `AskUserQuestion` tool when asking questions to the user
 - Internal reasoning, tool calls, and intermediate notes: English.
 - User-facing output (final replies, reports, summaries): Japanese.(全てのユーザー向けの出力は日本語で行うこと)

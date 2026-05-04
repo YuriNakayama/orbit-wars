@@ -41,7 +41,7 @@ If the user asks to **execute** an experiment end-to-end, **interpret a finished
 - Does not run `dev/test-backend`, `dev/runpod train`, or any other build / training command.
 - Does not edit code under `backend/pipeline/<family>/case<N>/`. The plan refers to files by path; it doesn't create them.
 - Does not commit or push.
-- Does not call the `experimenter` subagent. The skill writes `plan.md` itself.
+- Writes `plan.md` directly in the main session (no subagent handoff). Hand off to `experiment-execution` only when the user is ready to implement and train.
 
 ## Skill flow
 
@@ -163,7 +163,7 @@ Write the plan with these sections (keep it to roughly one screen — verbose pl
 - {URL} — {1 行所感}
 ```
 
-Write directly with `Write` (or `Edit` for renames). Don't delegate to the `experimenter` agent.
+Write directly with `Write` (or `Edit` for renames) in the main session.
 
 ### Step 5 — Report and offer next steps
 
@@ -201,7 +201,6 @@ Do **not** auto-spawn `experiment-execution`. The user explicitly came in for pl
 - Writing implementation code into `plan.md`. The plan refers to file paths; the code itself comes in `experiment-execution`.
 - Creating a new experiment directory when the user is iterating on an existing hypothesis.
 - Including Kaggle publicScore as a success metric.
-- Spawning the `experimenter` agent.
 - Auto-running `experiment-execution` after writing the plan.
 - Letting Step 3 web research balloon into a multi-source survey — that's `/research-retrieval`'s job.
 

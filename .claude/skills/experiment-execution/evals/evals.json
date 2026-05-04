@@ -4,19 +4,19 @@
     {
       "id": 1,
       "prompt": "imitation/case1 で dropout を 0.2 から 0.3 に上げて再学習する実験をやりたい。LB1235 baseline 相手の win-rate 改善を狙う。plan.md を書いてコードを変更し、ローカルで pytest を回してから runpod で学習を走らせて、結果を result.md にまとめてほしい。",
-      "expected_output": "Skill clarifies (≤1-2 questions) that this is iter on existing case1 + RunPod full run, then spawns experimenter agent via Task with: family=imitation, case=case1, hypothesis verbatim, branch+SHA from Phase 2, non-goals (no Kaggle submit, no dev/runpod promote). After agent returns, surfaces plan.md path, pytest status, run_id, ETA in Japanese.",
+      "expected_output": "Skill clarifies (≤1-2 questions) that this is an iter on existing case1 + RunPod full run, then runs the workflow inline in the main session: Phase 2 git/branch reality check → Phase 3 writes iterN_plan.md under the matching docs/experiment/imitation/<dir>/ → Phase 4 implements the case and runs dev/test-backend → Phase 5 pushes the commit, launches dev/runpod train --case case1, captures run_id without bypassing the [y/N] prompt, then returns control to the user with run_id+ETA. Phase 7 (after run finishes) pulls artifacts, runs local evaluation, writes iterN_result.md, reports in Japanese. Non-goals: no Kaggle submit, no dev/runpod promote.",
       "files": []
     },
     {
       "id": 2,
       "prompt": "rulebase/case2 を改良する新しい実験を立ち上げたい。harass policy を加えて comet 周りで挑発する戦術を試す。まず plan.md だけ書いてレビューさせてほしい。実装と runpod はまだ動かさないで。",
-      "expected_output": "Skill recognizes scope = plan.md only (no impl, no RunPod), skips RunPod confirmation question, spawns experimenter agent with explicit non-goals: 'do not implement code', 'do not run dev/runpod train', 'only write plan.md under docs/experiment/rulebase/<yyyymmdd>_case2_<topic>/'. Agent returns plan.md path; skill reports it in Japanese without launching anything else.",
+      "expected_output": "Skill recognizes scope = plan.md only (no impl, no RunPod), skips the RunPod confirmation question, runs Phases 1–3 inline: confirms family=rulebase / case2 (extend) / topic=harass_policy, performs the Phase 2 git+ls reality check, writes plan.md (or iterN_plan.md if a matching directory exists) under docs/experiment/rulebase/<yyyymmdd>_case2_<topic>/, then stops. Reports the path in Japanese without launching anything else. Does not run dev/test-backend, does not push, does not call dev/runpod train.",
       "files": []
     },
     {
       "id": 3,
       "prompt": "さっき runpod で回した run_20260501_abc123 の結果を docs にまとめてほしい。imitation/case1 の iter4 として記録したい。",
-      "expected_output": "Skill skips Phase 1 hypothesis questions and Phase 2 git checks (already past planning), spawns experimenter agent in eval/report-only mode with run_id=run_20260501_abc123, family=imitation, case=case1, iteration=iter4. Agent pulls artifacts via dev/runpod pull, runs local evaluation, writes iter4_result.md under the existing experiment directory, and returns a Japanese summary with win-rate numbers and adoption recommendation.",
+      "expected_output": "Skill skips Phases 1–5 (no clarification, no plan, no impl, no launch) and jumps to Phase 7: runs dev/runpod pull run_20260501_abc123 to fetch artifacts to data/output/models/imitation/case1/runs/<run_id>/, runs the case's local evaluation script (e.g. backend/pipeline/imitation/case1/evaluation/compare_*.py) at the documented episode count, writes iter4_result.md inside the existing experiment directory with summary / numbers / diagnosis / decision / artifacts sections, and returns a Japanese summary including win-rate numbers and an adoption recommendation. Local match outcomes only — no Kaggle publicScore citation.",
       "files": []
     }
   ]
