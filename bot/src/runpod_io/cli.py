@@ -110,6 +110,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case4/policy/weights.pt",
     },
+    "case5": {
+        "stage": "train_imitation_case5",
+        "train_module": "pipeline.imitation.case5.training.train",
+        "config_arg": "--config pipeline/imitation/case5/configs/il_case5.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case5.training.preprocess "
+            "--config pipeline/imitation/case5/configs/il_case5.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case5/policy/weights.pt",
+    },
 }
 
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent / "onstart.sh.tmpl"
@@ -288,6 +298,12 @@ def train(
         help="train を実行せず preprocess + DVC 永続化までで終了する。"
         " train 不要 (data/mart の事前生成のみ目的) のとき。",
     ),
+    auto_pick_first_offer: bool = typer.Option(
+        False,
+        "--auto-pick-first-offer",
+        help="対話 prompt をスキップし最初の offer を自動選択 / cost limit 内なら "
+        "確認なしで起動。loop / cron 経由の自動運転用。",
+    ),
 ) -> None:
     """Search RunPod GPU offers, pick one, and launch training for a given commit."""
     defaults = _case_defaults(case)
@@ -373,19 +389,33 @@ def train(
             "switch --cloud-type=ALL."
         )
         raise typer.Exit(code=1)
-    chosen = pick_offer(offers, console=console)
+    if auto_pick_first_offer:
+        chosen = offers[0]
+        console.print(
+            f"[cyan]auto-pick-first-offer:[/] {chosen.gpu_type_id} "
+            f"({chosen.cloud_type}) @ ${chosen.dph_total:.3f}/h"
+        )
+    else:
+        chosen = pick_offer(offers, console=console)
     estimated = chosen.dph_total * ESTIMATED_RUNTIME_HOURS
     console.print(
         f"\nSelected {chosen.gpu_type_id} ({chosen.cloud_type}) "
         f"@ ${chosen.dph_total:.3f}/h "
         f"(est. ${estimated:.3f} for {ESTIMATED_RUNTIME_HOURS}h)"
     )
-    if estimated > cost_limit_usd and not typer.confirm(
-        f"Estimated cost ${estimated:.3f} exceeds limit ${cost_limit_usd:.2f}. "
-        "Proceed anyway?",
-        default=False,
-    ):
-        raise typer.Exit(code=1)
+    if estimated > cost_limit_usd:
+        if auto_pick_first_offer:
+            console.print(
+                f"[red]auto-pick-first-offer:[/] estimated ${estimated:.3f} "
+                f"exceeds limit ${cost_limit_usd:.2f}. Aborting (raise --cost-limit)."
+            )
+            raise typer.Exit(code=1)
+        if not typer.confirm(
+            f"Estimated cost ${estimated:.3f} exceeds limit ${cost_limit_usd:.2f}. "
+            "Proceed anyway?",
+            default=False,
+        ):
+            raise typer.Exit(code=1)
 
     run_id = generate_run_id(branch, commit_sha, seed)
     if preprocess_only and not defaults["preprocess_cmd"]:

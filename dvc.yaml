@@ -45,3 +45,30 @@ stages:
     metrics:
       - data/mart/imitation/case1/eval_metrics.json:
           cache: false
+
+  preprocess_imitation_case5:
+    cmd: uv run --directory bot python -m pipeline.imitation.case5.training.preprocess --config pipeline/imitation/case5/configs/il_case5.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case5/training/preprocess.py
+      - bot/pipeline/imitation/case5/policy/featurizer.py
+      - bot/pipeline/imitation/case5/policy/timeline.py
+      - bot/pipeline/imitation/case5/policy/geometry.py
+      - bot/pipeline/imitation/case5/policy/templates.py
+      - bot/pipeline/imitation/case5/configs/il_case5.yaml
+    outs:
+      - data/mart/imitation/case5/train.parquet
+      - data/mart/imitation/case5/val.parquet
+
+  train_imitation_case5:
+    cmd: uv run --directory bot python -m pipeline.imitation.case5.training.train --config pipeline/imitation/case5/configs/il_case5.yaml
+    deps:
+      - data/mart/imitation/case5/train.parquet
+      - data/mart/imitation/case5/val.parquet
+      - bot/pipeline/imitation/case5/training/train.py
+      - bot/pipeline/imitation/case5/training/losses.py
+      - bot/pipeline/imitation/case5/training/dataset.py
+      - bot/pipeline/imitation/case5/policy/model.py
+      - bot/pipeline/imitation/case5/configs/il_case5.yaml
+    outs:
+      - bot/pipeline/imitation/case5/policy/weights.pt

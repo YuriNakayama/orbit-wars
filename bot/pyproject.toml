@@ -106,6 +106,10 @@ max-complexity = 5
 "pipeline/imitation/case2/training/train.py" = ["B008"]
 "pipeline/imitation/case3/training/preprocess.py" = ["B008", "E501", "E731"]
 "pipeline/imitation/case3/training/train.py" = ["B008"]
+"pipeline/imitation/case5/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case5/training/train.py" = ["B008"]
+"pipeline/imitation/case5/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case5/policy/timeline.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/pipeline/**/test_*.py" = ["E501"]
 "tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
@@ -189,6 +193,10 @@ module = [
     "pipeline.imitation.case3.scripts.calibrate_heads",
     "pipeline.imitation.case2.training.train",
     "pipeline.imitation.case3.training.train",
+    "pipeline.imitation.case5.training.preprocess",
+    "pipeline.imitation.case5.training.train",
+    "pipeline.imitation.case5.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case5.evaluation.calibrate_heads",
 ]
 ignore_errors = true
 
