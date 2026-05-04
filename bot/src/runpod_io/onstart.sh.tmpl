@@ -586,6 +586,19 @@ echo "[onstart] step=dvc_add_run"
 # dvc add は cwd 基準 path を取る。RUN_DIR_ABS の絶対 path から repo root を
 # 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
 RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# `data/output/models/imitation` も symlink dir のため `dvc add` は
+# "Cannot add files inside symlinked directories" で拒否される。
+# mart_dvc_persist と同じ手順で symlink → 物理 dir に materialize する。
+OUTPUT_PARENT="data/output/models/imitation"
+if [ -L "${OUTPUT_PARENT}" ]; then
+  echo "[onstart] output parent ${OUTPUT_PARENT} is symlink — materialize as real dir"
+  OUTPUT_SYMLINK_TARGET="$(readlink -f "${OUTPUT_PARENT}")"
+  rm "${OUTPUT_PARENT}"
+  mkdir -p "${OUTPUT_PARENT}"
+  if [ -d "${OUTPUT_SYMLINK_TARGET}" ]; then
+    cp -RL "${OUTPUT_SYMLINK_TARGET}"/. "${OUTPUT_PARENT}/" 2>&1 | tail -3 || true
+  fi
+fi
 if ! uv run --project bot dvc add "${RUN_DIR_REL}" 2>&1; then
   echo "[onstart] dvc_add_run FATAL" >&2
   mark "75_dvc_add_run_failed"
