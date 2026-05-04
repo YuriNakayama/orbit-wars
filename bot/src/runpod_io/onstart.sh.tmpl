@@ -345,7 +345,7 @@ if ! uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc; then
   mark "45_dvc_pull_kaggle_failed"
   exit 1
 fi
-if ! uv run --project bot dvc pull --allow-missing; then
+if ! uv run --project bot dvc pull --allow-missing --force; then
   echo "[onstart] dvc pull (full) FAILED" >&2
   mark "45_dvc_pull_full_failed"
   exit 1
