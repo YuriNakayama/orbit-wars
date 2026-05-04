@@ -95,7 +95,11 @@ def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
     # Side-effect import: registers the Rust-backed `orbit_wars` interpreter
     # before `make("orbit_wars", ...)` resolves the env name. Each forked
     # worker re-runs this so the backend is selected per-process.
-    import orbit_wars_rust  # noqa: F401
+    # Rust backend が未 build の環境では Python simulator にフォールバック。
+    try:
+        import orbit_wars_rust  # noqa: F401
+    except ModuleNotFoundError:
+        pass
     from kaggle_environments import make
 
     num_agents = len(spec.agents)

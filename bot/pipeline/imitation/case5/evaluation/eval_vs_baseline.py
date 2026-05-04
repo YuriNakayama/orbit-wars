@@ -22,7 +22,7 @@ from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
 
-CHALLENGER = "il_v1"
+CHALLENGER = "il_v5"
 BASELINE = "baseline_v1"
 
 app = typer.Typer(
@@ -36,9 +36,14 @@ def _abspath(rel: str | Path) -> Path:
 
 
 def _load_params() -> dict[str, Any]:
-    with (find_repo_root(Path(__file__)) / "params.yaml").open() as f:
+    # case5 は params.yaml ではなく configs/il_case5.yaml を参照する。
+    cfg_path = (
+        find_repo_root(Path(__file__))
+        / "bot/pipeline/imitation/case5/configs/il_case5.yaml"
+    )
+    with cfg_path.open() as f:
         loaded = yaml.safe_load(f)
-    assert isinstance(loaded, dict), "params.yaml must be a mapping"
+    assert isinstance(loaded, dict), f"{cfg_path} must be a mapping"
     return loaded
 
 
