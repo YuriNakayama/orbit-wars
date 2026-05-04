@@ -397,18 +397,26 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   MART_DIR="data/mart/imitation/<CASE>"
   shopt -s nullglob
   added_any=0
+  add_failed=0
   for pq in "${MART_DIR}"/*.parquet; do
     [ -f "${pq}" ] || continue
     echo "[onstart] dvc add ${pq}"
     if uv run --project bot dvc add "${pq}" 2>&1; then
       added_any=1
     else
-      echo "[onstart] dvc add ${pq} FATAL" >&2
-      mark "55_mart_dvc_add_failed"
-      exit 1
+      # `data/mart/imitation` は /persist symlink 配下にあるため、新しい DVC は
+      # symlink-config 次第で `dvc add` を拒否する。これを fatal にすると
+      # train まで到達できないので、warning だけ残して続行する。parquet の
+      # 永続化 (= 次回 run での skip) は犠牲になるが、本 run の train は実行可能。
+      echo "[onstart] dvc add ${pq} FAILED (likely symlink restriction). Continuing without DVC tracking — parquet stays local-only." >&2
+      add_failed=1
     fi
   done
   shopt -u nullglob
+  if [ "${added_any}" -eq 0 ] && [ "${add_failed}" -eq 1 ]; then
+    # 全部失敗した場合のみ marker を残し、step は continue (exit 1 しない)
+    mark "55_mart_dvc_add_skipped"
+  fi
   if [ "${added_any}" -eq 1 ]; then
     # dvc push は fatal: ここで成功しないと .dvc stub だけが orphan で残り
     # 後続 run の `dvc pull` が `FileNotFoundError` で死ぬ (前 case4 train run
