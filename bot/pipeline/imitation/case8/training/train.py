@@ -134,6 +134,67 @@ def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeat
 BATCH_LOG_EVERY = 100
 
 
+_METRIC_KEY_MAP: dict[str, str] = {
+    "val_total": "total",
+    "val_cand_loss": "cand",
+    "val_cand_acc": "cand_acc",
+    "val_cand_noop_acc": "cand_noop_acc",
+    "val_cand_fire_acc": "cand_fire_acc",
+    "val_ship_loss": "ship",
+    "val_ship_mae": "ship_mae",
+}
+
+
+def _select_metric_value(val_metrics: dict[str, float], name: str) -> float:
+    key = _METRIC_KEY_MAP.get(name)
+    if key is None:
+        raise KeyError(
+            f"unknown metric name {name!r}; expected one of {sorted(_METRIC_KEY_MAP)}"
+        )
+    return float(val_metrics[key])
+
+
+def _build_scheduler(
+    optimizer: optim.Optimizer,
+    cfg: dict[str, Any] | None,
+    *,
+    epochs: int,
+) -> optim.lr_scheduler.LRScheduler | None:
+    """Build an LR scheduler from config. Supports `cosine_warmup` only.
+
+    Returns None when cfg is empty/None — caller treats it as "fixed lr".
+    """
+    if not cfg:
+        return None
+    sched_type = str(cfg.get("type", "")).lower()
+    if sched_type != "cosine_warmup":
+        raise ValueError(
+            f"unsupported scheduler type {sched_type!r}"
+            " (only 'cosine_warmup' supported)"
+        )
+    t_max = int(cfg.get("t_max", epochs))
+    eta_min = float(cfg.get("eta_min", 0.0))
+    warmup_epochs = int(cfg.get("warmup_epochs", 0))
+    warmup_start_factor = float(cfg.get("warmup_start_factor", 0.1))
+
+    cosine = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, t_max - warmup_epochs), eta_min=eta_min
+    )
+    if warmup_epochs > 0:
+        warmup = optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=warmup_start_factor,
+            end_factor=1.0,
+            total_iters=warmup_epochs,
+        )
+        return optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup, cosine],
+            milestones=[warmup_epochs],
+        )
+    return cosine
+
+
 def _run_epoch(
     model: CandidatePolicy,
     loader: DataLoader,  # type: ignore[type-arg]
@@ -274,6 +335,18 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         weight_decay=float(train_cfg.get("weight_decay", 0.0)),
     )
 
+    epochs = int(train_cfg["epochs"])
+    scheduler = _build_scheduler(optimizer, train_cfg.get("scheduler"), epochs=epochs)
+
+    early_stop_cfg = train_cfg.get("early_stop") or {}
+    early_stop_metric = str(early_stop_cfg.get("metric", "")) or None
+    early_stop_patience = int(early_stop_cfg.get("patience", 0)) or 0
+    early_stop_mode = str(early_stop_cfg.get("mode", "max")).lower()
+    if early_stop_mode not in {"min", "max"}:
+        raise ValueError(
+            f"early_stop.mode must be 'min' or 'max', got {early_stop_mode}"
+        )
+
     lw_cfg = train_cfg.get("loss_weights", {}) or {}
     cand_cw: torch.Tensor | None = None
     if bool(lw_cfg.get("use_class_weights", False)):
@@ -317,9 +390,18 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         yaml.safe_dump(cfg, f, sort_keys=False)
     logger.info(json.dumps({"run_dir": str(run_dir), "weights_out": str(weights_out)}))
 
-    best_val = float("inf")
+    best_metric_name = str(train_cfg.get("best_metric", "val_total")).lower()
+    best_metric_mode = str(train_cfg.get("best_metric_mode", "min")).lower()
+    if best_metric_mode not in {"min", "max"}:
+        raise ValueError(
+            f"best_metric_mode must be 'min' or 'max', got {best_metric_mode}"
+        )
+    best_metric_value = float("inf") if best_metric_mode == "min" else float("-inf")
+    best_val = float("inf")  # legacy field for summary.json compat
     best_epoch = -1
-    epochs = int(train_cfg["epochs"])
+    early_stop_counter = 0
+    early_stop_best = float("-inf") if early_stop_mode == "max" else float("inf")
+    epochs_run = epochs
     train_started = time.monotonic()
     for epoch in range(epochs):
         epoch_started = time.monotonic()
@@ -351,8 +433,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             epoch=epoch,
             phase="val",
         )
+        current_lr = float(optimizer.param_groups[0]["lr"])
         log_row = {
             "epoch": epoch,
+            "lr": round(current_lr, 8),
             "train_total": round(train_metrics["total"], 4),
             "train_cand_loss": round(train_metrics["cand"], 4),
             "train_ship_loss": round(train_metrics["ship"], 4),
@@ -366,10 +450,15 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "val_ship_mae": round(val_metrics["ship_mae"], 4),
             "epoch_elapsed_s": round(time.monotonic() - epoch_started, 1),
         }
-        logger.info(json.dumps(log_row))
-        with history_path.open("a") as f:
-            f.write(json.dumps(log_row) + "\n")
-        if val_metrics["total"] < best_val:
+
+        candidate_value = _select_metric_value(val_metrics, best_metric_name)
+        improved = (
+            candidate_value < best_metric_value
+            if best_metric_mode == "min"
+            else candidate_value > best_metric_value
+        )
+        if improved:
+            best_metric_value = candidate_value
             best_val = val_metrics["total"]
             best_epoch = epoch
             cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
@@ -381,15 +470,58 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                     {
                         "event": "best_updated",
                         "epoch": epoch,
-                        "best_val": round(best_val, 4),
+                        "best_metric": best_metric_name,
+                        "best_metric_value": round(best_metric_value, 6),
+                        "best_val_total": round(best_val, 4),
                     }
                 )
             )
 
+        if early_stop_metric and early_stop_patience > 0:
+            es_value = _select_metric_value(val_metrics, early_stop_metric)
+            es_improved = (
+                es_value > early_stop_best
+                if early_stop_mode == "max"
+                else es_value < early_stop_best
+            )
+            if es_improved:
+                early_stop_best = es_value
+                early_stop_counter = 0
+            else:
+                early_stop_counter += 1
+            log_row["early_stop_counter"] = early_stop_counter
+            log_row["early_stop_best"] = round(early_stop_best, 6)
+            if early_stop_counter >= early_stop_patience:
+                logger.info(json.dumps(log_row))
+                with history_path.open("a") as f:
+                    f.write(json.dumps(log_row) + "\n")
+                logger.info(
+                    json.dumps(
+                        {
+                            "event": "early_stop",
+                            "epoch": epoch,
+                            "metric": early_stop_metric,
+                            "best": round(early_stop_best, 6),
+                            "patience": early_stop_patience,
+                        }
+                    )
+                )
+                epochs_run = epoch + 1
+                break
+
+        logger.info(json.dumps(log_row))
+        with history_path.open("a") as f:
+            f.write(json.dumps(log_row) + "\n")
+
+        if scheduler is not None:
+            scheduler.step()
+
     summary = {
-        "epochs_run": epochs,
+        "epochs_run": epochs_run,
         "best_epoch": best_epoch,
         "best_val_loss": round(best_val, 6),
+        "best_metric": best_metric_name,
+        "best_metric_value": round(best_metric_value, 6),
         "weights_out": str(weights_out),
         "run_weights": str(run_weights_path),
         "git_sha": _git_sha(),
@@ -401,7 +533,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     _write_run_json(run_dir, summary, seed=int(cfg.get("seed", 0)))
 
     return TrainReport(
-        epochs_run=epochs,
+        epochs_run=epochs_run,
         best_val_loss=best_val,
         best_epoch=best_epoch,
         weights_path=weights_out,
