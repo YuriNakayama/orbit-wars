@@ -1,0 +1,32 @@
+# RunPod E2E smoke config — keep all knobs absurdly small.
+
+dataset:
+  num_samples: 64
+  in_dim: 8
+  num_classes: 4
+  seed: 0
+
+dataloader:
+  batch_size: 4
+  num_workers: 0
+
+model:
+  in_dim: 8
+  hidden_dim: 16
+  out_dim: 4
+
+training:
+  epochs: 1
+  max_steps: 10  # hard cap on inner-loop steps
+  lr: 0.01
+  weight_decay: 0.0
+  seed: 0
+  log_every_n_steps: 2
+  device: auto  # auto | cpu | cuda
+
+output:
+  # Repo-relative; resolved via utils.repo_root.find_repo_root()
+  run_dir: data/output/models/imitation/case0/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
