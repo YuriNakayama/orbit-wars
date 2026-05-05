@@ -255,8 +255,13 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         attn_heads=int(model_cfg.get("attn_heads", 4)),
         inducing_points=int(model_cfg.get("inducing_points", 16)),
         encoder_layers=int(model_cfg.get("encoder_layers", 3)),
+        model_type=str(model_cfg.get("model_type", "set_transformer")),
     )
-    model = DeepSetsPolicy(model_config).to(device)
+    # build_model は model_type で SetTransformer/Pointer を分岐
+    from pipeline.imitation.case7.policy.model import build_model
+
+    model = build_model(model_config).to(device)
+    model.train()  # build_model は eval mode で返す
 
     optimizer = optim.AdamW(
         model.parameters(),

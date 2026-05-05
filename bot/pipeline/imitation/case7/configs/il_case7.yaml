@@ -16,20 +16,23 @@ data:
   max_episodes: null
 
 model:
-  # case7 は case6 と同じ PLANET_FEAT_DIM=17 (case1 base 11 + ship-prediction 6)。
-  # backbone を Graph Attention U-Net → Set Transformer ISAB stack に、
-  # target_head を MLP → PMA cross-attention に置換。
+  # case7 は 1 case 1 仮説原則に従い、 model 構造を model_type で切替可能。
+  # サポート値:
+  #   "set_transformer": SetTransformerPolicy (現状最良、 iter1 で実証)
+  #   "pointer":         HierarchicalPointerPolicy (autoregressive、 旧 case8 由来)
+  # 規模拡大は hidden/encoder_layers/attn_heads で表現。
   planet_in_dim: 17
   global_in_dim: 6
   hidden: 128
   ships_buckets: 4
   attn_heads: 4
-  inducing_points: 16  # ISAB の inducing points 数 m (Lee 2019 推奨 16-32)
-  encoder_layers: 3  # ISAB block 数 (case6 の 3-level encoder と同等の depth)
+  inducing_points: 16
+  encoder_layers: 3
+  model_type: "set_transformer"
 
 train:
   batch_size: 256
-  epochs: 15
+  epochs: 30  # 最適 iter 数推定実験 (iter1 で best_epoch=14 = 最終 epoch、 under-trained 疑い)
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0

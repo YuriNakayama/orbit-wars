@@ -49,6 +49,11 @@ class ModelConfig:
     attn_heads: int = 4
     inducing_points: int = 16  # ISAB の inducing points 数 m
     encoder_layers: int = 3  # ISAB block 数
+    # 1 case 1 仮説原則に従い、 model 構造は config 経由で切替。
+    # サポート値:
+    #   "set_transformer": SetTransformerPolicy (case7 元)
+    #   "pointer":         HierarchicalPointerPolicy (旧 case8、 GRU autoregressive)
+    model_type: str = "set_transformer"
 
 
 class MultiheadAttentionBlock(nn.Module):
@@ -235,7 +240,94 @@ class SetTransformerPolicy(nn.Module):
         )
 
 
-# Backwards-compatible aliases
+class HierarchicalPointerPolicy(nn.Module):
+    """Set Transformer encoder + Hierarchical Pointer Network decoder.
+
+    case7 (旧 case8) の autoregressive head: from→target→ships を GRU cell
+    で連結し、 前段の決定が後段の hidden state に伝播する形。 forward は
+    argmax cascade (推論パス)。
+
+    config の model_type='pointer' で本クラスが使用される。
+    """
+
+    def __init__(self, cfg: ModelConfig | None = None) -> None:
+        super().__init__()
+        self.cfg = cfg or ModelConfig()
+        h = self.cfg.hidden
+        heads = self.cfg.attn_heads
+
+        # Input projection + encoder (case7 と完全同型 = ISAB stack)
+        self.in_proj = nn.Linear(self.cfg.planet_in_dim, h)
+        self.encoder = nn.ModuleList(
+            [
+                InducedSetAttentionBlock(h, heads, self.cfg.inducing_points)
+                for _ in range(self.cfg.encoder_layers)
+            ]
+        )
+        self.pool = PMA(h, heads, num_seeds=1)
+        self.psi = _mlp(h + self.cfg.global_in_dim, h, h)
+
+        # Decoder (autoregressive: from → target → ships)
+        self.from_head = nn.Linear(h + h, 1)
+        self.template_emb = nn.Parameter(torch.randn(1, NUM_TEMPLATES, h) * 0.02)
+        self.from_to_target_gru = nn.GRUCell(h + TEMPLATE_CTX_DIM, h)
+        self.target_query_proj = nn.Linear(h, h)
+        self.target_key_proj = nn.Linear(h, h)
+        self.target_to_ships_gru = nn.GRUCell(h, h)
+        self.ships_head = nn.Linear(h + h, self.cfg.ships_buckets)
+
+    def forward(self, batch: BatchFeatures) -> PolicyOutput:
+        x = batch.planet_feats
+        mask = batch.planet_mask
+        b, p, _ = x.shape
+
+        h0 = self.in_proj(x) * mask.unsqueeze(-1).float()
+        h = h0
+        for block in self.encoder:
+            h = block(h, mask)
+
+        pooled = self.pool(h, mask).squeeze(1)
+        ctx = self.psi(torch.cat([pooled, batch.global_feats], dim=-1))
+
+        ctx_exp = ctx.unsqueeze(1).expand(-1, p, -1)
+        h_with_ctx = torch.cat([h, ctx_exp], dim=-1)
+
+        # From head
+        from_logits = self.from_head(h_with_ctx).squeeze(-1)
+        from_logits = from_logits.masked_fill(~batch.my_planet_mask, float("-inf"))
+
+        # Target | from (Pointer Network)
+        h_flat = h.reshape(b * p, -1)
+        tctx_flat = batch.template_ctx.reshape(b * p, -1)
+        gru_in_target = torch.cat([h_flat, tctx_flat], dim=-1)
+        init_hidden = ctx.unsqueeze(1).expand(-1, p, -1).reshape(b * p, -1).contiguous()
+        state_after_from = self.from_to_target_gru(gru_in_target, init_hidden)
+
+        q = self.target_query_proj(state_after_from)
+        k = self.target_key_proj(self.template_emb.squeeze(0))
+        target_scores = q @ k.t() / (self.cfg.hidden**0.5)
+        target_logits = target_scores.reshape(b, p, NUM_TEMPLATES)
+
+        # Ships | from, target (argmax cascade)
+        target_argmax = target_logits.argmax(dim=-1)
+        tmpl_exp = self.template_emb.expand(b, -1, -1)
+        sel_tmpl = tmpl_exp.gather(
+            1, target_argmax.unsqueeze(-1).expand(-1, -1, self.cfg.hidden)
+        )
+        gru_in_ships = sel_tmpl.reshape(b * p, -1)
+        state_after_target = self.target_to_ships_gru(gru_in_ships, state_after_from)
+        state_after_target = state_after_target.reshape(b, p, -1)
+        ships_input = torch.cat([state_after_target, h], dim=-1)
+        ships_logits = self.ships_head(ships_input)
+
+        return PolicyOutput(
+            from_logits=from_logits,
+            target_logits=target_logits,
+            ships_logits=ships_logits,
+        )
+
+
+# Backwards-compatible aliases (canonical = SetTransformerPolicy)
 DeepSetsPolicy = SetTransformerPolicy
 GraphUNetPolicy = SetTransformerPolicy  # case5 name compatibility
 GraphAttentionUNetPolicy = SetTransformerPolicy  # case6 name compatibility
@@ -245,9 +337,23 @@ def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def build_model(cfg: ModelConfig | None = None) -> SetTransformerPolicy:
-    """Convenience constructor used by training and inference."""
-    model = SetTransformerPolicy(cfg)
+def build_model(cfg: ModelConfig | None = None) -> nn.Module:
+    """Convenience constructor used by training and inference.
+
+    config の model_type で SetTransformerPolicy / HierarchicalPointerPolicy を
+    分岐。 default は set_transformer (現状最良 = iter1 case7)。
+    """
+    cfg = cfg or ModelConfig()
+    model_type = cfg.model_type.lower()
+    if model_type == "set_transformer":
+        model: nn.Module = SetTransformerPolicy(cfg)
+    elif model_type == "pointer":
+        model = HierarchicalPointerPolicy(cfg)
+    else:
+        raise ValueError(
+            f"unknown model_type={cfg.model_type!r}; "
+            f"supported: 'set_transformer', 'pointer'"
+        )
     model.eval()
     return model
 
@@ -256,6 +362,7 @@ __all__ = [
     "DeepSetsPolicy",
     "GraphAttentionUNetPolicy",
     "GraphUNetPolicy",
+    "HierarchicalPointerPolicy",
     "InducedSetAttentionBlock",
     "MultiheadAttentionBlock",
     "MAX_PLANETS",

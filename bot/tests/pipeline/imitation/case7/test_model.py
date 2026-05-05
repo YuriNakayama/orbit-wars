@@ -11,9 +11,11 @@ from pipeline.imitation.case7.policy.featurizer import (
 )
 from pipeline.imitation.case7.policy.model import (
     PMA,
+    HierarchicalPointerPolicy,
     InducedSetAttentionBlock,
     ModelConfig,
     SetTransformerPolicy,
+    build_model,
     count_parameters,
 )
 from pipeline.imitation.case7.policy.templates import NUM_TEMPLATES, TEMPLATE_CTX_DIM
@@ -113,3 +115,37 @@ def test_target_logits_per_template_distinct() -> None:
     assert template_logits.std().item() > 1e-4, (
         f"all templates same logit: {template_logits}"
     )
+
+
+def test_factory_set_transformer() -> None:
+    """build_model(model_type='set_transformer') が SetTransformerPolicy を返す。"""
+    cfg = ModelConfig(model_type="set_transformer")
+    model = build_model(cfg)
+    assert isinstance(model, SetTransformerPolicy)
+
+
+def test_factory_pointer() -> None:
+    """build_model(model_type='pointer') が HierarchicalPointerPolicy を返す。"""
+    cfg = ModelConfig(model_type="pointer")
+    model = build_model(cfg)
+    assert isinstance(model, HierarchicalPointerPolicy)
+
+
+def test_factory_unknown_raises() -> None:
+    """unknown model_type で ValueError。"""
+    import pytest
+
+    cfg = ModelConfig(model_type="diffusion")
+    with pytest.raises(ValueError, match="unknown model_type"):
+        build_model(cfg)
+
+
+def test_pointer_forward_shape() -> None:
+    """HierarchicalPointerPolicy forward shape sanity (旧 case8 と同型)."""
+    cfg = ModelConfig(model_type="pointer")
+    model = build_model(cfg)
+    batch = _fake_batch(batch_size=2, num_planets=8)
+    out = model(batch)
+    assert out.from_logits.shape == (2, MAX_PLANETS)
+    assert out.target_logits.shape == (2, MAX_PLANETS, NUM_TEMPLATES)
+    assert out.ships_logits.shape == (2, MAX_PLANETS, 4)
