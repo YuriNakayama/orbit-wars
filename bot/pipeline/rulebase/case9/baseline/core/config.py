@@ -96,9 +96,7 @@ REAR_SEND_MIN_SHIPS: int = 10
 REAR_MAX_TRAVEL_TURNS: int = 40
 
 PARTIAL_SOURCE_MIN_SHIPS: int = 16
-# iter4: K=5 → 8 to widen multi-source swarm candidates
-# (replay shows winning games hinge on t=100 100+ships big launch).
-MULTI_SOURCE_TOP_K: int = 8
+MULTI_SOURCE_TOP_K: int = 5
 MULTI_SOURCE_ETA_TOLERANCE: int = 2
 MULTI_SOURCE_PLAN_PENALTY: float = 0.85
 
@@ -111,8 +109,7 @@ HOSTILE_SWARM_ETA_TOLERANCE: int = 1
 THREE_SOURCE_SWARM_ENABLED: bool = True
 THREE_SOURCE_MIN_TARGET_SHIPS: int = 20
 THREE_SOURCE_ETA_TOLERANCE: int = 1
-# iter4: 0.75 → 0.85, easier 3-source swarm fire
-THREE_SOURCE_PLAN_PENALTY: float = 0.85
+THREE_SOURCE_PLAN_PENALTY: float = 0.75
 
 REINFORCE_ENABLED: bool = True
 REINFORCE_MIN_PRODUCTION: int = 2
