@@ -238,6 +238,33 @@ if [ -d /persist ]; then
   # ことで再起動後も再利用できる。lock 不変なら uv sync は no-op に近い。
   # DVC では管理しない (依存情報は uv.lock が source of truth)。
   mkdir -p /persist/uv-venv-bot
+  # attempt 6 (commit 9b49d74) で `uv sync` が以下のエラーで失敗した:
+  #   error: failed to remove directory `/workspace/orbit-wars/bot/.venv/lib`:
+  #   Directory not empty (os error 39)
+  # 原因: lock hash mismatch を検出した uv が venv を rebuild しようとして
+  # rmdir したが、network volume 上で rmdir が空 dir を空でないと報告した。
+  # 対策: lock hash mismatch を検出したら、symlink 化の前に persisted venv
+  # の中身を完全クリアしてしまう (uv の rmdir に頼らない)。
+  PERSIST_LOCK_HASH_FILE="/persist/uv-venv-bot/.uv_lock_sha256"
+  CURRENT_LOCK_HASH=""
+  if [ -f bot/uv.lock ] && command -v sha256sum >/dev/null 2>&1; then
+    CURRENT_LOCK_HASH=$(sha256sum bot/uv.lock | awk '{print $1}')
+  fi
+  if [ -n "${CURRENT_LOCK_HASH}" ] \
+     && [ -d /persist/uv-venv-bot ] \
+     && { [ ! -f "${PERSIST_LOCK_HASH_FILE}" ] \
+          || [ "$(cat "${PERSIST_LOCK_HASH_FILE}" 2>/dev/null)" != "${CURRENT_LOCK_HASH}" ]; }; then
+    # bot/.venv/bin/python が現存していれば中身は意味がある可能性があるが、
+    # uv が rebuild すると判断するので予防的に消す。
+    if [ -e /persist/uv-venv-bot/bin/python ] \
+       || [ -d /persist/uv-venv-bot/lib ]; then
+      echo "[onstart] persisted venv lock hash mismatch — clearing /persist/uv-venv-bot/*"
+      # find -delete で network volume の rmdir 不整合を回避
+      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
+        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
+        || true
+    fi
+  fi
   if [ -L bot/.venv ]; then
     : # already linked
   elif [ -d bot/.venv ]; then
