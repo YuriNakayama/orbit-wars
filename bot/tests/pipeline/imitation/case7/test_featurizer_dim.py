@@ -3,6 +3,8 @@
 iter1: case5 17 + 7 (predicted dist 2 + history 3 + enemy ship event 2) = 24
 iter2: iter1 24 + 10 (fleet trajectory 4 + multi-horizon 4 + production/centroid 2) = 34
        global iter1 10 + 4 (comet 2 + home/centroid 2) = 14
+iter3: iter2 34 + 29 (Pairwise Top-K 20 + Defense surplus 4 + Sparse mask 5) = 63
+       global iter2 14 (変更なし)
 """
 
 from __future__ import annotations
@@ -16,13 +18,13 @@ from pipeline.imitation.case7.policy.featurizer import (
 )
 
 
-def test_planet_feat_dim_is_34() -> None:
-    """iter2: PLANET_FEAT_DIM = 34。"""
-    assert PLANET_FEAT_DIM == 34
+def test_planet_feat_dim_is_63() -> None:
+    """iter3: PLANET_FEAT_DIM = 63。"""
+    assert PLANET_FEAT_DIM == 63
 
 
 def test_global_feat_dim_is_14() -> None:
-    """iter2: GLOBAL_FEAT_DIM = 14。"""
+    """iter2 以降: GLOBAL_FEAT_DIM = 14。"""
     assert GLOBAL_FEAT_DIM == 14
 
 

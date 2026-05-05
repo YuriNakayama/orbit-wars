@@ -14,9 +14,9 @@ data:
   max_episodes: null
 
 model:
-  # case7 iter2: PLANET_FEAT_DIM=34 (iter1 24 + fleet trajectory 4 + multi-horizon 4 + production/centroid 2)。
-  # GLOBAL_FEAT_DIM=14 (iter1 10 + comet 2 + home/centroid 2)。
-  planet_in_dim: 34
+  # case7 iter3: PLANET_FEAT_DIM=63 (iter2 34 + Pairwise Top-K 20 + Defense surplus 4 + sparse mask 5)。
+  # GLOBAL_FEAT_DIM=14 (iter2 から変更なし)。
+  planet_in_dim: 63
   global_in_dim: 14
   hidden: 128
   ships_buckets: 4

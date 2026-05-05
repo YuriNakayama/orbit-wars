@@ -43,13 +43,18 @@ from .timeline import (
 )
 from .types import BatchFeatures, WorldSnapshot
 
-# iter2: case7 24→34 (+10) planet, 10→14 (+4) global. 追加 catalogue は
-# `docs/experiment/imitation/20260504_case7_feature_engineering/iter2_plan.md` 参照
+# iter3: case7 34→63 (+29) planet, 14→14 (no change) global.
+# 追加 catalogue: `docs/experiment/.../iter3_plan.md`
+#   A. Pairwise Top-K (+20, K=5×4 feats)
+#   D. Defense surplus (+4, h=5/15/30 + now)
+#   J. Sparse mask flag (+5, has_inbound/history/enemy_targeted/is_home/is_neighbor_enemy)
 PLANET_FEAT_DIM = (
-    34  # iter1 24 + 10 (fleet trajectory 4 + multi-horizon 4 + production/centroid 2)
+    63  # iter2 34 + iter3 29 (Pairwise Top-K 20 + Defense surplus 4 + sparse mask 5)
 )
-GLOBAL_FEAT_DIM = 14  # iter1 10 + 4 (comet 2 + home/centroid 2)
+GLOBAL_FEAT_DIM = 14  # iter2 から変更なし
 MAX_PLANETS = 36
+TOPK_NEIGHBORS = 5  # iter3 A: pairwise top-K count
+TOPK_FEATS_PER_NEIGHBOR = 4  # dist_log, ships_ratio_log, owner_signed, prod_log
 BOARD_SIZE = 100.0
 HORIZON_TURNS = 30  # for incoming-fleet eta normalization
 PREDICT_TURNS = 5  # future-position prediction horizon (orbit rotation)
@@ -525,6 +530,66 @@ def featurize(
                     enemy_targeted_count[tgt_slot] += 1.0
                     enemy_targeted_ships[tgt_slot] += float(lc_ships[enemy_idx[k]])
 
+    # === iter3 A: Pairwise Top-K pre-compute (P x K x 4 feats) ===
+    # 各 source slot から見て、最近 K 個の other planet の (dist_log, ships_ratio_log,
+    # owner_signed, prod_log) を numpy で一気に集約。
+    pair_topk = np.zeros(
+        (MAX_PLANETS, TOPK_NEIGHBORS, TOPK_FEATS_PER_NEIGHBOR), dtype=np.float32
+    )
+    if n >= 2:
+        # planet_x_arr / planet_y_arr / planet_owner_arr / planet_ships_arr / planet_prod_arr を構築
+        po_arr = np.zeros(n, dtype=np.int64)
+        ps_arr = np.zeros(n, dtype=np.float64)
+        pp_arr = np.zeros(n, dtype=np.float64)
+        for s in range(n):
+            po_arr[s] = int(raw_planets[s][1])
+            ps_arr[s] = float(raw_planets[s][5])
+            pp_arr[s] = float(raw_planets[s][6])
+        # planet_x_arr / planet_y_arr は既に上で構築済 (size = n)
+        dx_mat = planet_x_arr[None, :] - planet_x_arr[:, None]  # (n, n)
+        dy_mat = planet_y_arr[None, :] - planet_y_arr[:, None]
+        d2_mat = dx_mat * dx_mat + dy_mat * dy_mat
+        # exclude self (set self distance to inf)
+        np.fill_diagonal(d2_mat, np.inf)
+        # top-K nearest (smallest d2) per source
+        kk = min(TOPK_NEIGHBORS, n - 1)
+        nearest_idx = np.argpartition(d2_mat, kth=kk - 1, axis=1)[:, :kk]
+        # sort each row's k indices by actual distance ascending
+        for s in range(n):
+            row_d2 = d2_mat[s, nearest_idx[s]]
+            order = np.argsort(row_d2)
+            sorted_neighbors = nearest_idx[s, order]
+            for k_pos in range(kk):
+                t = int(sorted_neighbors[k_pos])
+                d = float(np.sqrt(d2_mat[s, t]))
+                src_ships = ps_arr[s]
+                tgt_ships = ps_arr[t]
+                tgt_owner = int(po_arr[t])
+                # dist_log normalized
+                pair_topk[s, k_pos, 0] = float(math.log1p(d) / math.log1p(BOARD_SIZE))
+                # ships ratio log: log1p(tgt) - log1p(src)
+                pair_topk[s, k_pos, 1] = float(
+                    math.log1p(tgt_ships) - math.log1p(src_ships)
+                )
+                # owner signed: +1 mine, -1 enemy, 0 neutral
+                if tgt_owner == player:
+                    pair_topk[s, k_pos, 2] = 1.0
+                elif tgt_owner == -1:
+                    pair_topk[s, k_pos, 2] = 0.0
+                else:
+                    pair_topk[s, k_pos, 2] = -1.0
+                pair_topk[s, k_pos, 3] = float(math.log1p(pp_arr[t]))
+            # If kk < TOPK_NEIGHBORS, remaining slots are zero (sentinel: dist_log=0 only when no
+            # neighbor; we use dist_log=-1 sentinel for "no slot" to distinguish). Set explicitly:
+            for k_pos in range(kk, TOPK_NEIGHBORS):
+                pair_topk[s, k_pos, 0] = -1.0  # no-neighbor sentinel
+                # other 3 stay 0
+    else:
+        # n < 2: no neighbors at all, set sentinel for slot 0
+        for k_pos in range(TOPK_NEIGHBORS):
+            for s in range(MAX_PLANETS):
+                pair_topk[s, k_pos, 0] = -1.0
+
     # === Per-planet feature assembly ===
     for slot in range(n):
         pid, owner, px, py, radius, ships, production = raw_planets[slot]
@@ -581,6 +646,47 @@ def featurize(
             math.sqrt((float(px) - my_prod_cx) ** 2 + (float(py) - my_prod_cy) ** 2)
         ) / math.log1p(BOARD_SIZE)
 
+        # iter3 D: Defense surplus (per-planet 4 列)
+        # 自軍 ships - 敵 incoming ships の予測値を h=5/15/30 + now
+        # 自軍以外の planet では surplus は 0 で意味薄だが、neutral/enemy でも
+        # incoming は意味がある (奪取後の defense margin) ので算出は同じ
+        own_ships_now = float(ships_i) if is_mine else 0.0
+        enemy_inbound = float(incoming[slot][1])
+        prod_per_turn = float(production_i) if is_mine else 0.0
+        margin_now = (own_ships_now - enemy_inbound) / 100.0
+        margin_5 = (own_ships_now + 5.0 * prod_per_turn - enemy_inbound) / 100.0
+        margin_15 = (own_ships_now + 15.0 * prod_per_turn - enemy_inbound) / 100.0
+        margin_30 = (own_ships_now + 30.0 * prod_per_turn - enemy_inbound) / 100.0
+        defense_margin_now = max(-1.0, min(1.0, margin_now))
+        defense_surplus_5turn = max(-1.0, min(1.0, margin_5))
+        defense_surplus_15turn = max(-1.0, min(1.0, margin_15))
+        defense_surplus_30turn = max(-1.0, min(1.0, margin_30))
+
+        # iter3 J: Sparse mask flags (per-planet 5 列)
+        has_inbound_fleet_flag = 1.0 if inbound_fleet_dist[slot] != -1.0 else 0.0
+        has_history_flag = 1.0 if snap_t1 is not None else 0.0
+        has_enemy_targeted_flag = 1.0 if enemy_targeted_count[slot] > 0 else 0.0
+        is_home_planet_flag = (
+            1.0 if home_pid is not None and int(pid) == home_pid else 0.0
+        )
+        # is_neighbor_to_enemy: 半径 BOARD_SIZE/4 以内に敵 planet があるか
+        is_neighbor_to_enemy_flag = 0.0
+        nbr_radius = BOARD_SIZE / 4.0
+        for s2 in range(n):
+            if s2 == slot:
+                continue
+            other_owner = int(raw_planets[s2][1])
+            if other_owner == player or other_owner == -1:
+                continue
+            dx2 = float(raw_planets[s2][2]) - float(px)
+            dy2 = float(raw_planets[s2][3]) - float(py)
+            if dx2 * dx2 + dy2 * dy2 <= nbr_radius * nbr_radius:
+                is_neighbor_to_enemy_flag = 1.0
+                break
+
+        # iter3 A: Pairwise Top-K (5 neighbors × 4 feats = 20 列、flatten)
+        topk_flat = pair_topk[slot].reshape(-1).tolist()
+
         feats = [
             float(px) / BOARD_SIZE,
             float(py) / BOARD_SIZE,
@@ -623,6 +729,19 @@ def featurize(
             # case7 iter2: home distance + production centroid distance 2 列
             home_dist_log,
             prod_centroid_dist_log,
+            # case7 iter3 A: Pairwise Top-K (K=5 × 4 feat = 20 列)
+            *topk_flat,
+            # case7 iter3 D: Defense surplus (4 列、h=5/15/30 + now)
+            defense_surplus_5turn,
+            defense_surplus_15turn,
+            defense_surplus_30turn,
+            defense_margin_now,
+            # case7 iter3 J: Sparse mask flags (5 列)
+            has_inbound_fleet_flag,
+            has_history_flag,
+            has_enemy_targeted_flag,
+            is_home_planet_flag,
+            is_neighbor_to_enemy_flag,
         ]
         for j in range(PLANET_FEAT_DIM):
             planet_feats[slot, j] = feats[j]
