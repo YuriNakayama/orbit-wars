@@ -488,14 +488,23 @@ def train(
     # その値を尊重する (デフォルト値とのみ比較)。
     if case == "case0":
         if list(gpu_names) == list(DEFAULT_GPU_NAMES):
-            gpu_names = ["NVIDIA GeForce RTX 3090"]
-            console.print("[cyan]case0:[/] GPU を RTX 3090 単独に絞り込み (smoke run)")
+            # 安価な smoke 用 GPU を複数候補に。3090 が在庫切れでも fallback で
+            # A4000 / 4000 Ada / 4090 等に逃げられる。
+            gpu_names = [
+                "NVIDIA GeForce RTX 3090",
+                "NVIDIA RTX A4000",
+                "NVIDIA RTX 4000 Ada Generation",
+                "NVIDIA GeForce RTX 4090",
+            ]
+            console.print(
+                "[cyan]case0:[/] GPU を 3090/A4000/4000Ada/4090 に絞り込み (smoke run)"
+            )
         if max_dph == 2.0:
-            max_dph = 0.5
-            console.print("[cyan]case0:[/] --max-dph を 0.5 に縮小")
+            max_dph = 0.7
+            console.print("[cyan]case0:[/] --max-dph を 0.7 に縮小")
         if cost_limit_usd == DEFAULT_COST_LIMIT_USD:
-            cost_limit_usd = 0.30
-            console.print("[cyan]case0:[/] --cost-limit を $0.30 に縮小")
+            cost_limit_usd = 0.40
+            console.print("[cyan]case0:[/] --cost-limit を $0.40 に縮小")
 
     offers = search_offers(
         sdk,
