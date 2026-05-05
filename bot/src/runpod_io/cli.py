@@ -489,19 +489,20 @@ def train(
     if case == "case0":
         if list(gpu_names) == list(DEFAULT_GPU_NAMES):
             # SECURE 候補。`pick_offer` は dph 昇順で選ぶので
-            # A4000 ($0.25) → 4000 Ada ($0.26) → 3090 ($0.46) → A6000 ($0.49)
-            # の順で fallback する。
+            # A4000 ($0.25) → 4000 Ada ($0.26) → A5000 ($0.27) → 3090 ($0.46)
+            # → A6000 ($0.49) の順で fallback する。
             # 4090 は memory:runpod_5_traps と attempt 3 で「pod RUNNING だが
             # bash 開始すら届かない (markers ゼロ)」失敗を再現したので除外。
             # A6000 は 4090 ガチャ回避策として実績あり (memory)。
             gpu_names = [
                 "NVIDIA GeForce RTX 3090",
                 "NVIDIA RTX A4000",
+                "NVIDIA RTX A5000",
                 "NVIDIA RTX A6000",
                 "NVIDIA RTX 4000 Ada Generation",
             ]
             console.print(
-                "[cyan]case0:[/] GPU を A4000/4000Ada/3090/A6000 に絞り込み"
+                "[cyan]case0:[/] GPU を A4000/4000Ada/A5000/3090/A6000 に絞り込み"
                 " (4090 はノードガチャ trap を引いたため除外)"
             )
         if max_dph == 2.0:
