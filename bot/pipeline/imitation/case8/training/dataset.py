@@ -1,13 +1,21 @@
-"""Parquet → torch Dataset/DataLoader for imitation/case8."""
+"""Parquet → torch Dataset/DataLoader for imitation/case8.
+
+iter5: lazy chunk-by-chunk read using pyarrow.parquet.ParquetFile.
+__init__ does not load row data into RAM (only metadata + cand_slot_per_src
+for class_weight). __getitem__ on-demand-loads the row group containing the
+requested index, with a small LRU cache to absorb sequential / random access
+from DataLoader. This avoids the RAM peak that caused iter4-v1..v4 OOM.
+"""
 
 from __future__ import annotations
 
 import gc
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import polars as pl
+import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
@@ -49,8 +57,60 @@ class BatchedSample:
     is_noop: torch.Tensor
 
 
+_DATA_COLUMNS = (
+    "planet_feats",
+    "global_feats",
+    "planet_mask",
+    "my_planet_mask",
+    "target_mask",
+    "candidate_feats",
+    "candidate_mask",
+    "candidate_pid",
+    "cand_slot_per_src",
+    "ship_label_per_src",
+    "is_noop",
+)
+
+
+@dataclass
+class _RowGroupArrays:
+    """Numpy arrays for a single row group, indexed by row offset within the group."""
+
+    planet_feats: np.ndarray
+    global_feats: np.ndarray
+    planet_mask: np.ndarray
+    my_planet_mask: np.ndarray
+    target_mask: np.ndarray
+    candidate_feats: np.ndarray
+    candidate_mask: np.ndarray
+    candidate_pid: np.ndarray
+    cand_slot_per_src: np.ndarray
+    ship_label_per_src: np.ndarray
+    is_noop: np.ndarray
+
+
+def _list_col_to_numpy(col: object, dtype: np.dtype) -> np.ndarray:
+    """pyarrow ListArray (chunked) → flat numpy. Avoids Python list intermediate
+    for inner values; only the per-row Python-list materialisation is unavoidable
+    when going through `to_pylist()`."""
+    pylist = col.to_pylist()  # type: ignore[attr-defined]
+    arr = np.asarray(pylist, dtype=dtype)
+    del pylist
+    return arr
+
+
 class CaseFourDataset(Dataset[Sample]):
-    """In-memory parquet-backed Dataset for case8."""
+    """Lazy parquet-backed Dataset for case8 (iter5 refactor).
+
+    init time: O(num_rows) for cand_slot_per_src scan only; other columns are
+    loaded on demand via row-group cache.
+
+    RAM peak: ~one row group (≈ 5000 rows × ~40k float = ~800MB) plus
+    cand_slot_per_src array (≈ n_rows × 48 × 8 bytes ≈ a few MB). Compare to
+    iter4 in-memory load that needed ~20-30 GB peak.
+    """
+
+    _CACHE_SIZE = 4  # LRU row-group cache; absorbs DataLoader shuffle access
 
     def __init__(
         self,
@@ -58,113 +118,49 @@ class CaseFourDataset(Dataset[Sample]):
         mask_planet_cols: list[int] | None = None,
         mask_global_cols: list[int] | None = None,
     ) -> None:
-        # iter4 OOM fix: column ごとに to_list → numpy 化 → 中間 list と polars
-        # series を即座に削除する。`pl.read_parquet` 全体を抱えたまま全列を
-        # 順次 to_list() すると、polars buffer (~10GB) + Python list (~3-5GB
-        # per col の中間) + numpy (~7GB peak) が三重で乗り、328k row で
-        # 24-32GB の RTX 4090 host RAM を超過 OOM (iter4-v2/v3 で観測)。
-        df_local = pl.read_parquet(str(parquet_path))
-        n_rows = df_local.height
-        has_ship_label = "ship_label_per_src" in df_local.columns
+        self._path = str(parquet_path)
+        self._pf = pq.ParquetFile(self._path)
+        meta = self._pf.metadata
+        self._num_rows = int(meta.num_rows)
+        self._num_row_groups = int(meta.num_row_groups)
+        # Compute row-group row offsets for binary search.
+        offsets = [0]
+        for rg_idx in range(self._num_row_groups):
+            offsets.append(offsets[-1] + int(meta.row_group(rg_idx).num_rows))
+        self._row_group_offsets = offsets
 
-        def pop_to_numpy(df: pl.DataFrame, col: str, dtype: np.dtype) -> np.ndarray:
-            """polars Series → list → numpy 即変換、polars 側から column 削除。"""
-            series_list = df[col].to_list()
-            arr = np.array(series_list, dtype=dtype)
-            del series_list
-            df.drop_in_place(col)
-            gc.collect()
-            return arr
-
-        planet_arr = pop_to_numpy(df_local, "planet_feats", np.dtype(np.float32))
-        planet_dim = (
-            planet_arr.size // (n_rows * MAX_PLANETS) if n_rows > 0 else PLANET_FEAT_DIM
-        )
-        self._planet_feat_dim = int(planet_dim)
-        self._planet_feats = planet_arr.reshape(-1, MAX_PLANETS, self._planet_feat_dim)
-        del planet_arr
+        # iter4 hyperparams use class_weight, so we need a full-pass scan of
+        # cand_slot_per_src. Load only this one column.
+        cand_slot_table = self._pf.read(columns=["cand_slot_per_src"])
+        self._cand_slot_per_src_full = _list_col_to_numpy(
+            cand_slot_table["cand_slot_per_src"].combine_chunks(),
+            np.dtype(np.int64),
+        ).reshape(-1, MAX_PLANETS)
+        del cand_slot_table
         gc.collect()
 
-        global_arr = pop_to_numpy(df_local, "global_feats", np.dtype(np.float32))
-        global_dim = global_arr.size // n_rows if n_rows > 0 else GLOBAL_FEAT_DIM
-        self._global_feat_dim = int(global_dim)
-        self._global_feats = global_arr.reshape(-1, self._global_feat_dim)
-        del global_arr
-        gc.collect()
+        # Inferred dims (consistent with iter1-3; we don't load planet_feats yet).
+        self._planet_feat_dim = PLANET_FEAT_DIM
+        self._global_feat_dim = GLOBAL_FEAT_DIM
 
-        if mask_planet_cols:
-            for col in mask_planet_cols:
-                if 0 <= col < self._planet_feat_dim:
-                    self._planet_feats[:, :, col] = 0.0
-        if mask_global_cols:
-            for col in mask_global_cols:
-                if 0 <= col < self._global_feat_dim:
-                    self._global_feats[:, col] = 0.0
+        self._mask_planet_cols = list(mask_planet_cols or [])
+        self._mask_global_cols = list(mask_global_cols or [])
 
-        self._planet_mask = pop_to_numpy(
-            df_local, "planet_mask", np.dtype(np.bool_)
-        ).reshape(-1, MAX_PLANETS)
-        self._my_planet_mask = pop_to_numpy(
-            df_local, "my_planet_mask", np.dtype(np.bool_)
-        ).reshape(-1, MAX_PLANETS)
-        self._target_mask = pop_to_numpy(
-            df_local, "target_mask", np.dtype(np.bool_)
-        ).reshape(-1, MAX_PLANETS)
-        self._candidate_feats = pop_to_numpy(
-            df_local, "candidate_feats", np.dtype(np.float32)
-        ).reshape(-1, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
-        self._candidate_mask = pop_to_numpy(
-            df_local, "candidate_mask", np.dtype(np.bool_)
-        ).reshape(-1, MAX_PLANETS, CAND_K)
-        self._candidate_pid = pop_to_numpy(
-            df_local, "candidate_pid", np.dtype(np.int64)
-        ).reshape(-1, MAX_PLANETS, CAND_K)
-        self._cand_slot_per_src = pop_to_numpy(
-            df_local, "cand_slot_per_src", np.dtype(np.int64)
-        ).reshape(-1, MAX_PLANETS)
-        if has_ship_label:
-            self._ship_label_per_src = pop_to_numpy(
-                df_local, "ship_label_per_src", np.dtype(np.int64)
-            ).reshape(-1, MAX_PLANETS)
-        else:
-            self._ship_label_per_src = np.full(
-                (n_rows, MAX_PLANETS), -1, dtype=np.int64
-            )
-        # is_noop は値型 (List ではない) なので to_numpy() で直接 OK
-        self._is_noop = df_local["is_noop"].to_numpy().astype(np.bool_)
-        df_local.drop_in_place("is_noop")
-        del df_local
-        gc.collect()
+        # LRU cache: row_group_idx → _RowGroupArrays
+        self._cache: OrderedDict[int, _RowGroupArrays] = OrderedDict()
+        self._has_ship_label = "ship_label_per_src" in self._pf.schema_arrow.names
 
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
-        """Effective-number-of-samples class weights over cand_slot labels.
-
-        Effective-number 公式 `(1 - beta^n) / (1 - beta)` は n が大きいと
-        beta^n → 0 で飽和し、すべての class について `~ (1-beta)` という
-        ほぼ同じ値を返す。本番 (n_slot ~ 数百万) で実際にこれが起き、
-        weights が `[1, 1, ..., 1]` に縮退して loss が `cross_entropy` から
-        Inf を吐き、backprop で全 param が NaN/Inf になっていた。
-
-        修正: 数値安定 + 縮退回避のため inverse-frequency weight を採用。
-        各 class i について `w_i = total_present / (counts[i] * num_present)`
-        を計算する。これは:
-          - counts が大きい class は w が小さく
-          - counts が小さい (rare) class は w が大きい
-          - counts==0 (= train data に未出現) の class は 0 で除外
-          - 全 present class 平均が 1.0 になるよう正規化
-        beta は API 互換性のため受け取るが現状未使用 (将来の effective-number
-        ハイブリッドで再活用余地あり)。
-        """
-        del beta  # unused; kept for backward compat
-        flat = self._cand_slot_per_src.reshape(-1)
+        """Inverse-frequency class weights — see iter1-3 for rationale."""
+        del beta
+        flat = self._cand_slot_per_src_full.reshape(-1)
         flat = flat[flat != ignore_index]
         counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
         present_mask = counts > 0
         if not present_mask.any():
             return torch.ones(num_classes, dtype=torch.float32)
-        # inverse-frequency, then normalize so present classes average to 1.0
         raw = np.zeros(num_classes, dtype=np.float64)
         raw[present_mask] = 1.0 / counts[present_mask]
         mean_raw = float(raw[present_mask].mean())
@@ -172,21 +168,104 @@ class CaseFourDataset(Dataset[Sample]):
         return torch.tensor(weights, dtype=torch.float32)
 
     def __len__(self) -> int:
-        return int(self._planet_feats.shape[0])
+        return self._num_rows
+
+    def _locate(self, idx: int) -> tuple[int, int]:
+        """Return (row_group_idx, offset_within_group) for the global index."""
+        if idx < 0 or idx >= self._num_rows:
+            raise IndexError(idx)
+        # Linear scan is fine: num_row_groups is O(num_rows / 5000) ≈ 60 for
+        # our largest preprocess output. Bisect is overkill.
+        offsets = self._row_group_offsets
+        for rg_idx in range(self._num_row_groups):
+            if idx < offsets[rg_idx + 1]:
+                return rg_idx, idx - offsets[rg_idx]
+        raise AssertionError("unreachable")
+
+    def _load_row_group(self, rg_idx: int) -> _RowGroupArrays:
+        if rg_idx in self._cache:
+            self._cache.move_to_end(rg_idx)
+            return self._cache[rg_idx]
+
+        table = self._pf.read_row_group(rg_idx, columns=list(_DATA_COLUMNS))
+        n = table.num_rows
+
+        planet_arr = _list_col_to_numpy(
+            table["planet_feats"].combine_chunks(), np.dtype(np.float32)
+        )
+        if planet_arr.size > 0:
+            self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
+        planet_arr = planet_arr.reshape(n, MAX_PLANETS, self._planet_feat_dim)
+        for col in self._mask_planet_cols:
+            if 0 <= col < self._planet_feat_dim:
+                planet_arr[:, :, col] = 0.0
+
+        global_arr = _list_col_to_numpy(
+            table["global_feats"].combine_chunks(), np.dtype(np.float32)
+        )
+        if global_arr.size > 0:
+            self._global_feat_dim = int(global_arr.size // n)
+        global_arr = global_arr.reshape(n, self._global_feat_dim)
+        for col in self._mask_global_cols:
+            if 0 <= col < self._global_feat_dim:
+                global_arr[:, col] = 0.0
+
+        rg = _RowGroupArrays(
+            planet_feats=planet_arr,
+            global_feats=global_arr,
+            planet_mask=_list_col_to_numpy(
+                table["planet_mask"].combine_chunks(), np.dtype(np.bool_)
+            ).reshape(n, MAX_PLANETS),
+            my_planet_mask=_list_col_to_numpy(
+                table["my_planet_mask"].combine_chunks(), np.dtype(np.bool_)
+            ).reshape(n, MAX_PLANETS),
+            target_mask=_list_col_to_numpy(
+                table["target_mask"].combine_chunks(), np.dtype(np.bool_)
+            ).reshape(n, MAX_PLANETS),
+            candidate_feats=_list_col_to_numpy(
+                table["candidate_feats"].combine_chunks(), np.dtype(np.float32)
+            ).reshape(n, MAX_PLANETS, CAND_K, CAND_FEAT_DIM),
+            candidate_mask=_list_col_to_numpy(
+                table["candidate_mask"].combine_chunks(), np.dtype(np.bool_)
+            ).reshape(n, MAX_PLANETS, CAND_K),
+            candidate_pid=_list_col_to_numpy(
+                table["candidate_pid"].combine_chunks(), np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS, CAND_K),
+            cand_slot_per_src=_list_col_to_numpy(
+                table["cand_slot_per_src"].combine_chunks(), np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS),
+            ship_label_per_src=(
+                _list_col_to_numpy(
+                    table["ship_label_per_src"].combine_chunks(),
+                    np.dtype(np.int64),
+                ).reshape(n, MAX_PLANETS)
+                if self._has_ship_label
+                else np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+            ),
+            is_noop=table["is_noop"].to_numpy().astype(np.bool_),
+        )
+        del table
+
+        self._cache[rg_idx] = rg
+        if len(self._cache) > self._CACHE_SIZE:
+            self._cache.popitem(last=False)
+        return rg
 
     def __getitem__(self, idx: int) -> Sample:
+        rg_idx, offset = self._locate(idx)
+        rg = self._load_row_group(rg_idx)
         return Sample(
-            planet_feats=torch.from_numpy(self._planet_feats[idx]),
-            global_feats=torch.from_numpy(self._global_feats[idx]),
-            planet_mask=torch.from_numpy(self._planet_mask[idx]),
-            my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
-            target_mask=torch.from_numpy(self._target_mask[idx]),
-            candidate_feats=torch.from_numpy(self._candidate_feats[idx]),
-            candidate_mask=torch.from_numpy(self._candidate_mask[idx]),
-            candidate_pid=torch.from_numpy(self._candidate_pid[idx]),
-            cand_slot_per_src=torch.from_numpy(self._cand_slot_per_src[idx]),
-            ship_label_per_src=torch.from_numpy(self._ship_label_per_src[idx]),
-            is_noop=bool(self._is_noop[idx]),
+            planet_feats=torch.from_numpy(rg.planet_feats[offset]),
+            global_feats=torch.from_numpy(rg.global_feats[offset]),
+            planet_mask=torch.from_numpy(rg.planet_mask[offset]),
+            my_planet_mask=torch.from_numpy(rg.my_planet_mask[offset]),
+            target_mask=torch.from_numpy(rg.target_mask[offset]),
+            candidate_feats=torch.from_numpy(rg.candidate_feats[offset]),
+            candidate_mask=torch.from_numpy(rg.candidate_mask[offset]),
+            candidate_pid=torch.from_numpy(rg.candidate_pid[offset]),
+            cand_slot_per_src=torch.from_numpy(rg.cand_slot_per_src[offset]),
+            ship_label_per_src=torch.from_numpy(rg.ship_label_per_src[offset]),
+            is_noop=bool(rg.is_noop[offset]),
         )
 
 
