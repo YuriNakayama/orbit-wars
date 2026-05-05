@@ -1,14 +1,12 @@
 """case7 iter3 特徴量 (Pairwise Top-K / Defense surplus / Sparse mask) のテスト。
 
-idx layout (iter3):
-  planet 34-53: Pairwise Top-K (5 neighbors × 4 feat)
-    34..37: k=0 (dist_log, ships_ratio_log, owner_signed, prod_log)
-    38..41: k=1
-    42..45: k=2
-    46..49: k=3
-    50..53: k=4
-  planet 54-57: Defense surplus (h=5, h=15, h=30, now)
-  planet 58-62: Sparse mask flags (inbound, history, enemy_targeted, is_home, neighbor_enemy)
+idx layout (iter4 で G6 削除 + K1 縮小により shift):
+  planet 32-43: Pairwise Top-K (3 neighbors × 4 feat、iter4 K=3 縮小)
+    32..35: k=0 (dist_log, ships_ratio_log, owner_signed, prod_log)
+    36..39: k=1
+    40..43: k=2
+  planet 44-47: Defense surplus (h=5, h=15, h=30, now)
+  planet 48-52: Sparse mask flags (inbound, history, enemy_targeted, is_home, neighbor_enemy)
 """
 
 from __future__ import annotations
@@ -22,23 +20,24 @@ from pipeline.imitation.case7.policy.featurizer import (
     planet_snapshot_from_obs,
 )
 
-# Pairwise Top-K
-COL_TOPK_K0_DIST = 34
-COL_TOPK_K0_SHIPS_RATIO = 35
-COL_TOPK_K0_OWNER_SIGNED = 36
-COL_TOPK_K0_PROD_LOG = 37
-COL_TOPK_K4_DIST = 50
+# Pairwise Top-K (iter4: G6 削除で -2 shift、K=3 縮小で -8 shift = total -10 vs iter3)
+COL_TOPK_K0_DIST = 32
+COL_TOPK_K0_SHIPS_RATIO = 33
+COL_TOPK_K0_OWNER_SIGNED = 34
+COL_TOPK_K0_PROD_LOG = 35
+# K=4 は iter4 で消えた。K=2 まで存在
+COL_TOPK_K2_DIST = 40
 # Defense surplus
-COL_DEF_5 = 54
-COL_DEF_15 = 55
-COL_DEF_30 = 56
-COL_DEF_NOW = 57
+COL_DEF_5 = 44
+COL_DEF_15 = 45
+COL_DEF_30 = 46
+COL_DEF_NOW = 47
 # Sparse mask flags
-COL_HAS_INBOUND = 58
-COL_HAS_HISTORY = 59
-COL_HAS_ENEMY_TARGETED = 60
-COL_IS_HOME = 61
-COL_IS_NEIGHBOR_ENEMY = 62
+COL_HAS_INBOUND = 48
+COL_HAS_HISTORY = 49
+COL_HAS_ENEMY_TARGETED = 50
+COL_IS_HOME = 51
+COL_IS_NEIGHBOR_ENEMY = 52
 
 
 def _obs(
@@ -64,11 +63,11 @@ def _obs(
 
 
 def test_topk_sentinel_when_only_one_planet() -> None:
-    """planet が 1 個だけなら Top-K は全 sentinel (dist_log = -1)。"""
+    """planet が 1 個だけなら Top-K は全 sentinel (dist_log = -1)。iter4 K=3。"""
     obs = _obs(planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]])
     batch, _ = featurize(obs)
-    for k in range(5):
-        col = 34 + k * 4
+    for k in range(3):  # iter4: K=3
+        col = 32 + k * 4
         assert batch.planet_feats[0, 0, col].item() == -1.0
 
 
@@ -98,22 +97,20 @@ def test_topk_k0_is_nearest_with_correct_owner() -> None:
     )
 
 
-def test_topk_remaining_slots_sentinel_when_few_neighbors() -> None:
-    """planet が 3 個 (K=2 までしか埋まらない) → K=3, K=4 は sentinel。"""
+def test_topk_only_two_neighbors_when_planets_are_two() -> None:
+    """planet が 2 個 (K=1 までしか埋まらない) → K=2 が sentinel。iter4 K=3。"""
     obs = _obs(
         planets=[
             [0, 0, 50.0, 50.0, 1.0, 10, 2],
             [1, 1, 60.0, 50.0, 1.0, 5, 3],
-            [2, -1, 70.0, 50.0, 1.0, 3, 1],
         ]
     )
     batch, _ = featurize(obs)
-    # K=2 は埋まる (P2)
-    # K=3, K=4 は sentinel: dist_log = -1 (この時点で 36 や 37 は不変、テストは dist_log のみ)
-    col_k3_dist = 34 + 3 * 4  # = 46
-    col_k4_dist = 34 + 4 * 4  # = 50
-    assert batch.planet_feats[0, 0, col_k3_dist].item() == -1.0
-    assert batch.planet_feats[0, 0, col_k4_dist].item() == -1.0
+    # K=0 は埋まる (P1)、K=1, K=2 は sentinel
+    col_k1_dist = 32 + 1 * 4  # = 36
+    col_k2_dist = 32 + 2 * 4  # = 40
+    assert batch.planet_feats[0, 0, col_k1_dist].item() == -1.0
+    assert batch.planet_feats[0, 0, col_k2_dist].item() == -1.0
 
 
 # ----- Defense surplus -----
@@ -219,8 +216,8 @@ def test_is_neighbor_to_enemy_flag_zero_when_enemy_far() -> None:
 
 
 def test_iter3_features_deterministic_without_history() -> None:
-    """iter3 列 (34-62) は HistoryState 有無で値が変わらない (history 非依存) ものが大半。
-    has_history_flag (59) のみ history で変わるが他は同値。"""
+    """iter4 列 (32-52) は HistoryState 有無で値が変わらない (history 非依存) ものが大半。
+    has_history_flag (49) のみ history で変わるが他は同値。"""
     obs = _obs(
         step=10,
         planets=[
@@ -233,11 +230,11 @@ def test_iter3_features_deterministic_without_history() -> None:
     history.push(planet_snapshot_from_obs(obs), fleet_snapshot_from_obs(obs))
     history.push(planet_snapshot_from_obs(obs), fleet_snapshot_from_obs(obs))
     batch_b, _ = featurize(obs, history=history)
-    # Pairwise Top-K (34-53) と Defense surplus (54-57) と mask 60-62 は history 非依存
-    for col in list(range(34, 58)) + [60, 61, 62]:
+    # Pairwise Top-K (32-43) と Defense surplus (44-47) と mask 48/50/51/52 は history 非依存
+    for col in list(range(32, 48)) + [48, 50, 51, 52]:
         a = batch_a.planet_feats[0, 0, col].item()
         b = batch_b.planet_feats[0, 0, col].item()
         assert a == b, f"col {col}: history-independent expected, got {a} vs {b}"
-    # has_history_flag (59) だけは異なる
+    # has_history_flag (49) だけは異なる
     assert batch_a.planet_feats[0, 0, COL_HAS_HISTORY].item() == 0.0
     assert batch_b.planet_feats[0, 0, COL_HAS_HISTORY].item() == 1.0

@@ -43,17 +43,22 @@ from .timeline import (
 )
 from .types import BatchFeatures, WorldSnapshot
 
-# iter3: case7 34→63 (+29) planet, 14→14 (no change) global.
-# 追加 catalogue: `docs/experiment/.../iter3_plan.md`
-#   A. Pairwise Top-K (+20, K=5×4 feats)
-#   D. Defense surplus (+4, h=5/15/30 + now)
-#   J. Sparse mask flag (+5, has_inbound/history/enemy_targeted/is_home/is_neighbor_enemy)
-PLANET_FEAT_DIM = (
-    63  # iter2 34 + iter3 29 (Pairwise Top-K 20 + Defense surplus 4 + sparse mask 5)
-)
-GLOBAL_FEAT_DIM = 14  # iter2 から変更なし
+# iter4: case7 63→61 (-2) planet, 14→12 (-2) global. permutation importance に基づく整理。
+# 削除 (dead group sum |Δ| < 0.01):
+#   G6 enemy_ship_event_per_planet (planet 22-23, 2列)
+#   H1 global_step_velocity (global 0-1, 2列)
+#   H4 global_comet_state (global 10-11, 2列)
+#   H5 global_home_centroid (global 12-13, 2列)
+# 縮小:
+#   G9 pairwise_top_k K=5 (20列) → K=3 (12列) で per-column importance を改善
+# 新規追加:
+#   K2 outgoing_fleet_trajectory (planet +4): 自軍 fleet の 5-turn 先 future delta
+#   K3 frontline_distance (planet +4): 敵軍 nearest 1/2 との dist_log + ships_ratio_log
+#   K4 aux_multi_horizon_global (global +4): 自軍 ships sum h=5/15 + my_prod_sum_log + ships_ratio
+PLANET_FEAT_DIM = 61  # iter3 63 - G6 2 - K1 縮小 8 + K2 4 + K3 4 = 61
+GLOBAL_FEAT_DIM = 12  # iter3 14 - H1/H4/H5 6 + K4 4 = 12
 MAX_PLANETS = 36
-TOPK_NEIGHBORS = 5  # iter3 A: pairwise top-K count
+TOPK_NEIGHBORS = 3  # iter4 K1: pairwise top-K count (5 から削減)
 TOPK_FEATS_PER_NEIGHBOR = 4  # dist_log, ships_ratio_log, owner_signed, prod_log
 BOARD_SIZE = 100.0
 HORIZON_TURNS = 30  # for incoming-fleet eta normalization
@@ -413,17 +418,11 @@ def featurize(
         my_prod_cy = my_prod_y / my_prod_w
     else:
         my_prod_cx, my_prod_cy = SUN_X, SUN_Y
-    if en_prod_w > 0:
-        en_prod_cx = en_prod_x / en_prod_w
-        en_prod_cy = en_prod_y / en_prod_w
-    else:
-        en_prod_cx, en_prod_cy = SUN_X, SUN_Y
-    prod_centroid_dist = (
-        math.sqrt((my_prod_cx - en_prod_cx) ** 2 + (my_prod_cy - en_prod_cy) ** 2)
-        / BOARD_SIZE
-    )
+    # iter4: en_prod_centroid + prod_centroid_dist は H5 削除に伴い未使用
+    # (en_prod_w / en_prod_x / en_prod_y は computation を残しているが結果は使われない)
 
-    # === iter2: home planet position (player perspective) ===
+    # === iter2 carry-over: home planet pid を per-planet sparse mask J 用に取得 ===
+    # iter4: home_planet_owner_flag global は H5 削除済み、home_x/y は home_dist_log 用に必要
     home_x: float | None = None
     home_y: float | None = None
     home_pid: int | None = None
@@ -433,22 +432,9 @@ def featurize(
             home_x = float(hp[2])
             home_y = float(hp[3])
             break
-    home_planet_owner_flag = 0.5  # default: unknown
-    if home_pid is not None:
-        for slot in range(n):
-            if int(raw_planets[slot][0]) == home_pid:
-                home_planet_owner_flag = (
-                    1.0 if int(raw_planets[slot][1]) == player else 0.0
-                )
-                break
 
-    # === iter2: next comet ETA ===
-    next_comet_t: int | None = next((t for t in COMET_TURNS if t > step), None)
-    if next_comet_t is None:
-        next_comet_eta_norm = 1.0
-    else:
-        next_comet_eta_norm = max(0.0, min(1.0, (next_comet_t - step) / 100.0))
-    comet_active_flag = 1.0 if raw_comet_ids else 0.0
+    # iter4: next_comet_eta_norm / comet_active_flag は H4 削除済み
+    # `is_comet` flag (per-planet col 8) で代替済み
 
     # === History (planet-level) — obs_{N-2} / obs_{N-3} only ===
     snap_t1: dict[int, tuple[int, int]] | None = None  # obs_{N-2}
@@ -590,6 +576,116 @@ def featurize(
             for s in range(MAX_PLANETS):
                 pair_topk[s, k_pos, 0] = -1.0
 
+    # === iter4 K2: Per-fleet outgoing trajectory (own fleet, 5-turn future delta)
+    # 自軍 fleet (owner == player) を per-source-planet (from_pid) に attribute。
+    # source planet の future position と fleet の future position の relative dx/dy/dist を持たせる。
+    # 複数自軍 fleet が同じ src を持つ場合は ETA 最早 (= ships が多い fleet で速度遅、distance 短) で 1 件。
+    # 補完: 自軍 fleet ない src は dist=-1 sentinel + 他 0。
+    outgoing_fleet_dx = [0.0] * MAX_PLANETS
+    outgoing_fleet_dy = [0.0] * MAX_PLANETS
+    outgoing_fleet_dist = [-1.0] * MAX_PLANETS
+    outgoing_fleet_ships_log = [0.0] * MAX_PLANETS
+    if raw_fleets:
+        # earliest own-fleet per source slot
+        # raw_fleet row format: [fid, fowner, fx, fy, fangle, from_pid, fships]
+        own_fleet_best_per_src: dict[
+            int, tuple[float, int, float, float, float, int]
+        ] = {}
+        for fr in raw_fleets:
+            fowner_ = int(fr[1])
+            if fowner_ != player:
+                continue
+            from_pid_ = int(fr[5])
+            fships_ = int(fr[6])
+            fx_ = float(fr[2])
+            fy_ = float(fr[3])
+            fangle_ = float(fr[4])
+            speed_ = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, fships_)))
+            # earliest = closest to src now (tie: smaller fships)
+            src_slot = planet_index_by_id.get(from_pid_)
+            if src_slot is None:
+                continue
+            src_x = float(raw_planets[src_slot][2])
+            src_y = float(raw_planets[src_slot][3])
+            dist_now = math.sqrt((fx_ - src_x) ** 2 + (fy_ - src_y) ** 2)
+            key = src_slot
+            if (
+                key not in own_fleet_best_per_src
+                or own_fleet_best_per_src[key][0] > dist_now
+            ):
+                own_fleet_best_per_src[key] = (
+                    dist_now,
+                    fships_,
+                    fx_,
+                    fy_,
+                    fangle_,
+                    src_slot,
+                )
+        for src_slot, (
+            _dist_now,
+            fships_,
+            fx_,
+            fy_,
+            fangle_,
+            _,
+        ) in own_fleet_best_per_src.items():
+            speed_ = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, fships_)))
+            travel = speed_ * float(INBOUND_FLEET_FUTURE_TURNS)
+            f_x_fut = fx_ + math.cos(fangle_) * travel
+            f_y_fut = fy_ + math.sin(fangle_) * travel
+            src_x = float(raw_planets[src_slot][2])
+            src_y = float(raw_planets[src_slot][3])
+            src_x_fut, src_y_fut = _future_position(
+                src_x, src_y, ang_vel, INBOUND_FLEET_FUTURE_TURNS
+            )
+            dx_ = (f_x_fut - src_x_fut) / BOARD_SIZE
+            dy_ = (f_y_fut - src_y_fut) / BOARD_SIZE
+            dist_ = math.sqrt(dx_ * dx_ + dy_ * dy_)
+            outgoing_fleet_dx[src_slot] = dx_
+            outgoing_fleet_dy[src_slot] = dy_
+            outgoing_fleet_dist[src_slot] = dist_
+            outgoing_fleet_ships_log[src_slot] = math.log1p(max(0, fships_))
+
+    # === iter4 K3: Frontline distance (敵軍 nearest 1, 2 個との dist_log + ships_ratio_log)
+    # source planet の視点で敵軍 (owner != player and != -1) の nearest 2 を抽出。
+    # 不足 (敵 0 or 1 個) は sentinel: dist_log=-1, ships_ratio=0
+    frontline_d1_log = [-1.0] * MAX_PLANETS
+    frontline_r1_log = [0.0] * MAX_PLANETS
+    frontline_d2_log = [-1.0] * MAX_PLANETS
+    frontline_r2_log = [0.0] * MAX_PLANETS
+    if n >= 2:
+        # collect enemy slot indices once
+        enemy_slots = [
+            s
+            for s in range(n)
+            if int(raw_planets[s][1]) != player and int(raw_planets[s][1]) != -1
+        ]
+        if enemy_slots:
+            for src in range(n):
+                src_x = float(raw_planets[src][2])
+                src_y = float(raw_planets[src][3])
+                src_ships = float(raw_planets[src][5])
+                # compute distances to all enemies, sort
+                ed_pairs = []
+                for es in enemy_slots:
+                    if es == src:
+                        continue
+                    ex = float(raw_planets[es][2])
+                    ey = float(raw_planets[es][3])
+                    eships = float(raw_planets[es][5])
+                    d = math.sqrt((ex - src_x) ** 2 + (ey - src_y) ** 2)
+                    ed_pairs.append((d, eships))
+                if not ed_pairs:
+                    continue
+                ed_pairs.sort(key=lambda t: t[0])
+                d1, e1 = ed_pairs[0]
+                frontline_d1_log[src] = math.log1p(d1) / math.log1p(BOARD_SIZE)
+                frontline_r1_log[src] = math.log1p(e1) - math.log1p(src_ships)
+                if len(ed_pairs) >= 2:
+                    d2, e2 = ed_pairs[1]
+                    frontline_d2_log[src] = math.log1p(d2) / math.log1p(BOARD_SIZE)
+                    frontline_r2_log[src] = math.log1p(e2) - math.log1p(src_ships)
+
     # === Per-planet feature assembly ===
     for slot in range(n):
         pid, owner, px, py, radius, ships, production = raw_planets[slot]
@@ -713,9 +809,7 @@ def featurize(
             delta_t1,
             delta_t2,
             owner_changed_t1,
-            # case7 iter1: enemy ship-event 2 列 (per-planet)
-            enemy_targeted_count[slot] / 5.0,
-            math.log1p(enemy_targeted_ships[slot]) / 6.0,
+            # case7 iter4: G6 (enemy ship-event per-planet) 削除済 ← 元 idx 22-23
             # case7 iter2: fleet trajectory 4 列 (earliest enemy inbound, 5-turn future delta)
             inbound_fleet_dx[slot],
             inbound_fleet_dy[slot],
@@ -729,7 +823,7 @@ def featurize(
             # case7 iter2: home distance + production centroid distance 2 列
             home_dist_log,
             prod_centroid_dist_log,
-            # case7 iter3 A: Pairwise Top-K (K=5 × 4 feat = 20 列)
+            # case7 iter3 A (iter4 K1 で縮小): Pairwise Top-K (K=3 × 4 feat = 12 列)
             *topk_flat,
             # case7 iter3 D: Defense surplus (4 列、h=5/15/30 + now)
             defense_surplus_5turn,
@@ -742,6 +836,16 @@ def featurize(
             has_enemy_targeted_flag,
             is_home_planet_flag,
             is_neighbor_to_enemy_flag,
+            # case7 iter4 K2: Outgoing fleet trajectory (4 列、自軍 fleet 5-turn future delta)
+            outgoing_fleet_dx[slot],
+            outgoing_fleet_dy[slot],
+            outgoing_fleet_dist[slot],
+            outgoing_fleet_ships_log[slot],
+            # case7 iter4 K3: Frontline distance (4 列、敵 nearest 1/2)
+            frontline_d1_log[slot],
+            frontline_r1_log[slot],
+            frontline_d2_log[slot],
+            frontline_r2_log[slot],
         ]
         for j in range(PLANET_FEAT_DIM):
             planet_feats[slot, j] = feats[j]
@@ -776,24 +880,36 @@ def featurize(
             enemy_total_ships += float(ships)
             enemy_total_prod += float(production)
 
+    # iter4 K4: 自軍 ships future predicted h=5/15 (production 込み) + my_prod_sum_log + ratio
+    # production込み h=h で my_total_ships + sum_my_prod*h (production 込み)
+    sum_my_prod = float(my_total_prod)
+    aux_my_ships_h5 = math.log1p(my_total_ships + 5.0 * sum_my_prod)
+    aux_my_ships_h15 = math.log1p(my_total_ships + 15.0 * sum_my_prod)
+    # ratio: my/(my+enemy) ships, [0, 1]
+    aux_ships_ratio = (
+        my_total_ships / (my_total_ships + enemy_total_ships)
+        if (my_total_ships + enemy_total_ships) > 0
+        else 0.5
+    )
+
     global_feats = torch.tensor(
         [
-            float(step) / 500.0,
-            ang_vel * 10.0,
+            # iter1 base 4 列 (H1 step/ang_vel は iter4 で削除)
             math.log1p(my_total_ships),
             math.log1p(enemy_total_ships),
             math.log1p(neutral_total_ships),
             math.log1p(my_total_prod) - math.log1p(enemy_total_prod),
-            # case7 iter1: enemy/ally launch history 4 列
+            # case7 iter1: enemy/ally launch history 4 列 (H3)
             enemy_launch_count_g / 10.0,
             math.log1p(enemy_launch_ships_g) / 6.0,
             ally_launch_count_g / 10.0,
             math.log1p(ally_launch_ships_g) / 6.0,
-            # case7 iter2: comet 2 列 + home/centroid 2 列
-            next_comet_eta_norm,
-            comet_active_flag,
-            home_planet_owner_flag,
-            prod_centroid_dist,
+            # iter4 K4: aux multi-horizon ships sum + prod sum + ratio (4 列)
+            aux_my_ships_h5,
+            aux_my_ships_h15,
+            math.log1p(sum_my_prod),
+            aux_ships_ratio,
+            # iter4: H1 (step/ang_vel) / H4 (comet 2) / H5 (home/centroid 2) は削除
         ],
         dtype=torch.float32,
     )

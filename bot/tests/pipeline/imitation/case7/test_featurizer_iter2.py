@@ -19,22 +19,19 @@ from pipeline.imitation.case7.policy.featurizer import (
     planet_snapshot_from_obs,
 )
 
-# iter2 column indices
-COL_INBOUND_DX = 24
-COL_INBOUND_DY = 25
-COL_INBOUND_DIST = 26
-COL_INBOUND_SHIPS_LOG = 27
-COL_LOSS_5 = 28
-COL_LOSS_15 = 29
-COL_MIN_OWNED_5 = 30
-COL_MIN_OWNED_15 = 31
-COL_HOME_DIST = 32
-COL_PROD_CENTROID_DIST = 33
+# iter4 column indices (G6 削除 + H1/H4/H5 削除を反映)
+COL_INBOUND_DX = 22
+COL_INBOUND_DY = 23
+COL_INBOUND_DIST = 24
+COL_INBOUND_SHIPS_LOG = 25
+COL_LOSS_5 = 26
+COL_LOSS_15 = 27
+COL_MIN_OWNED_5 = 28
+COL_MIN_OWNED_15 = 29
+COL_HOME_DIST = 30
+COL_PROD_CENTROID_DIST = 31
 
-GCOL_NEXT_COMET_ETA = 10
-GCOL_COMET_ACTIVE = 11
-GCOL_HOME_OWNER = 12
-GCOL_PROD_CENTROID_DIST = 13
+# iter4: H1/H4/H5 削除済 — comet/home_owner/prod_centroid global は廃止
 
 
 def _obs(
@@ -130,59 +127,7 @@ def test_prod_centroid_dist_zero_for_single_my_planet() -> None:
     assert batch.planet_feats[0, 0, COL_PROD_CENTROID_DIST].item() == 0.0
 
 
-# ----- Global features (comet / home owner / prod centroid distance) -----
-
-
-def test_global_next_comet_eta_zero_when_step_at_50() -> None:
-    """step=50 だと次の comet (150) まで 100 ターン → norm 1.0。"""
-    obs = _obs(step=50, planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]])
-    batch, _ = featurize(obs)
-    assert batch.global_feats[0, GCOL_NEXT_COMET_ETA].item() == 1.0
-
-
-def test_global_next_comet_eta_close_to_zero_just_before_50() -> None:
-    """step=49 だと次の comet (50) まで 1 ターン → norm 0.01 ぐらい。"""
-    obs = _obs(step=49, planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]])
-    batch, _ = featurize(obs)
-    assert abs(batch.global_feats[0, GCOL_NEXT_COMET_ETA].item() - 0.01) < 1e-5
-
-
-def test_global_comet_active_flag_set_when_comet_ids_present() -> None:
-    """comet_planet_ids 非空なら comet_active_flag = 1.0。"""
-    obs = _obs(
-        step=55,
-        planets=[[0, -1, 50.0, 50.0, 1.0, 10, 2]],
-        comet_ids=[0],
-    )
-    batch, _ = featurize(obs)
-    assert batch.global_feats[0, GCOL_COMET_ACTIVE].item() == 1.0
-
-
-def test_global_home_owner_flag_default_unknown() -> None:
-    """initial_planets 不明 → home_planet_owner_flag は 0.5 (unknown)。"""
-    obs = _obs(planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]])
-    batch, _ = featurize(obs)
-    assert batch.global_feats[0, GCOL_HOME_OWNER].item() == 0.5
-
-
-def test_global_home_owner_flag_one_when_home_held() -> None:
-    """initial_planets で player=0 の home planet を保持 → 1.0。"""
-    obs = _obs(
-        planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]],
-        initial_planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]],
-    )
-    batch, _ = featurize(obs)
-    assert batch.global_feats[0, GCOL_HOME_OWNER].item() == 1.0
-
-
-def test_global_home_owner_flag_zero_when_home_lost() -> None:
-    """initial_planets で player=0 だが、現在 owner=1 (敵) なら 0.0。"""
-    obs = _obs(
-        planets=[[0, 1, 50.0, 50.0, 1.0, 10, 2]],
-        initial_planets=[[0, 0, 50.0, 50.0, 1.0, 10, 2]],
-    )
-    batch, _ = featurize(obs)
-    assert batch.global_feats[0, GCOL_HOME_OWNER].item() == 0.0
+# ----- Global features (iter4: H4/H5 削除済、comet/home_owner/prod_centroid テストは廃止) -----
 
 
 # ----- Causal safety -----
@@ -206,8 +151,8 @@ def test_iter2_features_deterministic_without_history() -> None:
     history.push(planet_snapshot_from_obs(obs), fleet_snapshot_from_obs(obs))
     history.push(planet_snapshot_from_obs(obs), fleet_snapshot_from_obs(obs))
     batch_b, _ = featurize(obs, history=history)
-    # iter2 列 (24-33) はすべて等しいはず (history 非依存)
-    for col in range(24, 34):
+    # iter4 列 (22-31): fleet trajectory (22-25) + multi-horizon (26-29) + home/centroid (30-31)
+    for col in range(22, 32):
         a = batch_a.planet_feats[0, 0, col].item()
         b = batch_b.planet_feats[0, 0, col].item()
         assert a == b, f"col {col}: history-independent expected, got {a} vs {b}"

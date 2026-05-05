@@ -18,14 +18,14 @@ from pipeline.imitation.case7.policy.featurizer import (
 )
 
 
-def test_planet_feat_dim_is_63() -> None:
-    """iter3: PLANET_FEAT_DIM = 63。"""
-    assert PLANET_FEAT_DIM == 63
+def test_planet_feat_dim_is_61() -> None:
+    """iter4: PLANET_FEAT_DIM = 61 (iter3 63 - G6 2 - K1 縮小 8 + K2 4 + K3 4)。"""
+    assert PLANET_FEAT_DIM == 61
 
 
-def test_global_feat_dim_is_14() -> None:
-    """iter2 以降: GLOBAL_FEAT_DIM = 14。"""
-    assert GLOBAL_FEAT_DIM == 14
+def test_global_feat_dim_is_12() -> None:
+    """iter4: GLOBAL_FEAT_DIM = 12 (iter3 14 - H1/H4/H5 6 + K4 4)。"""
+    assert GLOBAL_FEAT_DIM == 12
 
 
 def test_featurize_minimal_obs_without_history_returns_correct_shape() -> None:
@@ -46,19 +46,19 @@ def test_featurize_minimal_obs_without_history_returns_correct_shape() -> None:
     assert batch.planet_feats.shape == (1, MAX_PLANETS, PLANET_FEAT_DIM)
     assert batch.global_feats.shape == (1, GLOBAL_FEAT_DIM)
 
-    # iter1 history 列 (idx 19/20/21) は 0、enemy ship event (22/23) も 0
-    for col in (19, 20, 21, 22, 23):
+    # iter1 history 列 (idx 19/20/21) は 0
+    for col in (19, 20, 21):
         assert batch.planet_feats[0, 0, col].item() == 0.0
 
-    # iter1 global launch (6-9) もゼロ
-    for col in (6, 7, 8, 9):
+    # iter4 launch history (global 4-7) ゼロ
+    for col in (4, 5, 6, 7):
         assert batch.global_feats[0, col].item() == 0.0
 
-    # iter2 inbound fleet (24,25) はゼロ、dist (26) は -1 (no-inbound sentinel)、ships_log (27) はゼロ
-    assert batch.planet_feats[0, 0, 24].item() == 0.0
+    # iter4 inbound fleet (22,23) はゼロ、dist (24) は -1 (no-inbound sentinel)、ships_log (25) はゼロ
+    assert batch.planet_feats[0, 0, 22].item() == 0.0
+    assert batch.planet_feats[0, 0, 23].item() == 0.0
+    assert batch.planet_feats[0, 0, 24].item() == -1.0
     assert batch.planet_feats[0, 0, 25].item() == 0.0
-    assert batch.planet_feats[0, 0, 26].item() == -1.0
-    assert batch.planet_feats[0, 0, 27].item() == 0.0
 
 
 def test_featurize_with_history_state_accepts_call() -> None:
