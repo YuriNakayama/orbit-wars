@@ -20,16 +20,15 @@ model:
 
 train:
   case: case8
-  # iter5: batch_size 256→128 + pin_memory_off で DataLoader RAM ピーク削減。
-  # 1057 ep × 328k frames を host RAM 32GB に収めるための保険策。lazy dataset
-  # (pyarrow ParquetFile chunk-by-chunk) と二重で OOM を回避。lr=1e-3 のまま
-  # cosine warmup が小 batch を吸収できる前提。
-  batch_size: 128
+  # iter9: iter3 hyperparams を完全再現 (= iter4 で導入した grad_clip / dropout
+  # / EMA は 8 連続 hang したため全部無効) + iter5 lazy dataset を維持。
+  # batch_size を iter3 と同じ 256 に戻す (in-memory dataset で動いた値、
+  # lazy dataset でも GPU memory には影響しないため安全)。
+  batch_size: 256
   epochs: 30
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
-  pin_memory: false
   loss_weights:
     cand: 1.0
     use_class_weights: true
@@ -56,22 +55,15 @@ train:
     metric: val_cand_fire_acc
     patience: 5
     mode: max
-  # iter4: head + 学習側の振動抑制 3 点セット。backbone は不変。
-  # - grad_clip_max_norm: focal loss + class_weight 由来の勾配 spike を遮断
-  # - ema: weights を移動平均、val/best.pt は EMA weights を採用して noise 平滑化
-  # - head_dropout: cand_score / ship_head MLP の中間 ReLU 直後に Dropout(p)
-  grad_clip_max_norm: 1.0
-  # iter8: EMA を恒久に disable。iter4-v1〜iter5-v2 + iter7 (EMA on) の 6 回が
-  # `60_before_train` で hang、iter6 (EMA off) は schema KeyError まで進行
-  # (= ablation 上 EMA 起因の deadlock 確定)。AveragedModel の CUDA-side
-  # state 初期化が RTX 4090 host 個別の torch 2.6 環境で stuck する仮説。
-  # 別 PR で `ema-pytorch` library or CPU-resident average に切替再検討、
-  # 本 PR は EMA 抜きで iter4 hyperparams (grad_clip + dropout + cosine LR
-  # + lazy dataset) の効果を検証する。
+  # iter9: iter4 fix を全て無効化し、iter3 完走実績ある config + iter5 lazy
+  # dataset で baseline を取り直す。iter4 の grad_clip + EMA + dropout は
+  # 8 連続 `60_before_train` hang した root cause 候補で、ablation のため
+  # 全部 OFF。
+  grad_clip_max_norm: 0.0
   ema:
     enabled: false
     decay: 0.999
-  head_dropout: 0.2
+  head_dropout: 0.0
   weights_out: pipeline/imitation/case8/policy/weights.pt
 
 inference:
