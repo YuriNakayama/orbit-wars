@@ -208,7 +208,7 @@ REINFORCE_MIN_DEFICIT: int = 1
 # the same (src, dst) pair is the only legal play; a 3-turn lock then
 # produces 12/20 turns of zero launches. Bypassing in the low-planet regime
 # restores reinforce throughput while keeping cooldown active in normal play.
-LOW_PLANET_BYPASS_THRESHOLD: int = 10
+LOW_PLANET_BYPASS_THRESHOLD: int = 8
 
 
 def load_config(path: Path) -> dict[str, Any]:

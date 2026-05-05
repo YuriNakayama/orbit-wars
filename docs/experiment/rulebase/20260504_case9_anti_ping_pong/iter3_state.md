@@ -1,31 +1,39 @@
-# iter3 — Loop Resume State
+# iter3 — Loop Resume State (STOPPED EARLY)
 
 > 作成日: 2026-05-05
-> Status: **iter3 評価実行中** (PID 15098, seed 4000-4199, 200戦)
+> Status: **iter3 ユーザー判断で 180/200 (90%) で停止**
 
-## 進行中
+## 中断時の数値
 
-- 変更: `LOW_PLANET_BYPASS_THRESHOLD: 8 → 10` (1 行のみ)
-- 評価コマンド: `compare_v4.py -n 100 -p 4 --seed 4000`
-- ETA: ~100分 (iter2 同等)
-- ログ: `/tmp/compare_v4_iter3.log`
+180戦 v9=86 / v4=94 / draws=0 → **47.8%**。
 
-## 完了したこと
+iter2 (49.5%, 200戦) 比 -1.7pp、iter1 (46.0%, 100戦) より +1.8pp。
+bypass=8 → 10 への緩和は **逆効果**。残り 20戦で挽回見込みなしと判断。
 
-- iter3_plan.md 作成 (bypass 緩和単独効果測定にスコープ絞った)
-- config.py 1 行変更
-- ruff/mypy green
+## 判定: iter3 棄却
 
-## 次のループ周回でやること
+- `LOW_PLANET_BYPASS_THRESHOLD: 10 → 8` に戻す (iter4 の起点)
+- 序盤から一貫して iter2 を下回る → 緩和し過ぎは ping-pong 抑止効果を毀損
 
-1. **重複ガード確認**: PID 15098 が生きていれば skip (compare_v4 進行中)
-2. プロセス完了後:
-   - `/tmp/compare_v4_iter3.log` から最終 summary を読む
-   - iter3_result.md 作成 (採否判定: iter2 比 +2pp で採択)
-   - 採択 → iter4 で ACCUMULATE port (case7 から)
-   - 棄却 → bypass を 8 に戻し iter4 で ACCUMULATE port を主役に
+## chunk 別比較 (iter2 vs iter3)
 
-## iter4 候補 (iter3 結果次第)
+| chunk | iter2 (seed 3000-) | iter3 (seed 4000-) | 差 |
+|---|---|---|---|
+| 0–60 | 56.7% | 50.0% | -6.7pp |
+| 60–120 (累積) | 55.8% | 45.8% | -10pp |
+| 120–180 (累積) | 51.1% | 47.8% | -3.3pp |
 
-- case7 ACCUMULATE port: stay.py (488 行) + strategy.py + strategy_helpers.py + config.py (~30 行) を case9 にコピペ + 配線。重い作業 (~1-2 周回かかる)
-- 余剰 ship 用途として最有望 (production 増強につながる遠距離 capture mission)
+iter3 は最初から iter2 を下回って推移。bypass=10 単独効果は **-2pp 程度のマイナス**と推察 (seed 差 ±5pp の範囲を超える)。
+
+## 真のボトルネック (再認識)
+
+1. **評価コスト**: 200戦 ~100 分 → 6 周回で 1 設計サイクル。rust simulator なしでは仮説回しが現実的でない
+2. **seed 分散**: 200戦でも CI ±7pp、設計差 +2-3pp の検出が困難
+3. **余剰 ship 流用未実装**: iter2 analysis の本命課題、cooldown 系の小修正で +5pp は届きそうにない
+
+## iter4 で次にやること (優先順、必須)
+
+1. **`LOW_PLANET_BYPASS_THRESHOLD: 10 → 8` に戻す** (iter2 の知見を維持)
+2. **case7 から ACCUMULATE port** (本命): stay.py / strategy.py / strategy_helpers.py / config.py の関連 ~600 行をコピペ + 配線
+3. **300戦評価**: rust 導入できれば 5-10 分、できなければ 200戦のまま
+4. (オプション) rustc 導入はユーザー権限要、確認したい
