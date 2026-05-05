@@ -1,47 +1,42 @@
-# iter6 — Loop Resume State
+# iter6 — Loop Resume State (RUNNING)
 
 > 作成日: 2026-05-05
-> Status: **iter6 未開始**、case9 は iter2 等価に復帰済み
+> Status: **iter6 評価実行中** (PID 39060, seed 8000-8199, 200戦)
 
-## 直近の状態 (iter5 締め)
+## 進行中
 
-- iter5 ACCUMULATE port: **42.5% (200戦)、過去最低 → 棄却**
-- 原因: ACCUMULATE 単独 (STAY_BURST 抜き) では中盤の攻めを hold で止めて逆効果
-- 復元済み: `ACCUMULATE_ENABLED=False`、snapshot 更新、case9 = iter2 等価
+- 速度最適化: `WorldModel.plan_shot` を `(src, dst, ships)` で memoize
+- 実装: 内部関数 `_plan_shot_uncached` に旧ロジックを移し、`plan_shot` は cache lookup
+  → 不一致時 `_plan_shot_uncached` 呼び出し → cache 書込み + return
+- snapshot test 3/3 pass で **動作完全一致** (= cache は純粋な副作用ゼロ最適化)
+- pytest 実行時間: 3分10秒 → 2分12秒 (**約 30% 高速化**)
+- 評価ログ: `/tmp/compare_v4_iter6.log`、ETA ~70 分 (高速化後の試算)
 
-## iter6 候補 (優先順)
+## 採否判定
 
-### 候補 A: agent 速度最適化 (推薦、別 commit、ablation 必須)
+**ablation スタイル**: 性能を下げない条件で採用
+- 200戦で iter2 (49.5%) ± 2pp 以内 (47.5% – 51.5%) → 採用
+- 採用後に **iter7 で別軸 (cooldown tuning など) を試す高速化された土台に**
+- 範囲外なら最適化に bug があるとして revert
 
-- `WorldModel.__init__` の重複計算を cache:
-  - `base_timeline` の 2 重計算がある可能性 (要確認)
-  - `indirect_wealth` 計算の memoize
-- `plan_shot` の早期 return: 明らかに不可能なケースを最初に弾く
-- 評価: ablation で iter2 比 ±2pp 以内 (300戦) なら採用、勝率変化なら棄却
-- 副次効果: iter6 以降の評価が高速化
+## 副次効果 (期待値)
 
-### 候補 B: iter2 cooldown 値の微調整
+- 200戦評価時間が 100分 → 70分程度に短縮見込み (cache 効果は実 self-play でより強く出るため snapshot test の 30% より大きい可能性)
+- iter7+ の試行回数が増やせる
 
-- `PING_PONG_PAIR_COOLDOWN_TURNS: 1 → 2` (iter1 と iter2 の中間)
-- 評価: 200戦で iter2 比 +2pp なら採択
-- リスク: iter2 の知見と矛盾する可能性
+## 次のループ周回でやること
 
-### 候補 C: rust simulator 切替検討 (要 user 判断)
+1. PID 39060 の重複ガード確認
+2. 完了後:
+   - 勝率 47.5–51.5% 範囲内 → 採用、iter6_result.md 作成 + commit
+   - 範囲外 → 棄却、plan_shot cache を revert
+3. 評価所要時間を記録 (iter1-5 平均と比較)
 
-- rustup 導入 → maturin develop で 200戦 ~5 分に短縮
-- 300戦評価が現実的になり、iter2 best の信頼区間を狭められる
-- ユーザー権限要
+## 過去 iter サマリ
 
-### 候補 D: ACCUMULATE + STAY_BURST 同時 port (大型 iter)
-
-- case7 の STAY_BURST 配線も加える (~200 行追加)
-- 1 周回では完結せず、5+ 周回必要
-
-## 推薦判断
-
-**候補 A (速度最適化) を iter6 で実施**。理由:
-- 過去 iter で評価コストが最大の制約
-- 速度向上は採否しきい値に直接影響しない (ablation で性能維持を保証)
-- iter7 以降の試行回数を増やせる
-
-候補 B/C は iter6 採否 (速度最適化が成功) 後に検討。
+- iter1 (cooldown 抑止): 46.0%
+- **iter2 (bypass=8 + 値短縮)**: **49.5% (best)** ← 比較基準
+- iter3 (bypass=10): 47.8%/180中断
+- iter4 (multi-source): 47.0%
+- iter5 (ACCUMULATE port): 42.5% (最低)
+- **iter6 (plan_shot cache, 速度最適化)**: 評価中

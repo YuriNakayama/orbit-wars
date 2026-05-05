@@ -440,6 +440,12 @@ class WorldModel:
         self.base_need_cache: dict[tuple[int, int], int] = {}
         # iter5: ported from case7 for stay.py / ACCUMULATE mission usage.
         self.travel_time_cache: dict[tuple[int, int, int], int] = {}
+        # iter6: plan_shot is invoked many times per turn for the same
+        # (src, target, ships) tuple during mission scoring. Memoizing
+        # avoids re-running aim_with_prediction + safety chain.
+        self.plan_shot_cache: dict[
+            tuple[int, int, int], tuple[float, int, float, float] | None
+        ] = {}
 
         (
             self.reserve,
@@ -584,6 +590,16 @@ class WorldModel:
         return max(0, self.available.get(source_id, 0) - spent_total[source_id])
 
     def plan_shot(
+        self, src_id: int, target_id: int, ships: int
+    ) -> tuple[float, int, float, float] | None:
+        cache_key = (int(src_id), int(target_id), max(1, int(ships)))
+        if cache_key in self.plan_shot_cache:
+            return self.plan_shot_cache[cache_key]
+        result = self._plan_shot_uncached(src_id, target_id, ships)
+        self.plan_shot_cache[cache_key] = result
+        return result
+
+    def _plan_shot_uncached(
         self, src_id: int, target_id: int, ships: int
     ) -> tuple[float, int, float, float] | None:
         src = self.planet_by_id[src_id]
