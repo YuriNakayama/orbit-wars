@@ -510,6 +510,40 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         report.train_frames,
         report.val_frames,
     )
+    # Parquet sanity check: train.py の dataset.__init__ が読み出す形と同じ reshape を
+    # 試して、 preprocess 出力が壊れていないか early に検出する。 case7 v1 で reshape
+    # error が train 起動時に発生 ($0.59 損失) → preprocess 段階で fail させたほうが
+    # 損失少。 各 frame の planet_feats 長さ不一致は polars to_list() 時に jagged list
+    # になり、 numpy array 化で size 不整合 → reshape 失敗で検出可能。
+    for split_name, split_path, expected_n in (
+        ("train", out_train, n_train),
+        ("val", out_val, n_val),
+    ):
+        df_check = pl.read_parquet(str(split_path))
+        try:
+            arr = np.array(df_check["planet_feats"].to_list(), dtype=np.float32)
+            arr.reshape(-1, MAX_PLANETS, PLANET_FEAT_DIM)
+        except (ValueError, TypeError) as e:
+            logger.error(
+                "parquet sanity check FAILED for %s split: %s. Frames=%d, "
+                "expected dim=%d (MAX_PLANETS=%d × PLANET_FEAT_DIM=%d).",
+                split_name,
+                e,
+                expected_n,
+                MAX_PLANETS * PLANET_FEAT_DIM,
+                MAX_PLANETS,
+                PLANET_FEAT_DIM,
+            )
+            raise RuntimeError(
+                f"preprocess output {split_path} is malformed (reshape failed). "
+                f"Likely jagged planet_feats list. Cannot proceed to train."
+            ) from e
+        del df_check, arr
+    logger.info(
+        "parquet sanity check PASSED: train=%d frames, val=%d frames, dims OK",
+        n_train,
+        n_val,
+    )
     mark_progress(
         run_id,
         "preprocess.done",
