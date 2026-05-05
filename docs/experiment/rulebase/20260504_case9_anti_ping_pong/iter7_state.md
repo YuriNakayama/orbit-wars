@@ -1,66 +1,36 @@
-# iter7 — Loop Resume State
+# iter7 — Loop Resume State (RUNNING)
 
 > 作成日: 2026-05-06
-> Status: **iter7 未開始**、case9 = iter2 設計 + iter6 plan_shot cache (高速化基盤)
+> Status: **iter7 評価実行中** (PID 8747, seed 9000-9299, 300戦)
 
-## 直近の状態
+## 進行中
 
-- iter6 plan_shot cache: 採用 (49.0% vs iter2 49.5%、-0.5pp 許容範囲)
-- 評価所要時間: 100 min → 70 min (30% 高速化)
-- best 勝率: **iter2 = 49.5% (200戦)** ← 依然として best、+5pp 未達
+- 300戦 vs baseline_v4 (seed 9000-9299)
+- 設定: case9 = iter2 best 設計 (`bypass=8`, `cooldown 1/2`, `MIN_DEFICIT=1`) + iter6 plan_shot cache
+- ETA: ~100 分 (iter6 70 min × 1.5)
+- ログ: `/tmp/compare_v4_iter7.log`
+- PID: 8747
 
-## iter7 候補 (優先順)
+## 採否分岐 (300戦完了後)
 
-### A: cooldown 値の微調整 (iter2 ベース)
-
-iter1 (PAIR=3, HARASS=5) → iter2 (PAIR=1, HARASS=2) で +3.5pp 改善。中間値を試す:
-- `PING_PONG_PAIR_COOLDOWN_TURNS: 1 → 2` (1 行変更)
-- 200戦評価で iter2 比 +2pp 以上なら採用
-- リスク: iter1-2 の知見からは「短いほど良い」傾向、+2 で逆効果の可能性
-
-### B: REINFORCE_MIN_DEFICIT 引き上げ
-
-- iter1 で=3、iter2 で=1。中間=2 を試す
-- 小規模脅威への過剰反応をやや抑制、雪崩崩壊は防げる程度
-- 1 行変更で評価可能
-
-### C: 300戦再評価で iter2 best を確定
-
-- 70 min × 1.5 = ~100 min で 300戦
-- Wilson CI が ±7pp → ±5pp に縮小
-- iter2 が +5pp 達成しているかの **真値検証**
-- 完了条件達成判定の最終的な根拠になる
-
-### D: build_world の追加最適化 (iter6 路線継続)
-
-- `WorldModel.__init__` で `base_timeline` 構築が重い (timeline simulation)
-- 今 turn の self planet についてのみ計算するよう絞れば 50% 短縮見込み
-- ablation 必須
-
-## 推薦判断
-
-**候補 C (300戦再評価)** が最も価値高:
-- iter1-6 の累積で iter2 が best、これを confirmed best にできれば「+5pp 完了条件」の達成可能性を確定的に判断できる
-- もし 300戦で 55% 以上達成していれば **loop 完了**
-- 未達なら +5pp は cooldown tuning 系では届かないと結論し、別軸 (ACCUMULATE+STAY 同時 port、case4 ベース大改造) に振り切る
-
-候補 A/B は 300戦結果次第で iter8 に積む。
+- **300戦 ≥ 55%**: +5pp 達成 → **iter 採択 + loop 完了** → memory 記録 + cron 停止
+- **51% ≤ x < 55%**: iter2 ベース設計で +5pp は届かないと結論、iter8 で別軸
+- **x < 51%**: iter6 cache の副作用疑い、要検証
 
 ## 次のループ周回でやること
 
-1. case9 = iter2 等価 (ACCUMULATE_ENABLED=False) を確認
-2. `compare_v4.py -n 150 -p 4 --seed 9000` (各 seat 150戦 = 300戦) を起動
-3. ETA ~100 分 (iter6 の 70 min × 1.5)
+1. PID 8747 の重複ガード確認
+2. 完了済みなら結果に応じて分岐:
+   - **55% 以上**: memory に成功事例書込み → CronDelete 11c931e9 → 完了報告
+   - **51-55%**: iter7_result.md (棄却) → iter8_state.md で別軸計画
+   - **51% 未満**: iter7_result.md + iter8 で iter6 cache 検証
 
 ## 過去 iter サマリ
 
 - iter1 (cooldown 抑止): 46.0%
-- **iter2 (bypass=8 + 値短縮)**: **49.5% (best)**
+- **iter2 (bypass=8 + 値短縮)**: **49.5% (200戦、best 設計)**
 - iter3 (bypass=10): 47.8%/180中断
 - iter4 (multi-source): 47.0%
 - iter5 (ACCUMULATE port): 42.5%
-- **iter6 (plan_shot cache)**: 49.0%、ablation 採用、30% 高速化
-
-## 既知の todo
-
-- snapshot_update.py の出力先バグ (worktree root に tests/ 作成) は別 commit で修正
+- iter6 (plan_shot cache): 49.0% → ablation 採用、30% 高速化
+- **iter7 (300戦 confirm)**: 評価中
