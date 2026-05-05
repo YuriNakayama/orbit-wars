@@ -14,10 +14,10 @@ data:
   max_episodes: null
 
 model:
-  # case7 iter4: PLANET_FEAT_DIM=61 (iter3 63 - G6 2 - K1 縮小 8 + K2 4 + K3 4 = 61)。
-  # GLOBAL_FEAT_DIM=12 (iter3 14 - H1/H4/H5 6 + K4 4 = 12)。
-  planet_in_dim: 61
-  global_in_dim: 12
+  # case7 iter6: PLANET_FEAT_DIM=57 (iter4 61 - K2 4 = 57)、K2 causal leak 削除。
+  # GLOBAL_FEAT_DIM=8 (iter4 12 - K4 4 = 8)、K4 dead group 削除。
+  planet_in_dim: 57
+  global_in_dim: 8
   hidden: 128
   ships_buckets: 4
 

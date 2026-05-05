@@ -18,14 +18,14 @@ from pipeline.imitation.case7.policy.featurizer import (
 )
 
 
-def test_planet_feat_dim_is_61() -> None:
-    """iter4: PLANET_FEAT_DIM = 61 (iter3 63 - G6 2 - K1 縮小 8 + K2 4 + K3 4)。"""
-    assert PLANET_FEAT_DIM == 61
+def test_planet_feat_dim_is_57() -> None:
+    """iter6: PLANET_FEAT_DIM = 57 (iter4 61 - K2 leak 4)。"""
+    assert PLANET_FEAT_DIM == 57
 
 
-def test_global_feat_dim_is_12() -> None:
-    """iter4: GLOBAL_FEAT_DIM = 12 (iter3 14 - H1/H4/H5 6 + K4 4)。"""
-    assert GLOBAL_FEAT_DIM == 12
+def test_global_feat_dim_is_8() -> None:
+    """iter6: GLOBAL_FEAT_DIM = 8 (iter4 12 - K4 dead 4)。"""
+    assert GLOBAL_FEAT_DIM == 8
 
 
 def test_featurize_minimal_obs_without_history_returns_correct_shape() -> None:

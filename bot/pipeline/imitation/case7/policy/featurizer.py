@@ -43,20 +43,16 @@ from .timeline import (
 )
 from .types import BatchFeatures, WorldSnapshot
 
-# iter4: case7 63→61 (-2) planet, 14→12 (-2) global. permutation importance に基づく整理。
-# 削除 (dead group sum |Δ| < 0.01):
-#   G6 enemy_ship_event_per_planet (planet 22-23, 2列)
-#   H1 global_step_velocity (global 0-1, 2列)
-#   H4 global_comet_state (global 10-11, 2列)
-#   H5 global_home_centroid (global 12-13, 2列)
-# 縮小:
-#   G9 pairwise_top_k K=5 (20列) → K=3 (12列) で per-column importance を改善
-# 新規追加:
-#   K2 outgoing_fleet_trajectory (planet +4): 自軍 fleet の 5-turn 先 future delta
-#   K3 frontline_distance (planet +4): 敵軍 nearest 1/2 との dist_log + ships_ratio_log
-#   K4 aux_multi_horizon_global (global +4): 自軍 ships sum h=5/15 + my_prod_sum_log + ships_ratio
-PLANET_FEAT_DIM = 61  # iter3 63 - G6 2 - K1 縮小 8 + K2 4 + K3 4 = 61
-GLOBAL_FEAT_DIM = 12  # iter3 14 - H1/H4/H5 6 + K4 4 = 12
+# iter6: K2/K4 削除で iter4 の causal leak を除去。
+# 削除:
+#   K2 outgoing_fleet_trajectory (planet 53-56, 4列)
+#     causal leak: obs.fleets は action_N 適用後の値。自軍 fleet の from_pid と ships が
+#     ships_per_src ラベルと完全一致 → policy が逆算可能。iter5 permutation で sum |Δ|=1.70 検出。
+#   K4 aux_multi_horizon_global (global 8-11, 4列)
+#     iter5 permutation で sum |Δ|=0.001、H2 と相関で意義なし。dead group。
+# 結果: planet 61→57、global 12→8、K3 frontline_distance は planet 57→53 に slot shift。
+PLANET_FEAT_DIM = 57  # iter4 61 - K2 4 = 57
+GLOBAL_FEAT_DIM = 8  # iter4 12 - K4 4 = 8
 MAX_PLANETS = 36
 TOPK_NEIGHBORS = 3  # iter4 K1: pairwise top-K count (5 から削減)
 TOPK_FEATS_PER_NEIGHBOR = 4  # dist_log, ships_ratio_log, owner_signed, prod_log
@@ -576,75 +572,9 @@ def featurize(
             for s in range(MAX_PLANETS):
                 pair_topk[s, k_pos, 0] = -1.0
 
-    # === iter4 K2: Per-fleet outgoing trajectory (own fleet, 5-turn future delta)
-    # 自軍 fleet (owner == player) を per-source-planet (from_pid) に attribute。
-    # source planet の future position と fleet の future position の relative dx/dy/dist を持たせる。
-    # 複数自軍 fleet が同じ src を持つ場合は ETA 最早 (= ships が多い fleet で速度遅、distance 短) で 1 件。
-    # 補完: 自軍 fleet ない src は dist=-1 sentinel + 他 0。
-    outgoing_fleet_dx = [0.0] * MAX_PLANETS
-    outgoing_fleet_dy = [0.0] * MAX_PLANETS
-    outgoing_fleet_dist = [-1.0] * MAX_PLANETS
-    outgoing_fleet_ships_log = [0.0] * MAX_PLANETS
-    if raw_fleets:
-        # earliest own-fleet per source slot
-        # raw_fleet row format: [fid, fowner, fx, fy, fangle, from_pid, fships]
-        own_fleet_best_per_src: dict[
-            int, tuple[float, int, float, float, float, int]
-        ] = {}
-        for fr in raw_fleets:
-            fowner_ = int(fr[1])
-            if fowner_ != player:
-                continue
-            from_pid_ = int(fr[5])
-            fships_ = int(fr[6])
-            fx_ = float(fr[2])
-            fy_ = float(fr[3])
-            fangle_ = float(fr[4])
-            speed_ = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, fships_)))
-            # earliest = closest to src now (tie: smaller fships)
-            src_slot = planet_index_by_id.get(from_pid_)
-            if src_slot is None:
-                continue
-            src_x = float(raw_planets[src_slot][2])
-            src_y = float(raw_planets[src_slot][3])
-            dist_now = math.sqrt((fx_ - src_x) ** 2 + (fy_ - src_y) ** 2)
-            key = src_slot
-            if (
-                key not in own_fleet_best_per_src
-                or own_fleet_best_per_src[key][0] > dist_now
-            ):
-                own_fleet_best_per_src[key] = (
-                    dist_now,
-                    fships_,
-                    fx_,
-                    fy_,
-                    fangle_,
-                    src_slot,
-                )
-        for src_slot, (
-            _dist_now,
-            fships_,
-            fx_,
-            fy_,
-            fangle_,
-            _,
-        ) in own_fleet_best_per_src.items():
-            speed_ = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, fships_)))
-            travel = speed_ * float(INBOUND_FLEET_FUTURE_TURNS)
-            f_x_fut = fx_ + math.cos(fangle_) * travel
-            f_y_fut = fy_ + math.sin(fangle_) * travel
-            src_x = float(raw_planets[src_slot][2])
-            src_y = float(raw_planets[src_slot][3])
-            src_x_fut, src_y_fut = _future_position(
-                src_x, src_y, ang_vel, INBOUND_FLEET_FUTURE_TURNS
-            )
-            dx_ = (f_x_fut - src_x_fut) / BOARD_SIZE
-            dy_ = (f_y_fut - src_y_fut) / BOARD_SIZE
-            dist_ = math.sqrt(dx_ * dx_ + dy_ * dy_)
-            outgoing_fleet_dx[src_slot] = dx_
-            outgoing_fleet_dy[src_slot] = dy_
-            outgoing_fleet_dist[src_slot] = dist_
-            outgoing_fleet_ships_log[src_slot] = math.log1p(max(0, fships_))
+    # iter6: K2 (outgoing_fleet_trajectory) は causal leak で削除済 (planet 53-56 列を抹消)。
+    # 自軍 fleet (= action_N の結果) を input に入れていたため ships_per_src ラベルと
+    # 完全に同情報源、policy が逆算可能だった (iter5 permutation で sum |Δ|=1.70 検出)。
 
     # === iter4 K3: Frontline distance (敵軍 nearest 1, 2 個との dist_log + ships_ratio_log)
     # source planet の視点で敵軍 (owner != player and != -1) の nearest 2 を抽出。
@@ -836,11 +766,7 @@ def featurize(
             has_enemy_targeted_flag,
             is_home_planet_flag,
             is_neighbor_to_enemy_flag,
-            # case7 iter4 K2: Outgoing fleet trajectory (4 列、自軍 fleet 5-turn future delta)
-            outgoing_fleet_dx[slot],
-            outgoing_fleet_dy[slot],
-            outgoing_fleet_dist[slot],
-            outgoing_fleet_ships_log[slot],
+            # iter6: K2 (outgoing fleet trajectory) は causal leak で削除済
             # case7 iter4 K3: Frontline distance (4 列、敵 nearest 1/2)
             frontline_d1_log[slot],
             frontline_r1_log[slot],
@@ -880,18 +806,7 @@ def featurize(
             enemy_total_ships += float(ships)
             enemy_total_prod += float(production)
 
-    # iter4 K4: 自軍 ships future predicted h=5/15 (production 込み) + my_prod_sum_log + ratio
-    # production込み h=h で my_total_ships + sum_my_prod*h (production 込み)
-    sum_my_prod = float(my_total_prod)
-    aux_my_ships_h5 = math.log1p(my_total_ships + 5.0 * sum_my_prod)
-    aux_my_ships_h15 = math.log1p(my_total_ships + 15.0 * sum_my_prod)
-    # ratio: my/(my+enemy) ships, [0, 1]
-    aux_ships_ratio = (
-        my_total_ships / (my_total_ships + enemy_total_ships)
-        if (my_total_ships + enemy_total_ships) > 0
-        else 0.5
-    )
-
+    # iter6: K4 aux_multi_horizon_global は permutation importance 0.001 で完全 dead、削除済
     global_feats = torch.tensor(
         [
             # iter1 base 4 列 (H1 step/ang_vel は iter4 で削除)
@@ -904,12 +819,8 @@ def featurize(
             math.log1p(enemy_launch_ships_g) / 6.0,
             ally_launch_count_g / 10.0,
             math.log1p(ally_launch_ships_g) / 6.0,
-            # iter4 K4: aux multi-horizon ships sum + prod sum + ratio (4 列)
-            aux_my_ships_h5,
-            aux_my_ships_h15,
-            math.log1p(sum_my_prod),
-            aux_ships_ratio,
-            # iter4: H1 (step/ang_vel) / H4 (comet 2) / H5 (home/centroid 2) は削除
+            # iter6: K4 (aux_multi_horizon_global) 削除済
+            # iter4: H1/H4/H5 削除済
         ],
         dtype=torch.float32,
     )
