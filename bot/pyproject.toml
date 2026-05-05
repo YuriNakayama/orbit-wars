@@ -122,6 +122,14 @@ max-complexity = 5
 "pipeline/imitation/case8/training/train.py" = ["B008"]
 "pipeline/imitation/case8/evaluation/eval_vs_baseline.py" = ["B008"]
 "pipeline/imitation/case8/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case10/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case10/training/train.py" = ["B008"]
+"pipeline/imitation/case10/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case10/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case11/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case11/training/train.py" = ["B008"]
+"pipeline/imitation/case11/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case11/policy/timeline.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/pipeline/**/test_*.py" = ["E501"]
 "tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
@@ -223,6 +231,14 @@ module = [
     "pipeline.imitation.case8.training.train",
     "pipeline.imitation.case8.evaluation.eval_vs_baseline",
     "pipeline.imitation.case8.evaluation.calibrate_heads",
+    "pipeline.imitation.case10.training.preprocess",
+    "pipeline.imitation.case10.training.train",
+    "pipeline.imitation.case10.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case10.evaluation.calibrate_heads",
+    "pipeline.imitation.case11.training.preprocess",
+    "pipeline.imitation.case11.training.train",
+    "pipeline.imitation.case11.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case11.evaluation.calibrate_heads",
 ]
 ignore_errors = true
 
