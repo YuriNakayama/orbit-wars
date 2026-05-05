@@ -274,12 +274,31 @@ def _run_epoch(
     return {k: v / n_batches for k, v in totals.items()}
 
 
+def _stamp(msg: str) -> None:
+    """logger.info + handler flush で各 step の進捗を確実にディスクに残す。
+
+    iter2 で `60_before_train` から marker が出ないまま 30 分 hang した事象を
+    debug するため、train.py の主要 checkpoint で stamp を書き出す。logger
+    自体のバッファは Python の logging が flush しないことがあるので、
+    handler 全部を明示的に flush して S3 へ push される前に確実に残す。
+    """
+    logger.info(f"[case8/train] {msg}")
+    for handler in logger.handlers + logging.getLogger().handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+
+
 def train(cfg: dict[str, Any]) -> TrainReport:
+    _stamp("ENTER train()")
     seed = int(cfg.get("seed", 0))
     _seed_all(seed)
+    _stamp(f"seed_all done seed={seed}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(json.dumps({"device": device.type}))
+    _stamp(f"device={device.type} cuda_available={torch.cuda.is_available()}")
 
     data_cfg = cfg["data"]
     train_cfg = cfg["train"]
@@ -288,16 +307,20 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     ablation_cfg = data_cfg.get("ablation", {}) or {}
     mask_planet_cols = list(ablation_cfg.get("planet_cols", []) or [])
     mask_global_cols = list(ablation_cfg.get("global_cols", []) or [])
+    _stamp(f"loading train_ds from {data_cfg['out_train']}")
     train_ds = CaseFourDataset(
         _abspath(data_cfg["out_train"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
     )
+    _stamp(f"train_ds loaded len={len(train_ds)}")
+    _stamp(f"loading val_ds from {data_cfg['out_val']}")
     val_ds = CaseFourDataset(
         _abspath(data_cfg["out_val"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
     )
+    _stamp(f"val_ds loaded len={len(val_ds)}")
 
     g = torch.Generator()
     g.manual_seed(seed)
@@ -336,7 +359,9 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     )
 
     epochs = int(train_cfg["epochs"])
+    _stamp(f"building scheduler epochs={epochs} cfg={train_cfg.get('scheduler')!r}")
     scheduler = _build_scheduler(optimizer, train_cfg.get("scheduler"), epochs=epochs)
+    _stamp(f"scheduler built type={type(scheduler).__name__ if scheduler else 'None'}")
 
     early_stop_cfg = train_cfg.get("early_stop") or {}
     early_stop_metric = str(early_stop_cfg.get("metric", "")) or None
@@ -403,8 +428,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     early_stop_best = float("-inf") if early_stop_mode == "max" else float("inf")
     epochs_run = epochs
     train_started = time.monotonic()
+    _stamp(f"entering epoch loop epochs={epochs}")
     for epoch in range(epochs):
         epoch_started = time.monotonic()
+        _stamp(f"epoch={epoch} starting (lr={optimizer.param_groups[0]['lr']:.6f})")
         logger.info(
             json.dumps(
                 {
@@ -515,6 +542,12 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
         if scheduler is not None:
             scheduler.step()
+            _stamp(
+                f"epoch={epoch} done train_total={train_metrics['total']:.2f} "
+                f"val_total={val_metrics['total']:.2f} "
+                f"val_cand_fire_acc={val_metrics['cand_fire_acc']:.4f} "
+                f"next_lr={optimizer.param_groups[0]['lr']:.6f}"
+            )
 
     summary = {
         "epochs_run": epochs_run,
