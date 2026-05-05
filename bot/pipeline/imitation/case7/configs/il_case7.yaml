@@ -1,0 +1,62 @@
+# case7: Set Transformer + cross-attention target head (case6 と同 featurizer)
+# 参考: docs/experiment/imitation/20260505_case7_model_structure_roadmap/plan.md (iter1)
+# 構成: case6 の il_case6.yaml を踏襲、 model セクションに inducing_points/encoder_layers
+#        を追加 (Set Transformer ISAB 数 + inducing 点)。
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  # case 独立性原則 (.claude/rules/bot/pipeline.md) に従い case7 専用パスを持つ。
+  out_train: data/mart/imitation/case7/train.parquet
+  out_val: data/mart/imitation/case7/val.parquet
+  rating_quantile: 0.50
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: null
+
+model:
+  # case7 は case6 と同じ PLANET_FEAT_DIM=17 (case1 base 11 + ship-prediction 6)。
+  # backbone を Graph Attention U-Net → Set Transformer ISAB stack に、
+  # target_head を MLP → PMA cross-attention に置換。
+  planet_in_dim: 17
+  global_in_dim: 6
+  hidden: 128
+  ships_buckets: 4
+  attn_heads: 4
+  inducing_points: 16  # ISAB の inducing points 数 m (Lee 2019 推奨 16-32)
+  encoder_layers: 3  # ISAB block 数 (case6 の 3-level encoder と同等の depth)
+
+train:
+  batch_size: 256
+  epochs: 15
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  num_workers: 0
+  loss_weights:
+    from: 1.0
+    target: 2.0
+    ships: 0.5
+    from_pos_weight: 8.5
+    from_focal_gamma: 3.0
+    from_focal_alpha: 0.75
+    target_label_smoothing: 0.15
+    target_entropy_bonus: 0.05
+    use_target_class_weights: true
+    target_class_weight_beta: 0.9999
+    use_ships_class_weights: false
+    ships_class_weight_beta: 0.9999
+    ships_ordinal_smoothing: 0.0
+  weights_out: bot/pipeline/imitation/case7/policy/weights.pt
+
+inference:
+  from_threshold: 0.31
+  min_fire_topk: 1
+  max_fire_count: null
+  target_temperature: 0.8
+  ships_temperature: 1.1
+
+evaluation:
+  metrics_out: data/mart/imitation/case7/eval_metrics.json
+  episodes: 50
+  seed: 0

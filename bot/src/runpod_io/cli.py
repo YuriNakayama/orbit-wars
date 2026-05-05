@@ -130,6 +130,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case6/policy/weights.pt",
     },
+    "case7": {
+        "stage": "train_imitation_case7",
+        "train_module": "pipeline.imitation.case7.training.train",
+        "config_arg": "--config pipeline/imitation/case7/configs/il_case7.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case7.training.preprocess "
+            "--config pipeline/imitation/case7/configs/il_case7.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case7/policy/weights.pt",
+    },
 }
 
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent / "onstart.sh.tmpl"
