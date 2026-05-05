@@ -367,18 +367,47 @@ if [ -n "<PREPROCESS_CMD>" ]; then
   # 残ることがある。`find -name '*.parquet'` は dangling symlink も拾うので
   # `-xtype f` で「symlink を辿った先が file かつ存在」のみ採用、さらに
   # `-size +0c` で 0 byte を弾く (DVC cache 経由なら本体は MB〜GB のはず)。
+  #
+  # 加えて (trap #9 永久対策、観測 2026-05-05 case7 iter2): parquet が存在しても
+  # **dvc.yaml の deps (preprocess.py / featurizer.py / configs/*.yaml 等) が変わって
+  # いれば schema が古い可能性**があるため `dvc status` で stage が up-to-date か
+  # を必ず確認する。`dvc status preprocess_imitation_<CASE>` が "Data and pipelines
+  # are up to date." を返すときのみ skip。それ以外 (changed deps / changed outs) は
+  # 再実行する。
+  PARQUET_PRESENT=0
   if [ -d "data/mart/imitation/<CASE>" ] && \
      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
        \( -type f -o -xtype f \) -size +0c -print -quit | grep -q . ; then
-    echo "[onstart] step=preprocess_skip (parquet already present and non-empty)"
+    PARQUET_PRESENT=1
+  fi
+  PREPROCESS_STAGE_NAME="preprocess_imitation_<CASE>"
+  STAGE_UPTODATE=0
+  if [ "${PARQUET_PRESENT}" -eq 1 ]; then
+    echo "[onstart] checking ${PREPROCESS_STAGE_NAME} freshness via dvc status"
+    DVC_STATUS_OUT=$(uv run --project bot dvc status "${PREPROCESS_STAGE_NAME}" 2>&1)
+    echo "${DVC_STATUS_OUT}" | head -20
+    if echo "${DVC_STATUS_OUT}" | grep -qiE "up to date|nothing to reproduce"; then
+      STAGE_UPTODATE=1
+    fi
+  fi
+  if [ "${PARQUET_PRESENT}" -eq 1 ] && [ "${STAGE_UPTODATE}" -eq 1 ]; then
+    echo "[onstart] step=preprocess_skip (parquet present and stage up-to-date)"
   else
-    echo "[onstart] step=preprocess case=<CASE>"
-    # 既存の dangling symlink を消してから preprocess を走らせる。残ったまま
-    # だと preprocess.py が write_parquet で symlink target に書き込もうとして
-    # 元の blob path に書き込もうとするため (dvc cache の symlink type の場合)。
-    if [ -d "data/mart/imitation/<CASE>" ]; then
+    if [ "${PARQUET_PRESENT}" -eq 1 ] && [ "${STAGE_UPTODATE}" -eq 0 ]; then
+      echo "[onstart] step=preprocess_force_rerun (parquet present but deps changed)"
+      # 古い parquet を削除してから走らせる (write_parquet の上書きはするが、
+      # symlink target の場合に dvc cache 不整合を防ぐため明示削除)
       find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
-        \( -type l -xtype l \) -print -delete 2>&1 || true
+        \( -type f -o -type l \) -print -delete 2>&1 || true
+    else
+      echo "[onstart] step=preprocess case=<CASE>"
+      # 既存の dangling symlink を消してから preprocess を走らせる。残ったまま
+      # だと preprocess.py が write_parquet で symlink target に書き込もうとして
+      # 元の blob path に書き込もうとするため (dvc cache の symlink type の場合)。
+      if [ -d "data/mart/imitation/<CASE>" ]; then
+        find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+          \( -type l -xtype l \) -print -delete 2>&1 || true
+      fi
     fi
     uv run --directory bot python -m <PREPROCESS_CMD>
     PREPROCESS_RAN=1
