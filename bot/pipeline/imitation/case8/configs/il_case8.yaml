@@ -61,10 +61,15 @@ train:
   # - ema: weights を移動平均、val/best.pt は EMA weights を採用して noise 平滑化
   # - head_dropout: cand_score / ship_head MLP の中間 ReLU 直後に Dropout(p)
   grad_clip_max_norm: 1.0
-  # iter7: EMA を再有効化 (iter6 で `preprocess_skip` 古 parquet 起因の
-  # KeyError が真の root cause と判明、EMA 起因 hang ではなかった)。
+  # iter8: EMA を恒久に disable。iter4-v1〜iter5-v2 + iter7 (EMA on) の 6 回が
+  # `60_before_train` で hang、iter6 (EMA off) は schema KeyError まで進行
+  # (= ablation 上 EMA 起因の deadlock 確定)。AveragedModel の CUDA-side
+  # state 初期化が RTX 4090 host 個別の torch 2.6 環境で stuck する仮説。
+  # 別 PR で `ema-pytorch` library or CPU-resident average に切替再検討、
+  # 本 PR は EMA 抜きで iter4 hyperparams (grad_clip + dropout + cosine LR
+  # + lazy dataset) の効果を検証する。
   ema:
-    enabled: true
+    enabled: false
     decay: 0.999
   head_dropout: 0.2
   weights_out: pipeline/imitation/case8/policy/weights.pt
