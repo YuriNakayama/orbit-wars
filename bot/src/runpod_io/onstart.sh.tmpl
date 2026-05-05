@@ -453,10 +453,17 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
       mark "55_mart_dvc_push_failed"
       exit 1
     fi
+    # iter10 fix: `uv run --project bot` を retry 中に呼ぶと uv が venv を
+    # rebuild しようとして dvc / s3fs / pathspec / diskcache 等が一時的に
+    # 見えなくなる事象を観測 (case8 iter9 で `dvc push attempt 1 failed`
+    # → attempt 2 で `Installed 180 packages` → `ModuleNotFoundError`)。
+    # 既に session 冒頭で uv sync 済みなので、retry では .venv の dvc を
+    # 直接呼んで race condition を回避する。
+    DVC_BIN="bot/.venv/bin/dvc"
     push_ok=0
     for attempt in 1 2 3; do
       echo "[onstart] dvc push ${dvc_files[*]} (attempt ${attempt}/3)"
-      if uv run --project bot dvc push "${dvc_files[@]}" 2>&1; then
+      if "${DVC_BIN}" push "${dvc_files[@]}" 2>&1; then
         push_ok=1
         break
       fi
