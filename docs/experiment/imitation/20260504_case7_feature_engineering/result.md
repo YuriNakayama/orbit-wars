@@ -12,6 +12,7 @@
 | **訓練** | 15 epoch 完走、val_loss best @ epoch 9 = **3.5235** | ✅ 完了 |
 | **Stage 1 (val metrics)** | 全 head 改善、from PR-AUC **+0.136**、target macro F1 **+0.013** | ✅ **+0.01 ゲート突破** |
 | **Stage 2 (50 ep self-play)** | vs baseline_v1: **0 / 50** (95% CI: 0% - 7.1%) | ⚠ sanity 失敗 |
+| **Stage 2 (30 ep, 別 seed start)** | vs baseline_v1: **0 / 30** (95% CI: 0% - 11.4%) | ⚠ sanity 失敗 |
 | **採否最終判定** | **保留** (300 ep フォローアップ要、memory `project_imitation_case1_phase3` 準拠) | — |
 
 仮説の **「予測距離 + history + ship 発射の 3 軸補強で defensive/offensive/target 判断を改善する」** は **validation metrics レベルでは強く支持** されたが、**self-play レベルでは現時点で baseline_v1 を倒せていない**。50 ep は noise floor 内なので 300 ep で再評価する。
@@ -71,7 +72,9 @@ case7 の `tests/pipeline/imitation/case7/test_featurizer_history.py` は、`obs
 が action_N と直接相関しないことを assert する unit test を含む。Stage 1 の異常 PR-AUC (0.95 超等) は
 発生しておらず、causal leak の再発は無いと判断。
 
-## Stage 2: self-play vs baseline_v1 (50 ep)
+## Stage 2: self-play vs baseline_v1
+
+### 50 ep (seed 0-49)
 
 | 指標 | 値 |
 |------|------|
@@ -84,8 +87,23 @@ case7 の `tests/pipeline/imitation/case7/test_featurizer_history.py` は、`obs
 | challenger | il_v7 |
 | baseline | baseline_v1 |
 | mode | 1v1 |
-| seed_start | 0 |
-| seed_end_exclusive | 50 |
+
+### 30 ep (re-run, seed 0-29)
+
+50 ep 実施後 trap #8 修正と同じ session で 30 ep を別途回した結果も同じ:
+
+| 指標 | 値 |
+|------|------|
+| episodes | 30 |
+| wins | **0** |
+| losses | 30 |
+| **win_rate** | **0.0%** |
+| 95% CI | **0% - 11.4%** |
+| challenger | il_v7 |
+| baseline | baseline_v1 |
+
+50 ep / 30 ep どちらも 0 勝。**short-horizon self-play では完敗**で確定。
+ただし n<300 は採否判定材料にならない (memory `project_imitation_case1_phase3` 準拠)。
 
 ### 解釈
 
@@ -143,7 +161,7 @@ case7 を初めて RunPod で full preprocess + train した結果、**6 つの�
 | 5 | dvc add が pipeline stage outs と overlap | `c72fdf4` (`dvc commit/push <stage>` + `dvc.lock`) | dvc.yaml に outs 登録された artifact は `dvc add` ではなく `dvc commit -f <stage>` |
 | 6 | dvc push s3fs futures hang (treeverse/dvc#10374) | `1bda9ff` (`-j 1 -v`) | 高 RTT + 高並列の S3 push で futures が timeout なしハング |
 | 7 | mark_progress 関数が module に存在しない | `5a89082` (`runpod_io.progress.mark_progress` 実装) | 長年の dead import (case3-5 全て該当)、case7 train で初顕在化 |
-| 8 | data/output/models/imitation の symlink 経由 dvc add | (未修正) | 訓練 run dir の dvc add も同じ symlink trap、artifacts は S3 fallback で救出 |
+| 8 | data/output/models/imitation の symlink 経由 dvc add | (本セッション末で修正、未検証 commit) | 訓練 run dir の dvc add も同じ symlink trap。`mart_dvc_persist` と同じ unlink → cp → re-link pattern を `dvc_add_run` ブロックに適用、`dvc push` も `-j 1 -v` 化。次 RunPod run で動作検証要 |
 
 このセッションで RunPod に **~$2.64** 投入し、訓練本体に到達したのは試行 9 (Step B 2nd attempt = 5a89082)。
 
@@ -176,5 +194,6 @@ case7 を初めて RunPod で full preprocess + train した結果、**6 つの�
 - [ ] 300 ep self-play vs baseline_v1 を実施 (separate `iter2_result.md` か追記)
 - [ ] (もし採用) Kaggle submission を別途承認のうえで実施
 - [ ] memory `project_runpod_onstart_pitfalls` を 8 trap 完全カタログに更新 (`docs/`に格上げか)
-- [ ] trap #8 (data/output/models/imitation symlink) を onstart テンプレで修正
+- [x] trap #8 (data/output/models/imitation symlink) を onstart テンプレで修正 ← 本セッション末
 - [ ] case7 の onstart 結果を踏まえ、case5 RunPod training も再開可能 (同じ修正がそのまま使える)
+- [ ] 次 RunPod run で trap #8 修正の動作検証 (本来は smoke run を打ちたいが session コスト枠を超過するため次回送り)
