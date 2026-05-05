@@ -52,10 +52,29 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
         run: |
           # Build context = repo root; Dockerfile lives at infra/runtime/Dockerfile
           # (see the file's header comment).
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f infra/runtime/Dockerfile .
+          #
+          # The Dockerfile's `aws s3 sync` step needs AWS credentials at build
+          # time via BuildKit secret `aws_creds` (a credentials file). Stage the
+          # OIDC-provided session credentials into a temp file and mount it.
+          creds_file="$(mktemp)"
+          trap 'rm -f "$creds_file"' EXIT
+          {
+            echo "[default]"
+            echo "aws_access_key_id=${AWS_ACCESS_KEY_ID}"
+            echo "aws_secret_access_key=${AWS_SECRET_ACCESS_KEY}"
+            echo "aws_session_token=${AWS_SESSION_TOKEN}"
+          } > "$creds_file"
+          DOCKER_BUILDKIT=1 docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f infra/runtime/Dockerfile \
+            --secret id=aws_creds,src="$creds_file" \
+            .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
