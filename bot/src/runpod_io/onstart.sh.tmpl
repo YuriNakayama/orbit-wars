@@ -359,6 +359,23 @@ echo "[onstart] step=mkdir_run"
 RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
+# iter4 fix: preprocess の前に mart symlink を物理 dir に materialize する。
+# 後段 (mart_dvc_persist) で materialize するパターンだと、preprocess が
+# /persist 配下に書き込んだ parquet が cp -RL でコピー後に glob で見えない
+# 事象を A6000 host で観測 (case8 iter4 1st run の `65_train_failed_exit_1`)。
+# 順序を「materialize → preprocess」に変えれば preprocess は materialize 済みの
+# 実 dir に直接書き込むため symlink chain を経由せず安全。
+MART_PARENT_PRE="data/mart/imitation"
+if [ -L "${MART_PARENT_PRE}" ]; then
+  echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
+  MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
+  rm "${MART_PARENT_PRE}"
+  mkdir -p "${MART_PARENT_PRE}"
+  if [ -d "${MART_TARGET_PRE}" ]; then
+    cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+  fi
+fi
+
 PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
   # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
