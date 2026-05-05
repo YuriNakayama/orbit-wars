@@ -21,9 +21,7 @@ model:
 train:
   case: case8
   batch_size: 256
-  # iter2-sanity: epochs=2 で SequentialLR が GPU 環境で hang するか切り分け
-  # (full epochs=30 は debug 後に元に戻す)
-  epochs: 2
+  epochs: 30
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
@@ -33,18 +31,21 @@ train:
     class_weight_beta: 0.999
     label_smoothing: 0.05
     ship: 1.0
-  # iter2-sanity: scheduler を維持して hang 再現を狙う (cosine_warmup)
+  # iter2: cosine annealing + warmup で cand head の振動を抑制 (iter1 で
+  # epoch ごとに val_cand_acc が 0.01-0.37 で振動した課題への対症)。
+  # iter2-sanity (epochs=2) で A6000 に scheduler が問題なく動く挙動を確認済み。
   scheduler:
     type: cosine_warmup
-    t_max: 2
+    t_max: 30
     eta_min: 1.0e-5
-    warmup_epochs: 1
+    warmup_epochs: 2
     warmup_start_factor: 0.1
+  # iter2: best.pt の選定基準を val_total → val_cand_fire_acc に変更。
   best_metric: val_cand_fire_acc
   best_metric_mode: max
   early_stop:
     metric: val_cand_fire_acc
-    patience: 1
+    patience: 5
     mode: max
   weights_out: pipeline/imitation/case8/policy/weights.pt
 
