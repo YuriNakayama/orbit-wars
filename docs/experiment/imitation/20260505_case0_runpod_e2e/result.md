@@ -106,6 +106,34 @@ GPU 上で `final_loss=1.5594, eval_loss=1.380, eval_accuracy=0.266` と
 2. **image pull 2m51s** — 4000 Ada SECURE のノードに `runpod/pytorch:2.4.0` がキャッシュされていなかった。これはノードガチャに依存。
 3. **DVC pull 20s** — 55 bytes の sentinel に対して 20 秒。boto3 の認証 + setup overhead で、純粋な転送時間ではない。pull 経路の正常性は確認済。
 
+## uv sync 短縮の検証 (attempt 6–8)
+
+attempt 5 のボトルネック (uv sync 291s) を埋めるため、commit `9b49d74` / `ebe78cc` で:
+
+1. `bot/uv.lock` の SHA-256 を `/persist/uv-venv-bot/.uv_lock_sha256` に persist
+2. 起動時に hash 一致なら `uv sync` を完全 skip
+3. lock mismatch のときは `find /persist/uv-venv-bot -mindepth 1 -delete` で preclean してから rebuild
+4. `--locked` から `--frozen` に変更 (依存解決を一切再計算しない)
+
+実走 4 回の結果:
+
+| attempt | commit | uv sync mode | uv sync time | 全体 elapsed | 備考 |
+|---|---|---|---|---|---|
+| 5 | 38c84d9 | RUN (initial) | **291s** | 530s | 初回、wheel cache 空、download + install |
+| 6 | 9b49d74 | RUN, **failed** | — (4m15s で abort) | 465s (failure) | rmdir error: `.venv/lib not empty` (network volume の semantics 由来) |
+| 7 | ebe78cc | RUN (preclean 後) | **63s** | 465s | wheel cache hit で **4.6× 高速化**、`Installed 264 packages in 48.63s` |
+| 8 | ebe78cc | RUN (skip 期待) | **63s** | 465s | **lock-hash skip は発火せず**、`uv venv fresh: building from scratch` 判定 |
+
+**実証された短縮**: **−228s (−78%, 4.6× 高速化)** — wheel cache (`/persist/uv-cache`) が effective。
+
+**動作しなかった**: lock hash skip path。attempt 7 が `/persist/uv-venv-bot/.uv_lock_sha256` を書き出したはずだが、attempt 8 起動時には `bot/.venv/pyvenv.cfg` が無く `uv venv fresh` 判定された。原因仮説:
+
+- RunPod network volume が attempt 7 終了後に何らかの cleanup を走らせ、`/persist/uv-venv-bot` の中身がリセットされた
+- `find -delete` が `.uv_lock_sha256` まで巻き込んで消した可能性 (preclean ロジックが mismatch を判定するより先に hash file 自体が無くなる)
+- `bot/.venv` symlink target は `/persist/uv-venv-bot` だが、`pyvenv.cfg` が pod 再起動時に invalid 化される
+
+→ F6 として要追加調査。短縮効果は wheel cache だけで十分得られているので、優先度は低い。
+
 ## 残課題 / Follow-up
 
 | # | 課題 | 重要度 |
@@ -114,7 +142,8 @@ GPU 上で `final_loss=1.5594, eval_loss=1.380, eval_accuracy=0.266` と
 | F2 | `outcome=stalled` を retry policy に wiring (`FailureReason.IMAGE_PULL_STUCK` として自動 retry) | 中 |
 | F3 | `--watch` の進捗表示が無音 (`credentials.py` の boto3 ログだけ流れる)。marker 検出ごとに 1 行 print したい | 低 |
 | F4 | RTX 4090 を case0 候補から除外する設定変更は適用済 (commit `fe1393a`)。memory に「4090 + cu1241 でも bash が走らないケースあり」と追記する | 中 |
-| F5 | uv sync ボトルネック (4m54s) の短縮 — case0 専用の事前 bake image or network volume `/persist/uv-cache` 活用 | 中 |
+| F5 | uv sync 短縮 (4m54s → 1m3s, **−78%**, attempt 5 vs 7) — wheel cache (`/persist/uv-cache`) が効いた。これ以上の短縮は network volume の永続化挙動の理解が必要 (F6) | ✅ **部分達成 (−228s)** |
+| F6 | lock hash skip path が attempt 8 で発火しない原因究明: `/persist/uv-venv-bot` の attempt 跨ぎでの永続化挙動を調査 | 低 |
 
 ## NEXT ACTION
 
