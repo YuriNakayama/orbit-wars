@@ -58,24 +58,39 @@ class CaseFourDataset(Dataset[Sample]):
         mask_planet_cols: list[int] | None = None,
         mask_global_cols: list[int] | None = None,
     ) -> None:
-        self._df = pl.read_parquet(str(parquet_path))
-        n_rows = self._df.height
+        # iter4 OOM fix: column ごとに to_list → numpy 化 → 中間 list と polars
+        # series を即座に削除する。`pl.read_parquet` 全体を抱えたまま全列を
+        # 順次 to_list() すると、polars buffer (~10GB) + Python list (~3-5GB
+        # per col の中間) + numpy (~7GB peak) が三重で乗り、328k row で
+        # 24-32GB の RTX 4090 host RAM を超過 OOM (iter4-v2/v3 で観測)。
+        df_local = pl.read_parquet(str(parquet_path))
+        n_rows = df_local.height
+        has_ship_label = "ship_label_per_src" in df_local.columns
 
-        planet_arr = np.array(self._df["planet_feats"].to_list(), dtype=np.float32)
-        if n_rows > 0:
-            planet_dim = planet_arr.size // (n_rows * MAX_PLANETS)
-        else:
-            planet_dim = PLANET_FEAT_DIM
+        def pop_to_numpy(df: pl.DataFrame, col: str, dtype: np.dtype) -> np.ndarray:
+            """polars Series → list → numpy 即変換、polars 側から column 削除。"""
+            series_list = df[col].to_list()
+            arr = np.array(series_list, dtype=dtype)
+            del series_list
+            df.drop_in_place(col)
+            gc.collect()
+            return arr
+
+        planet_arr = pop_to_numpy(df_local, "planet_feats", np.dtype(np.float32))
+        planet_dim = (
+            planet_arr.size // (n_rows * MAX_PLANETS) if n_rows > 0 else PLANET_FEAT_DIM
+        )
         self._planet_feat_dim = int(planet_dim)
         self._planet_feats = planet_arr.reshape(-1, MAX_PLANETS, self._planet_feat_dim)
+        del planet_arr
+        gc.collect()
 
-        global_arr = np.array(self._df["global_feats"].to_list(), dtype=np.float32)
-        if n_rows > 0:
-            global_dim = global_arr.size // n_rows
-        else:
-            global_dim = GLOBAL_FEAT_DIM
+        global_arr = pop_to_numpy(df_local, "global_feats", np.dtype(np.float32))
+        global_dim = global_arr.size // n_rows if n_rows > 0 else GLOBAL_FEAT_DIM
         self._global_feat_dim = int(global_dim)
         self._global_feats = global_arr.reshape(-1, self._global_feat_dim)
+        del global_arr
+        gc.collect()
 
         if mask_planet_cols:
             for col in mask_planet_cols:
@@ -86,40 +101,39 @@ class CaseFourDataset(Dataset[Sample]):
                 if 0 <= col < self._global_feat_dim:
                     self._global_feats[:, col] = 0.0
 
-        self._planet_mask = np.array(
-            self._df["planet_mask"].to_list(), dtype=np.bool_
+        self._planet_mask = pop_to_numpy(
+            df_local, "planet_mask", np.dtype(np.bool_)
         ).reshape(-1, MAX_PLANETS)
-        self._my_planet_mask = np.array(
-            self._df["my_planet_mask"].to_list(), dtype=np.bool_
+        self._my_planet_mask = pop_to_numpy(
+            df_local, "my_planet_mask", np.dtype(np.bool_)
         ).reshape(-1, MAX_PLANETS)
-        self._target_mask = np.array(
-            self._df["target_mask"].to_list(), dtype=np.bool_
+        self._target_mask = pop_to_numpy(
+            df_local, "target_mask", np.dtype(np.bool_)
         ).reshape(-1, MAX_PLANETS)
-        self._candidate_feats = np.array(
-            self._df["candidate_feats"].to_list(), dtype=np.float32
+        self._candidate_feats = pop_to_numpy(
+            df_local, "candidate_feats", np.dtype(np.float32)
         ).reshape(-1, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
-        self._candidate_mask = np.array(
-            self._df["candidate_mask"].to_list(), dtype=np.bool_
+        self._candidate_mask = pop_to_numpy(
+            df_local, "candidate_mask", np.dtype(np.bool_)
         ).reshape(-1, MAX_PLANETS, CAND_K)
-        self._candidate_pid = np.array(
-            self._df["candidate_pid"].to_list(), dtype=np.int64
+        self._candidate_pid = pop_to_numpy(
+            df_local, "candidate_pid", np.dtype(np.int64)
         ).reshape(-1, MAX_PLANETS, CAND_K)
-        self._cand_slot_per_src = np.array(
-            self._df["cand_slot_per_src"].to_list(), dtype=np.int64
+        self._cand_slot_per_src = pop_to_numpy(
+            df_local, "cand_slot_per_src", np.dtype(np.int64)
         ).reshape(-1, MAX_PLANETS)
-        if "ship_label_per_src" in self._df.columns:
-            self._ship_label_per_src = np.array(
-                self._df["ship_label_per_src"].to_list(), dtype=np.int64
+        if has_ship_label:
+            self._ship_label_per_src = pop_to_numpy(
+                df_local, "ship_label_per_src", np.dtype(np.int64)
             ).reshape(-1, MAX_PLANETS)
         else:
             self._ship_label_per_src = np.full(
                 (n_rows, MAX_PLANETS), -1, dtype=np.int64
             )
-        self._is_noop = self._df["is_noop"].to_numpy().astype(np.bool_)
-        # iter4 OOM fix: 全 column を numpy に複製済みなので polars DataFrame は
-        # 不要。GC で ~50% RAM を解放。残るのは numpy arrays (n_rows × ~40k float
-        # = 300k × 40k × 4 byte ≈ 48GB の半分 = 24GB が peak、~12GB に抑制)。
-        del self._df
+        # is_noop は値型 (List ではない) なので to_numpy() で直接 OK
+        self._is_noop = df_local["is_noop"].to_numpy().astype(np.bool_)
+        df_local.drop_in_place("is_noop")
+        del df_local
         gc.collect()
 
     def class_weight_on_slots(
