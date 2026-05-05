@@ -110,6 +110,74 @@ permutation importance の結果を元に:
 2. **from head 復活策**: from head に Pairwise Top-K の k=0,1 のみを与える (k=2-4 は noise の可能性)
 3. **新規追加候補**: target head が伸び代あるなら template prefix を別 normalize で再実験
 
+## iter4 方針 (2026-05-05 追記、permutation importance + ユーザー指示で確定)
+
+### 削除 (8 列、permutation で sum |Δ| < 0.01)
+
+| Group | 列範囲 | 列数 | 削除理由 |
+|-------|------|---:|------|
+| **G6 enemy_ship_event_per_planet** | planet 22-23 | 2 | sum &#124;Δ&#124;=0.0018、全 head 効果ゼロ (iter1 で投入したが今は冗長) |
+| **H1 global_step_velocity** | global 0-1 | 2 | sum &#124;Δ&#124;=0.0056、step / ang_vel が想像以上に効かない |
+| **H4 global_comet_state** | global 10-11 | 2 | sum &#124;Δ&#124;=0.0086、comet info は per-planet `is_comet` flag (col 8) で十分 |
+| **H5 global_home_centroid** | global 12-13 | 2 | sum &#124;Δ&#124;=0.0017、home_owner_flag + prod_centroid_dist_norm の global 化は per-planet 列に情報吸収済み |
+
+### 縮小 (K1: G9 を K=5→K=3 に圧縮、12 列削減)
+
+| Group | 変更 | 列数差 | 理由 |
+|-------|------|---:|------|
+| **G9 pairwise_top_k** | K=5×4 (20列) → K=3×4 (12 列) | -8 | per-column importance 0.0084 で全 group 中最低、k=3,4 は noise の可能性高 |
+
+### 新規追加 (4 カテゴリ、計 +12 列)
+
+| Cat | 名称 | 列数 | 期待 head | 内容 |
+|-----|------|---:|---|---|
+| **K2** | Per-fleet outgoing trajectory | planet +4 | from / ships | 自軍出撃 fleet の 5-turn 先 future position (per-planet attribute、from-pid に紐付け)。iter2 G7 inbound に対する outgoing 版、from head 復活策の本命 |
+| **K3** | Frontline distance | planet +4 | target | 敵軍最近 1 個目/2 個目との relative (dist_log, ships_ratio_log) 各 2 列。G1 の position_geometry を強化 |
+| **K4** | Aux 集計 multi-horizon | global +4 | ships | 自軍 ships sum h=5/15 predicted + my prod sum + ratio。H2 を multi-horizon 化、ships head の決定力を補助 |
+
+### dim 計算
+
+| 段階 | planet | global |
+|---|---:|---:|
+| iter3 | 63 | 14 |
+| -G6 削除 | 61 | 14 |
+| -H1/H4/H5 削除 | 61 | 8 |
+| -K1 縮小 (G9 20→12) | 53 | 8 |
+| +K2 outgoing trajectory | 57 | 8 |
+| +K3 frontline distance | 61 | 8 |
+| +K4 aux global | 61 | 12 |
+| **iter4 final** | **61** | **12** |
+
+planet 63→61 (-2)、global 14→12 (-2)。総 -4 列だが内訳は **削除 14 + 追加 16 + 縮小 -8 = -6**。
+最終的に slim 化 + 新シグナル追加で精度狙い。
+
+### 採否方針 (iter4)
+
+iter3 と同じ **permutation feature importance 駆動**。dead group が出たら iter5 で更に削る螺旋的整理。事前固定ゲートは使わない。
+
+### 実装ステップ (高レベル)
+
+1. `featurizer.py` で
+   - G6 (col 22-23) を削除し以降の slot を詰める
+   - G9 を K=3×4 に縮小 (`TOPK_NEIGHBORS = 3`)
+   - K2 (outgoing fleet trajectory、自軍出撃 fleet の per-source future position) 追加
+   - K3 (frontline distance、敵軍 nearest 2 個と self の関係) 追加
+2. global は H1/H4/H5 削除 + K4 (multi-horizon ships sum + prod sum + ratio) 追加
+3. `configs/il_case7.yaml` の dim を 61/12 に更新
+4. `tests/pipeline/imitation/case7/test_featurizer_iter4.py` 新規追加 (各カテゴリ 1-2 テスト + dim sanity)
+5. `dev/test-bot` green 化 → commit/push → RunPod Step B → permutation importance → iter4_result (このファイルではなく新規 `iter4_result.md` を作成)
+
+### 想定コスト
+
+- RunPod ~30 分、~$0.30 (trap #9 fix で preprocess 自動再実行)
+- ローカル permutation importance ~1 分
+
+### 注意点
+
+- **K2 outgoing trajectory** は `obs.fleets` の自軍 fleet (owner == player) を per-source attribute する必要あり。iter2 の inbound enemy 用 `_fleet_action_target` ロジックを反転利用
+- **K3 frontline distance** は per-planet で敵 nearest 2 個を sort する必要あり。G1 と vectorize 共有可能
+- **K4 aux global** は per-planet を集約する後処理段階で計算、preprocess 時のコスト微増のみ
+
 ## RunPod onstart
 
 iter3 では新たな onstart trap は発見されず:
