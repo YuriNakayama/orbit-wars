@@ -491,8 +491,8 @@ def train(
             gpu_names = ["NVIDIA GeForce RTX 3090"]
             console.print("[cyan]case0:[/] GPU を RTX 3090 単独に絞り込み (smoke run)")
         if max_dph == 2.0:
-            max_dph = 0.4
-            console.print("[cyan]case0:[/] --max-dph を 0.4 に縮小")
+            max_dph = 0.5
+            console.print("[cyan]case0:[/] --max-dph を 0.5 に縮小")
         if cost_limit_usd == DEFAULT_COST_LIMIT_USD:
             cost_limit_usd = 0.30
             console.print("[cyan]case0:[/] --cost-limit を $0.30 に縮小")
