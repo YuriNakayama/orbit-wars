@@ -132,3 +132,46 @@ stages:
       hash: md5
       md5: 64803cc3b27f0b39911d935d2fbd993a
       size: 313
+  preprocess_imitation_case7:
+    cmd: uv run --directory bot python -m 
+      pipeline.imitation.case7.training.preprocess --config 
+      pipeline/imitation/case7/configs/il_case7.yaml
+    deps:
+    - path: bot/pipeline/imitation/case7/configs/il_case7.yaml
+      hash: md5
+      md5: aacea590deab3d008efff5fea04846fb
+      size: 1629
+    - path: bot/pipeline/imitation/case7/policy/featurizer.py
+      hash: md5
+      md5: a1a781cc67fefb73a04ab9d6251de214
+      size: 22281
+    - path: bot/pipeline/imitation/case7/policy/geometry.py
+      hash: md5
+      md5: 4219c09b0df15cb91f51ddd71f1d9e36
+      size: 8474
+    - path: bot/pipeline/imitation/case7/policy/templates.py
+      hash: md5
+      md5: 0d9d1cc2b5c9c18b58b207ebce7f6c67
+      size: 7490
+    - path: bot/pipeline/imitation/case7/policy/timeline.py
+      hash: md5
+      md5: 609b9bab6f5e5a030666554a2aa1d926
+      size: 7810
+    - path: bot/pipeline/imitation/case7/training/preprocess.py
+      hash: md5
+      md5: 79d2d82b036064d6cc761038ae6bcea8
+      size: 22513
+    - path: data/lake/kaggle_episodes/matches
+      hash: md5
+      md5: 4e35d6bd28fd8a6871b7c365cdec4849.dir
+      size: 597618590
+      nfiles: 2533
+    outs:
+    - path: data/mart/imitation/case7/train.parquet
+      hash: md5
+      md5: d7f732d1c20f3e25f83735c9a8a9a70a
+      size: 546467115
+    - path: data/mart/imitation/case7/val.parquet
+      hash: md5
+      md5: c454e5fedec0cb255c0b2b3af5d40238
+      size: 57533498
