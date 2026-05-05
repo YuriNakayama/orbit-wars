@@ -378,28 +378,25 @@ fi
 
 PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
-  # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
-  # `.dvc` stub は git にあるが本体 blob が S3 にない (orphan) ケースで
-  # `data/mart/imitation/<CASE>/*.parquet` が dangling symlink として
-  # 残ることがある。`find -name '*.parquet'` は dangling symlink も拾うので
-  # `-xtype f` で「symlink を辿った先が file かつ存在」のみ採用、さらに
-  # `-size +0c` で 0 byte を弾く (DVC cache 経由なら本体は MB〜GB のはず)。
-  if [ -d "data/mart/imitation/<CASE>" ] && \
-     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
-       \( -type f -o -xtype f \) -size +0c -print -quit | grep -q . ; then
-    echo "[onstart] step=preprocess_skip (parquet already present and non-empty)"
-  else
-    echo "[onstart] step=preprocess case=<CASE>"
-    # 既存の dangling symlink を消してから preprocess を走らせる。残ったまま
-    # だと preprocess.py が write_parquet で symlink target に書き込もうとして
-    # 元の blob path に書き込もうとするため (dvc cache の symlink type の場合)。
-    if [ -d "data/mart/imitation/<CASE>" ]; then
-      find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
-        \( -type l -xtype l \) -print -delete 2>&1 || true
-    fi
-    uv run --directory bot python -m <PREPROCESS_CMD>
-    PREPROCESS_RAN=1
+  # iter6 fix: preprocess_skip を廃止し、毎回必ず preprocess を走らせる。
+  # 理由: case8 iter5/iter6 で /persist 上の古い parquet schema (例:
+  # ship_label_per_src 未追加、cand_slot_per_src の column 名差) を再利用
+  # して train.py が `KeyError: Field "cand_slot_per_src" does not exist`
+  # で fail (iter6 の `65_train_failed_exit_1`)。preprocess は ~5min で
+  # 大きなコスト負担にはならず、schema 互換性を強制するメリットの方が大。
+  # 既存の dangling symlink (DVC pull で stub のみ復元され blob が S3 に
+  # ない場合) も同じく削除して preprocess の write_parquet が symlink
+  # target に書き込まないようにする。
+  echo "[onstart] step=preprocess case=<CASE> (always run, skip removed in iter6)"
+  if [ -d "data/mart/imitation/<CASE>" ]; then
+    find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+      \( -type l -xtype l \) -print -delete 2>&1 || true
+    # iter6: 古い実 parquet も削除して必ず再生成 (schema 不整合回避)
+    find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
+      -type f -print -delete 2>&1 || true
   fi
+  uv run --directory bot python -m <PREPROCESS_CMD>
+  PREPROCESS_RAN=1
 fi
 
 # preprocess を実走した場合、生成された parquet を DVC で track して
