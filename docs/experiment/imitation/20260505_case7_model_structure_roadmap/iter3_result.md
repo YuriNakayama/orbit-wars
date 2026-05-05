@@ -95,17 +95,58 @@ plan.md (iter4 = case10/11 部分) の主仮説:
 
 ## 7. 補助評価: vs baseline_v1 50戦 (sanity)
 
-(eval 実行中、 完了次第追記)
+### case10 (Set Transformer 256 XL)
 
 ```
-TODO: data/mart/imitation/case10/eval_metrics.json から win/loss/draw/Wilson CI を転記
-TODO: data/mart/imitation/case11/eval_metrics.json から
+episodes:    50
+wins:         0
+losses:      50
+draws:        0
+win_rate:    0.0%   (95% Wilson CI: 0.0% – 7.1%)
+challenger:  il_v10
+baseline:    baseline_v1
 ```
 
-case7 (現状最良) が 0/50、 case8 (val 悪化) が **3/50** だった解離パターンを踏まえ、 case10 (val 中位) と case11 (val 大幅悪化) の対戦結果は以下が候補:
+→ **case6/case7 と同じ 0/50**。 規模拡大しても **対戦勝率は変化なし**。 case7 で頭打ちだった対戦勝率は、 capacity 増では破れない。
 
-- case10: 0/50 〜 1/50 の見込み (val 改善せず、 case7 と類似)
-- case11: 0/50 〜 5/50 の見込み (val 大幅悪化なら argmax cascade で逆に多様性が出る可能性?)
+### case11 (Pointer Net 256 XL)
+
+```
+episodes:    50
+wins:         0
+losses:      50
+draws:        0
+win_rate:    0.0%   (95% Wilson CI: 0.0% – 7.1%)
+challenger:  il_v11
+baseline:    baseline_v1
+```
+
+→ **0/50**。 case8 (Pointer 128) で観察された 3/50 は **規模拡大版 case11 では再現せず**。
+
+### 5-way 対戦結果一覧
+
+| case | 構造 | win_rate | 95% Wilson CI |
+|---|---|---|---|
+| case6 | Attention 128 | 0/50 | 0–7.1% |
+| case7 | Set Transformer 128 | 0/50 | 0–7.1% |
+| **case8** | **Pointer Net 128** | **3/50 = 6.0%** ⭐ (例外) | 2.1–16.2% |
+| case10 | Set Transformer **256** | 0/50 | 0–7.1% |
+| case11 | Pointer Net **256** | 0/50 | 0–7.1% |
+
+### 重要な観察 (case8 解離の検証結果)
+
+**結論: case8 の 3/50 は seed variance の可能性が極めて高い**。
+
+- Pointer Network architecture (case8) → 3/50 (唯一の非ゼロ)
+- Pointer Network XL (case11) → 0/50 (規模拡大で消失)
+- Set Transformer 系 (case7, case10) → 全て 0/50
+
+case8 の 3/50 は **Pointer Net architecture の真の効果ではなく**、 50戦という小サンプルでの **seed variance によるノイズ** と判定するのが妥当。 これは memory `project_imitation_case1_phase3` の **case1 iter9 で 5/100 → 0/300 で否定** された前例と同じパターン。
+
+採否への影響:
+- case8 単独で出た 3/50 は強い主張に使えない (n<300 信頼不可ルール)
+- 4 iter 全 case で **対戦勝率は実質ゼロ** = imitation 系全般の課題は **構造変更だけでは破れない** ことが明確化
+- 真の bottleneck は **データ偏り (top-50% rating の greedy 寄り demonstration)** または **loss 設計** (case1 phase 2 breakthrough と同 axis の検証が必要)
 
 ## 8. 累計コスト (iter3)
 
