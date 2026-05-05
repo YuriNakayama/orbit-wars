@@ -268,11 +268,16 @@ if [ -d /persist ]; then
   # 復元されていたとしても .dvc stub のみなので symlink で問題ない。
   # 既に dir として実体がある (例: 過去 run の遺物) 場合は中身を /persist に
   # 引っ越してから symlink (再起動で持続化される ⇒ 次回以降 dvc pull が冪等)。
+  #
+  # 重要: 過去 run の preprocess 中途破損 parquet が /persist に残ると新 run の
+  # train が `parquet: File must end with PAR1` で死亡する (memory
+  # `project_runpod_5_traps_2026_05_04` の trap #7)。冒頭で /persist 側を
+  # 完全クリアし、毎 run preprocess を fresh で走らせる方が信頼性が高い。
+  rm -rf /persist/data-mart-imitation
+  mkdir -p /persist/data-mart-imitation
   if [ -L data/mart/imitation ]; then
     : # already linked
   elif [ -d data/mart/imitation ]; then
-    # 既存 dir の中身を /persist にマージしてから symlink に置換
-    cp -an data/mart/imitation/. /persist/data-mart-imitation/ 2>/dev/null || true
     rm -rf data/mart/imitation
     ln -sfn /persist/data-mart-imitation data/mart/imitation
   else
