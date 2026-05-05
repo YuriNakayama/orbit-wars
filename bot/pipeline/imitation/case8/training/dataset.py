@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,6 +116,11 @@ class CaseFourDataset(Dataset[Sample]):
                 (n_rows, MAX_PLANETS), -1, dtype=np.int64
             )
         self._is_noop = self._df["is_noop"].to_numpy().astype(np.bool_)
+        # iter4 OOM fix: 全 column を numpy に複製済みなので polars DataFrame は
+        # 不要。GC で ~50% RAM を解放。残るのは numpy arrays (n_rows × ~40k float
+        # = 300k × 40k × 4 byte ≈ 48GB の半分 = 24GB が peak、~12GB に抑制)。
+        del self._df
+        gc.collect()
 
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
