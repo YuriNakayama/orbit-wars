@@ -304,7 +304,9 @@ def test_bug3b_trajectory_crosses_non_target_comet_is_dropped() -> None:
     # Note: with sun blocking the direct east path here too, this test relies
     # on the fact that the fleet trajectory crosses the comet BEFORE it would
     # reach the sun. The combined safety filter should drop the action.
-    assert actions == [], f"trajectory-comet-cross action should be dropped, got {actions}"
+    assert actions == [], (
+        f"trajectory-comet-cross action should be dropped, got {actions}"
+    )
 
 
 # ------------------------------------------------------------------ #

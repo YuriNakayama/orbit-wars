@@ -124,9 +124,7 @@ def _comet_radius(comets: list[dict[str, Any]], default: float = 2.0) -> float:
     return default
 
 
-def comet_remaining_life(
-    planet_id: int, comets: list[dict[str, Any]]
-) -> int:
+def comet_remaining_life(planet_id: int, comets: list[dict[str, Any]]) -> int:
     for group in comets:
         pids = group.get("planet_ids", [])
         if planet_id not in pids:
