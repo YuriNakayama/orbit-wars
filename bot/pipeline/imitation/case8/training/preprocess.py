@@ -511,21 +511,60 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         report.val_frames,
     )
     # Parquet sanity check: train.py の dataset.__init__ が読み出す形と同じ reshape を
-    # 試して、 preprocess 出力が壊れていないか early に検出する。 case7 v1 で reshape
-    # error が train 起動時に発生 ($0.59 損失) → preprocess 段階で fail させたほうが
-    # 損失少。 各 frame の planet_feats 長さ不一致は polars to_list() 時に jagged list
-    # になり、 numpy array 化で size 不整合 → reshape 失敗で検出可能。
+    # 試して、 preprocess 出力が壊れていないか early に検出する。
+    #
+    # case7/case8 で観測: writer.close() 直後に read_parquet を呼ぶと
+    # `ComputeError: parquet: File must end with PAR1` で失敗するパターンあり。
+    # これは pyarrow の close() が write buffer を OS-level に fsync しきる前に
+    # read が走る race condition (symlink 経由の /persist volume で顕著)。
+    # 対策:
+    #   (1) 各 split を sync (open + os.fsync で write buffer を flush)
+    #   (2) read_parquet を retry-on-fail (ComputeError を 3 回まで catch)
+    #   (3) jagged list (= 真の corruption) は ValueError で fail させる
+    import time as _time
+
+    for split_path in (out_train, out_val):
+        try:
+            with open(split_path, "rb") as _fh:
+                os.fsync(_fh.fileno())
+        except OSError:
+            pass  # fsync 失敗は致命ではない、 retry でカバー
     for split_name, split_path, expected_n in (
         ("train", out_train, n_train),
         ("val", out_val, n_val),
     ):
-        df_check = pl.read_parquet(str(split_path))
+        df_check = None
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                df_check = pl.read_parquet(str(split_path))
+                break
+            except Exception as e:  # noqa: BLE001 — pyarrow / polars の様々な例外を retry
+                last_err = e
+                logger.warning(
+                    "parquet sanity check read_parquet attempt %d/3 for %s split FAILED: %s. "
+                    "Retrying after 2s sleep.",
+                    attempt + 1,
+                    split_name,
+                    e,
+                )
+                _time.sleep(2.0)
+        if df_check is None:
+            logger.error(
+                "parquet sanity check exhausted retries for %s split: %s",
+                split_name,
+                last_err,
+            )
+            raise RuntimeError(
+                f"preprocess output {split_path} is unreadable after 3 retries. "
+                f"Likely fsync race condition or true corruption."
+            ) from last_err
         try:
             arr = np.array(df_check["planet_feats"].to_list(), dtype=np.float32)
             arr.reshape(-1, MAX_PLANETS, PLANET_FEAT_DIM)
         except (ValueError, TypeError) as e:
             logger.error(
-                "parquet sanity check FAILED for %s split: %s. Frames=%d, "
+                "parquet sanity check reshape FAILED for %s split: %s. Frames=%d, "
                 "expected dim=%d (MAX_PLANETS=%d × PLANET_FEAT_DIM=%d).",
                 split_name,
                 e,
