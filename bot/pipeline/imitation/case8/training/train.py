@@ -349,7 +349,9 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
     g = torch.Generator()
     g.manual_seed(seed)
-    pin_memory = device.type == "cuda"
+    # iter5: yaml override (default: cuda 上では pin_memory=True、host RAM が
+    # 厳しいときは false 推奨)
+    pin_memory = bool(train_cfg.get("pin_memory", device.type == "cuda"))
     train_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         train_ds,
         batch_size=int(train_cfg["batch_size"]),

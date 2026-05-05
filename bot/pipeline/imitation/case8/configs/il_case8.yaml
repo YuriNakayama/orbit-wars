@@ -20,11 +20,16 @@ model:
 
 train:
   case: case8
-  batch_size: 256
+  # iter5: batch_size 256→128 + pin_memory_off で DataLoader RAM ピーク削減。
+  # 1057 ep × 328k frames を host RAM 32GB に収めるための保険策。lazy dataset
+  # (pyarrow ParquetFile chunk-by-chunk) と二重で OOM を回避。lr=1e-3 のまま
+  # cosine warmup が小 batch を吸収できる前提。
+  batch_size: 128
   epochs: 30
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
+  pin_memory: false
   loss_weights:
     cand: 1.0
     use_class_weights: true
