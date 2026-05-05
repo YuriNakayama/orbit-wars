@@ -108,12 +108,43 @@ iter4 (case10 規模拡大) も同様。 もし target diversity を真に伸ば
 | iter2 v2 (case8) | fe299e6 | $0.65 | ✅ 完走 |
 | **roadmap 累計 (iter1-2)** | — | **$2.94** | iter1, iter2 共に完走 |
 
-## 8. 補助評価: vs baseline_v1 50戦 (sanity)
-
-(eval 実行中、 完了次第追記)
+## 8. 補助評価: vs baseline_v1 50戦 (⭐ 想定外の breakthrough)
 
 ```
-TODO: data/mart/imitation/case8/eval_metrics.json から win/loss/draw/Wilson CI を転記
+episodes:    50
+wins:         3   ⭐ (case6=0, case7=0)
+losses:      47
+draws:        0
+win_rate:    6.0%  (95% Wilson CI: 2.1% – 16.2%)
+challenger:  il_v8
+baseline:    baseline_v1
+seed:        0..49
 ```
 
-case6/case7 が共に 0/50 だったため case8 も同程度の見込み。 imitation 系の「val 良好でも対戦全敗」パターンを再現する想定 (memory `project_imitation_case1_2026_04_19`)。
+→ **case6/case7 が 0/50 だったのに対し、 case8 は 3/50 = 初の非ゼロ勝率**。
+
+| case | 対戦勝率 | 95% Wilson CI |
+|---|---|---|
+| case6 | 0/50 = 0.0% | 0.0–7.1% |
+| case7 | 0/50 = 0.0% | 0.0–7.1% |
+| **case8** | **3/50 = 6.0%** | **2.1–16.2%** |
+
+### 重大な観察: val と対戦勝率の解離
+
+- **val 指標で case8 < case7**: best_val_loss 3.65 vs 3.62、 val_target 0.412 vs 0.421
+- **対戦勝率は case8 > case7**: 3/50 vs 0/50
+
+つまり **autoregressive head は val 上では悪化したのに、 実際の対戦では勝てた**。 val と対戦勝率の解離パターンで、 memory `project_imitation_case1_phase2_breakthrough` (case1 iter9 の 5/100 を実現した from focal α=0.75) と同様の症状。 ただし memory `project_imitation_case1_phase3` の通り **iter9 の 5/100 は再評価 0/300 で否定** されたため、 **n=50 の 3 勝は信頼できない**。
+
+### n=50 の信頼性 (重要)
+
+- 95% Wilson CI 上限が **16.2%** で、 真値 5% の閾値を含む = 「勝率 5% 以上」は強い主張ではなく、 0/50 のノイズ (case6/7) との差は **statistical に有意でない可能性**
+- memory `project_imitation_case1_phase3` の前例: case1 iter9 で 5/100 → 0/300 で否定
+- **300戦再評価を実施しないと採否判断は留保**
+
+### 採否判断の修正
+
+iter2 採否: **保留 (n=300 再評価必要)**
+- val 指標悪化 + 対戦勝率上昇という **解離パターンは興味深いが信頼できない**
+- 300 戦で実勝率が 3-6% 程度に収束するなら正の breakthrough、 1% 以下に落ちるなら seed variance による noise
+- **300 戦再評価のコスト**: ローカル CPU で約 ~30 分、 RunPod 不要
