@@ -1,12 +1,12 @@
-# Rulebase/case13 — Action-level MCTS (Mission per arm)
+# case8/iter11 — Action-level MCTS (Mission per arm)
 
 > 作成日: 2026-05-06
-> 関連:
-> - [`docs/experiment/rulebase/20260505_case11_portfolio_search/iter1_result.md`](../20260505_case11_portfolio_search/iter1_result.md) — PGS 4 連敗 (1 source 1 script 制約で 0%)
-> - [`docs/experiment/rulebase/20260505_case12_naive_mcts/iter1_result.md`](../20260505_case12_naive_mcts/iter1_result.md) — NaïveMCTS でも script-only モデルでは 0%
-> - [`docs/experiment/rulebase/20260504_case8_multistep_beam/iter2_plan.md`](../20260504_case8_multistep_beam/iter2_plan.md) — `score_mission_score` evaluator (本実験で再利用)
-> - memory: `project_heuristic_search_saturation` (heuristic 系 11 連敗で飽和、Action-level は未試行)
-> スコープ: 新規 `case13` を切り、case4 base 全複製 + `collect_missions` 出力を直接 arm 化した CMAB-based MCTS
+> 関連 (本ディレクトリ内):
+> - [`iter9_result.md`](./iter9_result.md) — PGS 4 連敗 (1 source 1 script 制約で 0%)
+> - [`iter10_result.md`](./iter10_result.md) — NaïveMCTS でも script-only モデルでは 0%
+> - [`iter2_plan.md`](./iter2_plan.md) — `score_mission_score` evaluator (本実験で再利用)
+> 関連 memory: `project_heuristic_search_saturation` (heuristic 系 11 連敗で飽和、Action-level は未試行)
+> スコープ: case8 baseline (case4 base に rebase 予定) 上で `collect_missions` 出力を直接 arm 化した CMAB-based MCTS、`ACTION_MCTS_*` flag で iter11 として切替
 
 ## 仮説 (Hypothesis)
 
@@ -22,36 +22,30 @@ case11 PGS と case12 NaïveMCTS が 0% で完敗した主因は **「1 source 1
 
 ## 既存コードの現状
 
-- **新規 case 番号**: `case13` (free)、`baseline_v13` 未登録
-- **Base**: `bot/pipeline/rulebase/case4/baseline/` (LB745 production)
+- **対象 case**: `case8` (集約済 multistep_optimization)、`baseline_v8`
+- **Base**: case8 baseline は次セッションで `case4` base に rebase 予定 (現状は case7 base のため iter11 実装は rebase 後に着手)
 - **`collect_missions` 出力**: `missions/__init__.py` で reinforcement → capture (with snipe) → swarm → crash_exploit → harass の順に builder を呼び合算、典型 8-15 mission/turn
 - **Mission 構造**: `core/types.py:Mission` = (kind, score, target_id, turns, options[ShotOption])。`mission.score` がある
 - **commit ロジック**: case4 `strategy.py:_process_single_source_mission` / `_process_multi_source_mission` (既存資産)
 - **過去 iter の所見**:
   - case11 PGS 4 連敗 (script-only 制約)、case12 NaïveMCTS 0% (同制約)
   - case8 iter2 で `score_mission_score` evaluator を実装済 (本実験で再利用)
-  - case8 candidate.py の `commit_missions_in_order` が「mission リストを順に commit」する関数 (case13 で類似コピー)
+  - case8 candidate.py の `commit_missions_in_order` が「mission リストを順に commit」する関数 (case8 で類似コピー)
 
 ## スコープ (Scope)
 
-### 新規 case 構成
+### case8 dir への追加 (集約済 case8 内で iter11 を切替 flag で実装)
 
 ```
-bot/pipeline/rulebase/case13/                           # case4 全複製
-├── main.py / __init__.py / README.md
+bot/pipeline/rulebase/case8/                          # 集約済 case (case4 rebase 後)
 ├── baseline/
-│   ├── ...                                              # case4 と同一資産
-│   ├── core/config.py                                   # ★ ACTION_MCTS_* 追加
-│   └── planner/                                         # ★ 新設
-│       ├── __init__.py                                  # `run_action_mcts` を export
-│       ├── candidate.py                                 # case8 から複製した commit_missions_in_subset (改名版)
-│       ├── evaluator.py                                 # score_mission_score 評価
-│       └── action_mcts.py                               # ★ 新規: Action-level MCTS 実装
-
-bot/src/dataset/selfplay/agents.py                      # `"baseline_v13": ...` 追加
-bot/tests/pipeline/rulebase/case13/                     # 新規 (3 種)
-bot/pyproject.toml                                       # case13 ignore 追加
+│   ├── core/config.py                                # ★ ACTION_MCTS_* 4 個追加
+│   └── planner/                                      # 既存 (beam.py, candidate.py, evaluator.py 等)
+│       ├── action_mcts.py                            # ★ 新規 ~150 行
+│       └── (既存)
 ```
+
+`ACTION_MCTS_ENABLED=True` で iter11 経路、その他の iter (1-10) は既存 flag (BEAM_ENABLED, THRASH_FILTER_ENABLED 等) で OFF にする。`baseline_v8` 1 つで全 iter を切り替え。
 
 ### config 追加
 
@@ -96,22 +90,20 @@ case8 の `_process_single_source_mission` / `_process_multi_source_mission` は
 1. case4 の `strategy.py` の同名関数を本実験 `planner/candidate.py` に再配置 (case4 の動作を保つ thin wrapper)
 2. `commit_missions_in_subset(world, missions, modes, source_inventory_left, source_attack_left, append_move)` で missions を score-desc に sort、順に `_process_*_mission` を呼ぶ
 
-## 実装ステップ
+## 実装ステップ (case8 集約後の前提)
 
-1. `cp -r bot/pipeline/rulebase/case4 bot/pipeline/rulebase/case13`
-2. `case13/{main.py, __init__.py, README.md}` の case4 → case13 参照置換
-3. `core/config.py` に `ACTION_MCTS_*` 4 個追加
-4. `planner/__init__.py` 新規 + 3 ファイル:
-   - `candidate.py` — case4 strategy.py から `_process_single/multi_source_mission` を抽出、`commit_missions_in_subset` を export
-   - `evaluator.py` — `score_mission_score(world, accepted_missions) -> sum(m.score)` (薄い、case8 iter2 流用)
-   - `action_mcts.py` — `run_action_mcts(...)` 新規 ~150 行
-5. `strategy.py:plan_moves` の冒頭で `ACTION_MCTS_ENABLED` なら:
-   - `collect_missions` で missions を取得 (既存)
-   - `run_action_mcts(world, missions, modes, ...)` で **採用 subset の moves** を取得
-   - 既存 case4 の `emit_followup_moves` / `emit_evacuation_moves` / `emit_rear_guard_moves` を続けて呼ぶ (movement layer は変更しない)
-   - `_enforce_inventory_cap` で最終 cap
-6. `bot/src/dataset/selfplay/agents.py` に `baseline_v13` 追加、`bot/pyproject.toml` ignore 追加
-7. `bot/tests/pipeline/rulebase/case13/`:
+**前提**: case8 baseline が case4 base に rebase 済 (集約作業の Phase 2、別 commit で先行実施)。
+
+1. `bot/pipeline/rulebase/case8/baseline/core/config.py` に `ACTION_MCTS_*` 4 個追加
+2. `bot/pipeline/rulebase/case8/baseline/planner/action_mcts.py` を新規追加 (~150 行)
+   - `run_action_mcts(world, missions, modes, ...) -> list[move]`
+   - 既存 `planner/candidate.py:commit_missions_in_order` を **subset 版に拡張** (mission リストを subset として受け取り順次 commit)
+   - 既存 `planner/evaluator.py:score_commitments` (mission_score mode) を rollout reward として再利用
+3. `bot/pipeline/rulebase/case8/baseline/strategy.py:plan_moves` の分岐に `ACTION_MCTS_ENABLED` 経路を追加
+   - `collect_missions` で missions を取得
+   - `run_action_mcts(world, missions, ...)` で採用 subset の moves を取得
+   - 既存 case4 の followup / evacuation / rear_guard / `_enforce_inventory_cap` を継続
+4. `bot/tests/pipeline/rulebase/case8/`:
    - `test_baseline_agent.py` (smoke + slow integration)
    - `test_action_mcts_basic.py` (UCB1 unvisited explore、`run_action_mcts` shape)
    - `test_mcts_off_equals_case4.py` (`ACTION_MCTS_ENABLED=False` で case4 等価)
@@ -122,7 +114,7 @@ case8 の `_process_single_source_mission` / `_process_multi_source_mission` は
 ### ローカル
 
 ```bash
-uv run --directory bot pytest tests/pipeline/rulebase/case13 -m "not slow" -x
+uv run --directory bot pytest tests/pipeline/rulebase/case8 -m "not slow" -x
 ```
 
 ### 性能評価 (3 段階)
@@ -130,7 +122,7 @@ uv run --directory bot pytest tests/pipeline/rulebase/case13 -m "not slow" -x
 #### Stage A: 10戦 smoke (early signal)
 
 ```bash
-uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v13 \
+uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v8 \
     --mode 1v1 -n 10 --seed 110000 --parallel 4 --no-save-replay
 ```
 
@@ -142,7 +134,7 @@ uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v13 \
 #### Stage B: 30戦 + replay
 
 ```bash
-uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v13 \
+uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v8 \
     --mode 1v1 -n 30 --seed 110100 --parallel 4
 ```
 
@@ -154,9 +146,9 @@ uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v13 \
 #### Stage C: 200戦
 
 ```bash
-uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v13 \
+uv run --directory bot python -m dataset run --agents baseline_v4,baseline_v8 \
     --mode 1v1 -n 100 --seed 110500 --parallel 4 --no-save-replay
-uv run --directory bot python -m dataset run --agents baseline_v13,baseline_v4 \
+uv run --directory bot python -m dataset run --agents baseline_v8,baseline_v4 \
     --mode 1v1 -n 100 --seed 111000 --parallel 4 --no-save-replay
 ```
 
@@ -178,7 +170,7 @@ uv run --directory bot python -m dataset run --agents baseline_v13,baseline_v4 \
 
 ## 期待される結果のシナリオ
 
-| case13 vs v4 (n=30 Stage B) | 解釈 | 次 |
+| case8 vs v4 (n=30 Stage B) | 解釈 | 次 |
 |---|---|---|
 | ≥55% | 採用候補、Stage C で確定 | production 化検討 |
 | 40-55% | 改善方向、hyperparameter sweep で +α | rollouts 256 で iter2 |
