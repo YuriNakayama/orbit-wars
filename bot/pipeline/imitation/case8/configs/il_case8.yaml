@@ -61,8 +61,12 @@ train:
   # - ema: weights を移動平均、val/best.pt は EMA weights を採用して noise 平滑化
   # - head_dropout: cand_score / ship_head MLP の中間 ReLU 直後に Dropout(p)
   grad_clip_max_norm: 1.0
+  # iter6: EMA を ablation のため一旦 disable。iter4-v1〜iter5-v2 で 6 連続
+  # `60_before_train` hang した root cause を探るため、最も疑わしい
+  # AveragedModel + multi_avg_fn を切り、grad_clip + dropout + cosine LR の
+  # 3 点だけで完走するか確認。EMA 起因なら hang 解消、別要因なら hang 継続。
   ema:
-    enabled: true
+    enabled: false
     decay: 0.999
   head_dropout: 0.2
   weights_out: pipeline/imitation/case8/policy/weights.pt
