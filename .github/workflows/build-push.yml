@@ -30,7 +30,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # PyTorch CUDA base + uv sync (3GB CUDA wheels) + Rust toolchain + DVC
+    # cache sync regularly take 20-30 min on the GitHub-hosted runner.
+    timeout-minutes: 60
     outputs:
       image: ${{ steps.build.outputs.image }}
 
