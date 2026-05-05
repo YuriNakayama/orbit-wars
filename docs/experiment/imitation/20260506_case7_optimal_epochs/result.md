@@ -97,15 +97,47 @@ plan.md の主仮説:
 
 **case7-30ep が全 metric で 5-way 首位**。 規模拡大 (case10/11) より **訓練量増の方が効果的** であることが実証された。
 
-## 7. 補助評価: vs baseline_v1 50戦 (sanity)
-
-(eval 実行中、 完了次第追記)
+## 7. 補助評価: vs baseline_v1 50戦 (⭐ 想定外の対戦改善)
 
 ```
-TODO: data/mart/imitation/case7/eval_metrics.json から win/loss/draw/Wilson CI を転記
+episodes:    50
+wins:         3   ⭐ (iter1 0、 case7 系で初の非ゼロ)
+losses:      47
+draws:        0
+win_rate:    6.0%   (95% Wilson CI: 2.1% – 16.2%)
+challenger:  il_v7
+baseline:    baseline_v1
+seed:        0..49
 ```
 
-case7 iter1 (epoch=15) で 0/50、 訓練量増で対戦勝率が動くかは不明。
+### 5-way 対戦結果一覧
+
+| case | 構造 | epoch | win_rate | 95% Wilson CI |
+|---|---|---|---|---|
+| case7 (iter1) | Set Transformer | 15 | 0/50 = 0.0% | 0–7.1% |
+| case8 | Pointer Net | 15 | 3/50 = 6.0% | 2.1–16.2% |
+| case10 | Set Transformer XL (256) | 15 | 0/50 = 0.0% | 0–7.1% |
+| case11 | Pointer Net XL (256) | 15 | 0/50 = 0.0% | 0–7.1% |
+| **case7-30ep (本実験)** | **Set Transformer** | **30** | **3/50 = 6.0%** ⭐ | **2.1–16.2%** |
+
+### 重要な解釈
+
+**訓練量増で対戦勝率も改善**:
+- case7 iter1 (epoch=15) で 0/50 だったが、 epoch=30 で **3/50** に
+- val 指標だけでなく対戦勝率にも訓練量不足の影響が出ていた
+- case8 (Pointer + 15 epoch) も同じ 3/50 だったが、 これは構造ではなく **訓練量 sweet spot** に乗っただけの可能性
+
+**ただし n=50 は信頼不可**:
+- 95% Wilson CI 上限が 16.2% で、 真値 5% の閾値を含む
+- memory `project_imitation_case1_phase3` の前例: case1 iter9 で 5/100 → 0/300 で否定された
+- **300 戦再評価で「真の改善」か「seed variance」かを判定する必要あり**
+
+### 採否判断 (再評価)
+
+- val 指標は明確に改善 ✅ (best_val_loss −0.058, val_target +0.010)
+- 対戦勝率も case7 系で初の非ゼロ ⚠️ (n=50 で信頼不可)
+- **iter1 → 30ep run へ昇格は確定**、 weights.pt 採用済
+- **次は 300 戦再評価 で対戦改善の真偽確定** (ローカル CPU で ~3 時間、 cost 0)
 
 ## 8. 累計コスト
 
