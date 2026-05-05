@@ -1,48 +1,48 @@
-# iter5 — Loop Resume State (Phase 3 DONE → Phase 4)
+# iter5 — Loop Resume State (Phase 4 RE-LAUNCHED with FIX)
 
 > 作成日: 2026-05-05
-> Status: **Phase 3 完了** (strategy.py 配線)、Phase 4 (フラグ True + 200戦評価) を次周回で実施
+> Status: **Phase 4 評価実行中** (PID 58827, seed 7000-7199, 200戦) — バグ修正後の再実行
 
-## Phase 3 で完了したこと (この周回)
+## バグ発見 + 修正
 
-- `strategy.py` に ACCUMULATE 配線を追加:
-  - `from .core.config import ACCUMULATE_ENABLED`
-  - `from .missions.stay import build_accumulate`
-  - `SINGLE_SOURCE_MISSION_KINDS` に `accumulate_fire` 追加
-  - `_process_single_source_mission` に accumulate_fire 分岐追加
-  - `plan_moves` 内に build_accumulate 呼び出し + accumulate_holds で source_attack_left 削減 + missions に accumulate_fire 追加
-- **戻り値の型は維持** (case7 のような tuple 返しではなく、案件 9 のシンプル構造を保つ)
-- **STAY_BURST/DEFENSE は配線せず** (build_stay_holds は import しない、ACCUMULATE 単独テストに絞る)
-- ruff/mypy/snapshot test 3/3 全 green
-- ACCUMULATE_ENABLED=False のため iter2 と動作完全一致 (確認済み)
+最初の Phase 4 評価 (seed 6000) で 40戦中 v9=7 (17.5%、壊滅的) を観測 → 即停止。
 
-## Phase 4 で次にやること (次周回)
+原因: ACCUMULATE は **自惑星数 1 個 (case9 序盤、turn=11) でも発火** し、
+唯一の src (id=32) の available 20 ships を全て hold (+ iter2 bypass=8 の趣旨と矛盾)。
+結果として `source_attack_left = max(0, 20 - 20) = 0` で全 mission 不発。
 
-1. `bot/pipeline/rulebase/case9/baseline/core/config.py` で `ACCUMULATE_ENABLED: bool = False → True` に変更 (1 行)
-2. snapshot test は **action 系列が変わるので失敗予定** → snapshot 更新が必要:
-   - `cd bot && uv run python -m pipeline.rulebase.case9.evaluation.snapshot_update update`
-   - 更新後の snapshot を git に含める
-3. その他のテスト 78 件は pass する見込み (ACCUMULATE が攻め優先で fail する可能性は低い)
-4. 200戦評価をバックグラウンドで起動: `nohup uv run python -m pipeline.rulebase.case9.evaluation.compare_v4 -n 100 --seed 6000 -p 4 > /tmp/compare_v4_iter5.log 2>&1 &`
-5. ETA ~100 分、次周回でガード発動
+修正: `strategy.py` で `len(my_planets) > LOW_PLANET_BYPASS_THRESHOLD (=8)` の時のみ
+ACCUMULATE 起動。case9 序盤・劣勢時は通常 mission に専念。
 
-## Phase 5 (Phase 4 + 評価完了の次周回)
+snapshot test:
+- バグあり: `[]` (0 moves)
+- 修正後: `[[16, -0.853, 22]]` (1 move、iter2 と同等の動作)
 
-- iter5_result.md 作成 (採否判定: iter2 比 +2pp)
-- `/experiment-analysis` で iter5_analysis.md (replay 比較)
-- 1 commit に統合 + push
-- 採択なら memory に成功事例記録、`/loop` 完了条件達成判定
+## Phase 4 評価実行中 (修正版)
 
-## Phase 5 の判断 tree
+- コマンド: `compare_v4.py -n 100 -p 4 --seed 7000`
+- ETA: ~100 分
+- ログ: `/tmp/compare_v4_iter5_v2.log`
+- PID: 58827
 
-- **+5pp (≥54.5%)** : 採択 + completion 条件達成 → loop 停止 (CronDelete 11c931e9)
-- **+2pp (≥51.5%)** : 採択 (best 更新)、iter6 で更にチューニング (ACCUMULATE_KNEE_SHIPS, MIN_TARGET_TURNS)
-- **<+2pp** : 棄却、ACCUMULATE_ENABLED=False に戻して iter6 で別軸 (capture 強化、speed 最適化)
+## Phase 5 で次にやること
+
+PID 58827 の重複ガード確認 → 進行中なら skip / 完了済みなら:
+- iter5_result.md 作成
+- replay 比較で iter5 が改善したかを analyze
+- 採否判定:
+  - +5pp (≥54.5%): 採択 + 完了 → loop 停止
+  - +2pp (≥51.5%): 採択
+  - <+2pp: 棄却
 
 ## 過去 iter サマリ
 
 - iter1 (cooldown 抑止): 46.0%
 - **iter2 (bypass=8 + 値短縮)**: **49.5% (best)**
 - iter3 (bypass=10): 47.8%/180中断
-- iter4 (multi-source): 47.0%, seat bias 14pp
-- **iter5 (ACCUMULATE port)**: 進行中 — Phase 1-3 完了、Phase 4 で評価予定
+- iter4 (multi-source): 47.0%
+- iter5 (ACCUMULATE port): バグ修正後、200戦評価中
+
+## 既知の todo
+
+- snapshot_update.py の出力先バグ (worktree root に tests/ を作成) は別 commit で修正

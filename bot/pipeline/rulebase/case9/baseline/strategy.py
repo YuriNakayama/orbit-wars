@@ -15,7 +15,11 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from .core.config import ACCUMULATE_ENABLED, REINFORCE_SAFETY_MARGIN
+from .core.config import (
+    ACCUMULATE_ENABLED,
+    LOW_PLANET_BYPASS_THRESHOLD,
+    REINFORCE_SAFETY_MARGIN,
+)
 from .core.types import Mission, Planet
 from .core.world_model import WorldModel
 from .missions import collect_missions
@@ -173,7 +177,12 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
 
     accumulate_holds: dict[int, int] = {}
     accumulate_fire_missions: list[Mission] = []
-    if ACCUMULATE_ENABLED:
+    # iter5 fix: 自惑星数が threshold 以下では ACCUMULATE を全 skip。
+    # 早期 (1-3 惑星帯) では唯一の src を hold して出撃不能になる事故を防ぐ。
+    if (
+        ACCUMULATE_ENABLED
+        and len(world.my_planets) > LOW_PLANET_BYPASS_THRESHOLD
+    ):
         accumulate_holds, accumulate_fire_missions, _, _ = build_accumulate(
             world, planned_commitments, None
         )
