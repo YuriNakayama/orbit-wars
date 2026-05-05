@@ -22,7 +22,7 @@ from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
 
-CHALLENGER = "il_v5"
+CHALLENGER = "il_v7"
 BASELINE = "baseline_v1"
 
 app = typer.Typer(
