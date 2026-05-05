@@ -29,7 +29,11 @@ train:
     cand: 1.0
     use_class_weights: true
     class_weight_beta: 0.999
-    label_smoothing: 0.05
+    # iter3: focal loss を有効化、label_smoothing は focal と非整合なので 0.0
+    label_smoothing: 0.0
+    cand_loss_type: focal
+    focal_alpha: 0.25
+    focal_gamma: 2.0
     ship: 1.0
   # iter2: cosine annealing + warmup で cand head の振動を抑制 (iter1 で
   # epoch ごとに val_cand_acc が 0.01-0.37 で振動した課題への対症)。

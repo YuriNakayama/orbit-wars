@@ -3,12 +3,17 @@
 Per active source (my_planet_mask AND cand_slot_per_src != -1):
 
   cand_loss = CE(candidate_logits, cand_slot_label, weight=class_weights)
+              or focal_loss(candidate_logits, label, alpha, gamma, weight)
 
 For sources whose label slot != 0 (= fire) AND ship_label_per_src != -1:
 
   ship_loss = SmoothL1(ship_pred, ship_label)  # Huber delta=1, robust to outliers
 
 Total: total = cand_w * cand_loss + ship_w * ship_loss
+
+iter3 (2026-05-05): focal loss option added to mitigate cand head oscillation
+caused by extreme noop/fire label imbalance. CE + label_smoothing kept as
+default for backward compat.
 """
 
 from __future__ import annotations
@@ -27,6 +32,12 @@ class LossWeights:
     cand_class_weights: torch.Tensor | None = None
     label_smoothing: float = 0.0
     ship_w: float = 1.0
+    # iter3: cand_loss_type="focal" で focal loss、"ce" (default) で従来 CE。
+    # focal は label imbalance に頑健 (easy examples を down-weight)、
+    # FL(p_t) = -α_t (1 - p_t)^γ log(p_t) (Lin et al., 2017).
+    cand_loss_type: str = "ce"
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +50,30 @@ class LossReport:
     ship_loss: torch.Tensor
     ship_mae: float
     ship_count: int
+
+
+def _focal_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    alpha: float,
+    gamma: float,
+    weight: torch.Tensor | None,
+) -> torch.Tensor:
+    """Focal cross-entropy (Lin et al., 2017).
+
+    `weight` (per-class) is applied multiplicatively after the focal term, so
+    the iter1/iter2 inverse-frequency class_weight remains compatible.
+    """
+    log_probs = nn.functional.log_softmax(logits, dim=-1)
+    log_pt = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+    pt = log_pt.exp()
+    focal_factor = (1.0 - pt).clamp_min(1e-12).pow(gamma)
+    loss = -alpha * focal_factor * log_pt
+    if weight is not None:
+        weight_t = weight.to(logits.device).gather(-1, targets)
+        loss = loss * weight_t
+    mean_loss: torch.Tensor = loss.mean()
+    return mean_loss
 
 
 def compute_loss(
@@ -73,12 +108,27 @@ def compute_loss(
         if weights.cand_class_weights is not None
         else None
     )
-    cand_loss = nn.functional.cross_entropy(
-        sel_logits,
-        sel_labels,
-        weight=cand_cw,
-        label_smoothing=weights.label_smoothing,
-    )
+    loss_type = weights.cand_loss_type.lower()
+    if loss_type == "focal":
+        cand_loss = _focal_cross_entropy(
+            sel_logits,
+            sel_labels,
+            alpha=weights.focal_alpha,
+            gamma=weights.focal_gamma,
+            weight=cand_cw,
+        )
+    elif loss_type == "ce":
+        cand_loss = nn.functional.cross_entropy(
+            sel_logits,
+            sel_labels,
+            weight=cand_cw,
+            label_smoothing=weights.label_smoothing,
+        )
+    else:
+        raise ValueError(
+            f"unknown cand_loss_type {weights.cand_loss_type!r}"
+            " (expected 'ce' or 'focal')"
+        )
 
     with torch.no_grad():
         pred = sel_logits.argmax(dim=-1)

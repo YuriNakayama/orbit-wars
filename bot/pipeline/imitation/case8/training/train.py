@@ -391,6 +391,9 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         cand_class_weights=cand_cw,
         label_smoothing=float(lw_cfg.get("label_smoothing", 0.0)),
         ship_w=float(lw_cfg.get("ship", 1.0)),
+        cand_loss_type=str(lw_cfg.get("cand_loss_type", "ce")),
+        focal_alpha=float(lw_cfg.get("focal_alpha", 0.25)),
+        focal_gamma=float(lw_cfg.get("focal_gamma", 2.0)),
     )
 
     case_name = str(train_cfg.get("case", "case8"))

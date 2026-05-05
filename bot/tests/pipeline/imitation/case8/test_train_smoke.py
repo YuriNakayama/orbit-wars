@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -32,9 +31,9 @@ def _build_synthetic_parquet(path: Path, n_rows: int = 32) -> None:
     for i in range(n_rows):
         rows.append(
             {
-                "planet_feats": rng.standard_normal(
-                    MAX_PLANETS * PLANET_FEAT_DIM
-                ).astype(np.float32).tolist(),
+                "planet_feats": rng.standard_normal(MAX_PLANETS * PLANET_FEAT_DIM)
+                .astype(np.float32)
+                .tolist(),
                 "global_feats": rng.standard_normal(GLOBAL_FEAT_DIM)
                 .astype(np.float32)
                 .tolist(),
@@ -43,16 +42,14 @@ def _build_synthetic_parquet(path: Path, n_rows: int = 32) -> None:
                 "target_mask": ([True] * 4 + [False] * (MAX_PLANETS - 4)),
                 "candidate_feats": rng.standard_normal(
                     MAX_PLANETS * CAND_K * CAND_FEAT_DIM
-                ).astype(np.float32).tolist(),
+                )
+                .astype(np.float32)
+                .tolist(),
                 "candidate_mask": ([True] * (MAX_PLANETS * CAND_K)),
                 "candidate_pid": ([1] * (MAX_PLANETS * CAND_K)),
-                "cand_slot_per_src": (
-                    [int(i % CAND_K), 0]
-                    + [-1] * (MAX_PLANETS - 2)
-                ),
+                "cand_slot_per_src": ([int(i % CAND_K), 0] + [-1] * (MAX_PLANETS - 2)),
                 "ship_label_per_src": (
-                    [int(20 + (i % 30)), -1]
-                    + [-1] * (MAX_PLANETS - 2)
+                    [int(20 + (i % 30)), -1] + [-1] * (MAX_PLANETS - 2)
                 ),
                 "is_noop": False,
             }
