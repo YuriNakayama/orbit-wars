@@ -33,6 +33,9 @@ class ModelConfig:
     cand_in_dim: int = CAND_FEAT_DIM
     cand_k: int = CAND_K
     hidden: int = 128
+    # iter4: head MLP の中間 ReLU 直後に nn.Dropout(p) を挿入し過適合を抑制。
+    # backbone (GraphConv / TopK pool / psi) は不変。0.0 で iter1-3 と同等。
+    head_dropout: float = 0.0
 
 
 def _knn_adjacency(
@@ -148,14 +151,17 @@ class CandidatePolicy(nn.Module):
         self.self_proj = _mlp(h, h, h)
         self.global_proj = _mlp(h, h, h)
         self.cand_encoder = _mlp(self.cfg.cand_in_dim, h, h)
+        p = float(self.cfg.head_dropout)
         self.cand_score = nn.Sequential(
             nn.Linear(h * 3, h),
             nn.ReLU(),
+            nn.Dropout(p),
             nn.Linear(h, 1),
         )
         self.ship_head = nn.Sequential(
             nn.Linear(h * 2, h),
             nn.ReLU(),
+            nn.Dropout(p),
             nn.Linear(h, 1),
         )
 

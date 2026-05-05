@@ -51,6 +51,15 @@ train:
     metric: val_cand_fire_acc
     patience: 5
     mode: max
+  # iter4: head + 学習側の振動抑制 3 点セット。backbone は不変。
+  # - grad_clip_max_norm: focal loss + class_weight 由来の勾配 spike を遮断
+  # - ema: weights を移動平均、val/best.pt は EMA weights を採用して noise 平滑化
+  # - head_dropout: cand_score / ship_head MLP の中間 ReLU 直後に Dropout(p)
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: true
+    decay: 0.999
+  head_dropout: 0.2
   weights_out: pipeline/imitation/case8/policy/weights.pt
 
 inference:

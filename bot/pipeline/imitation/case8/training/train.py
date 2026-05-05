@@ -9,6 +9,7 @@ import random
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,8 @@ import numpy as np
 import torch
 import typer
 import yaml
-from torch import optim
+from torch import nn, optim
+from torch.optim import swa_utils
 from torch.utils.data import DataLoader
 
 from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
@@ -195,8 +197,19 @@ def _build_scheduler(
     return cosine
 
 
+def _make_ema_step(
+    ema_model: swa_utils.AveragedModel, model: nn.Module
+) -> Callable[[], None]:
+    """Build a closure-free callback for EMA update (avoids B023 loop binding)."""
+
+    def step() -> None:
+        ema_model.update_parameters(model)
+
+    return step
+
+
 def _run_epoch(
-    model: CandidatePolicy,
+    model: nn.Module,
     loader: DataLoader,  # type: ignore[type-arg]
     loss_weights: LossWeights,
     optimizer: optim.Optimizer | None,
@@ -204,6 +217,8 @@ def _run_epoch(
     *,
     epoch: int = -1,
     phase: str = "epoch",
+    grad_clip_max_norm: float = 0.0,
+    on_step: Callable[[], None] | None = None,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -236,7 +251,17 @@ def _run_epoch(
             if is_train and optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
                 report.total.backward()  # type: ignore[no-untyped-call]
+                if grad_clip_max_norm > 0.0:
+                    pre_clip_norm = float(
+                        nn.utils.clip_grad_norm_(
+                            model.parameters(), max_norm=grad_clip_max_norm
+                        )
+                    )
+                    totals.setdefault("grad_norm", 0.0)
+                    totals["grad_norm"] += pre_clip_norm
                 optimizer.step()
+                if on_step is not None:
+                    on_step()
             totals["total"] += float(report.total.detach().item())
             totals["cand"] += float(report.cand_loss.item())
             totals["cand_acc"] += report.cand_acc
@@ -349,8 +374,27 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         cand_in_dim=int(model_cfg.get("cand_in_dim", CAND_FEAT_DIM)),
         cand_k=int(model_cfg.get("cand_k", CAND_K)),
         hidden=int(model_cfg.get("hidden", 128)),
+        head_dropout=float(train_cfg.get("head_dropout", 0.0)),
     )
     model = CandidatePolicy(model_config).to(device)
+    _stamp(f"model built head_dropout={model_config.head_dropout}")
+
+    # iter4: EMA wrapper. eval / best.pt 選定は EMA weights を使う。
+    ema_cfg = train_cfg.get("ema", {}) or {}
+    ema_enabled = bool(ema_cfg.get("enabled", False))
+    ema_decay = float(ema_cfg.get("decay", 0.999))
+    ema_model: swa_utils.AveragedModel | None = None
+    if ema_enabled:
+        ema_model = swa_utils.AveragedModel(
+            model,
+            multi_avg_fn=swa_utils.get_ema_multi_avg_fn(ema_decay),  # type: ignore[no-untyped-call]
+        )
+        _stamp(f"EMA enabled decay={ema_decay}")
+    else:
+        _stamp("EMA disabled")
+
+    grad_clip_max_norm = float(train_cfg.get("grad_clip_max_norm", 0.0))
+    _stamp(f"grad_clip_max_norm={grad_clip_max_norm}")
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -445,6 +489,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 }
             )
         )
+        ema_step = _make_ema_step(ema_model, model) if ema_model is not None else None
         train_metrics = _run_epoch(
             model,
             train_loader,
@@ -453,9 +498,15 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             device,
             epoch=epoch,
             phase="train",
+            grad_clip_max_norm=grad_clip_max_norm,
+            on_step=ema_step,
         )
+        # iter4: val は EMA weights で評価 (live model は dropout が train-time
+        # 振る舞いになっていなくても、AveragedModel(model) は同じ structure を
+        # 共有し eval mode で dropout を無効化)
+        eval_model: nn.Module = ema_model if ema_model is not None else model
         val_metrics = _run_epoch(
-            model,
+            eval_model,
             val_loader,
             weights,
             optimizer=None,
@@ -464,9 +515,13 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             phase="val",
         )
         current_lr = float(optimizer.param_groups[0]["lr"])
+        avg_grad_norm = (
+            train_metrics["grad_norm"] if "grad_norm" in train_metrics else 0.0
+        )
         log_row = {
             "epoch": epoch,
             "lr": round(current_lr, 8),
+            "avg_grad_norm_pre_clip": round(avg_grad_norm, 4),
             "train_total": round(train_metrics["total"], 4),
             "train_cand_loss": round(train_metrics["cand"], 4),
             "train_ship_loss": round(train_metrics["ship"], 4),
@@ -478,6 +533,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "val_cand_fire_acc": round(val_metrics["cand_fire_acc"], 4),
             "val_ship_loss": round(val_metrics["ship"], 4),
             "val_ship_mae": round(val_metrics["ship_mae"], 4),
+            "ema_eval": ema_model is not None,
             "epoch_elapsed_s": round(time.monotonic() - epoch_started, 1),
         }
 
@@ -491,7 +547,14 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             best_metric_value = candidate_value
             best_val = val_metrics["total"]
             best_epoch = epoch
-            cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+            # iter4: best.pt は EMA weights を保存 (eval も EMA で実施済み)。
+            # AveragedModel.module.state_dict() は live model と同じ key 構造。
+            save_source: nn.Module = (
+                ema_model.module if ema_model is not None else model
+            )
+            cpu_state = {
+                k: v.detach().cpu() for k, v in save_source.state_dict().items()
+            }
             torch.save(cpu_state, weights_out)
             if weights_out.resolve() != run_weights_path.resolve():
                 shutil.copyfile(weights_out, run_weights_path)
