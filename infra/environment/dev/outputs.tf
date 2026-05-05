@@ -56,3 +56,8 @@ output "runtime_codebuild_source_bucket" {
   description = "S3 bucket to upload source zip before triggering CodeBuild."
   value       = module.runtime_codebuild.source_bucket_name
 }
+
+output "github_actions_role_arn" {
+  description = "IAM role ARN for build-push.yml. Set this as repo secret AWS_ROLE_ARN."
+  value       = module.github_actions_oidc.role_arn
+}
