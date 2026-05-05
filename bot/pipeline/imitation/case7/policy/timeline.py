@@ -228,3 +228,51 @@ def summarize_timeline(
         "fall_predicted": 1.0 if fall_turn is not None else 0.0,
         "keep_needed": float(timeline.get("keep_needed", 0)),
     }
+
+
+def summarize_timeline_multi_horizon(
+    timeline: dict[str, Any],
+    horizons: tuple[int, ...] = (5, 15),
+) -> dict[str, float]:
+    """複数 horizon (短期/中期) の loss_window と min_owned_window を返す。
+
+    iter1 の `summarize_timeline` は horizon=30 の集約のみ。iter2 では timeline を
+    1 回 simulate (horizon=30) してから、その `ships_at` / `owner_at` を切り出して
+    horizon=5/15 の集約も取る (3 回 simulate を呼ばない)。
+
+    Returns 各 horizon h について:
+      loss_{h}turn: 自所有期間中に turn=0 → turn=h で失う ships 量。owner が変わったら
+                   現 ships を全損扱い (`summarize_timeline` の loss_3turn 同様)。
+      min_owned_{h}turn: turn=0..h で planet が自所有期間中の最小 ships。自所有でなければ 0。
+    """
+    ships_at = timeline.get("ships_at", {})
+    owner_at = timeline.get("owner_at", {})
+    sim_horizon = int(timeline.get("horizon", DEFAULT_HORIZON))
+    base_owner = owner_at.get(0, -1)
+    s0 = float(ships_at.get(0, 0.0))
+
+    out: dict[str, float] = {}
+    for h in horizons:
+        h_eff = min(int(h), sim_horizon)
+        s_h = float(ships_at.get(h_eff, s0))
+        own_h = owner_at.get(h_eff, base_owner)
+        loss = max(0.0, s0 - s_h) if base_owner == own_h else max(0.0, s0)
+        # min_owned for this horizon: walk turns 0..h, only count when owner == base_owner
+        # (and base_owner is the player perspective owner at t=0; mirrors simulate's min_owned).
+        if base_owner == -1:
+            mo = 0.0
+        else:
+            mo_val = (
+                s0 if own_h == base_owner or base_owner == owner_at.get(0, -1) else 0.0
+            )
+            running_min = mo_val if base_owner == owner_at.get(0, -1) else 0.0
+            for t in range(0, h_eff + 1):
+                ot = owner_at.get(t, base_owner)
+                if ot == base_owner:
+                    st = float(ships_at.get(t, 0.0))
+                    if running_min == 0.0 or st < running_min:
+                        running_min = st
+            mo = running_min
+        out[f"loss_{h}turn"] = float(loss)
+        out[f"min_owned_{h}turn"] = float(mo)
+    return out

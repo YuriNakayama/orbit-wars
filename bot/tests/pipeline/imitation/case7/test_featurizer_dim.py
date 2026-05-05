@@ -1,4 +1,9 @@
-"""case7 featurizer の dim sanity test。case5 (17/6) → case7 (24/10) を確認。"""
+"""case7 featurizer の dim sanity test。
+
+iter1: case5 17 + 7 (predicted dist 2 + history 3 + enemy ship event 2) = 24
+iter2: iter1 24 + 10 (fleet trajectory 4 + multi-horizon 4 + production/centroid 2) = 34
+       global iter1 10 + 4 (comet 2 + home/centroid 2) = 14
+"""
 
 from __future__ import annotations
 
@@ -11,18 +16,18 @@ from pipeline.imitation.case7.policy.featurizer import (
 )
 
 
-def test_planet_feat_dim_is_24() -> None:
-    """case5 17 + 予測距離 2 + history 3 + 敵 ship 発射 2 = 24。"""
-    assert PLANET_FEAT_DIM == 24
+def test_planet_feat_dim_is_34() -> None:
+    """iter2: PLANET_FEAT_DIM = 34。"""
+    assert PLANET_FEAT_DIM == 34
 
 
-def test_global_feat_dim_is_10() -> None:
-    """case5 6 + enemy/ally launch history 4 = 10。"""
-    assert GLOBAL_FEAT_DIM == 10
+def test_global_feat_dim_is_14() -> None:
+    """iter2: GLOBAL_FEAT_DIM = 14。"""
+    assert GLOBAL_FEAT_DIM == 14
 
 
 def test_featurize_minimal_obs_without_history_returns_correct_shape() -> None:
-    """history=None でも shape が合い、新規列はゼロ埋め (sane default)。"""
+    """history=None でも shape が合い、history 系列はゼロ埋め (sane default)。"""
     obs = {
         "player": 0,
         "step": 0,
@@ -39,13 +44,19 @@ def test_featurize_minimal_obs_without_history_returns_correct_shape() -> None:
     assert batch.planet_feats.shape == (1, MAX_PLANETS, PLANET_FEAT_DIM)
     assert batch.global_feats.shape == (1, GLOBAL_FEAT_DIM)
 
-    # history 列 (idx 19/20/21) は 0、敵 ship event (22/23) も 0
+    # iter1 history 列 (idx 19/20/21) は 0、enemy ship event (22/23) も 0
     for col in (19, 20, 21, 22, 23):
         assert batch.planet_feats[0, 0, col].item() == 0.0
 
-    # 新規 global 6-9 もゼロ
+    # iter1 global launch (6-9) もゼロ
     for col in (6, 7, 8, 9):
         assert batch.global_feats[0, col].item() == 0.0
+
+    # iter2 inbound fleet (24,25) はゼロ、dist (26) は -1 (no-inbound sentinel)、ships_log (27) はゼロ
+    assert batch.planet_feats[0, 0, 24].item() == 0.0
+    assert batch.planet_feats[0, 0, 25].item() == 0.0
+    assert batch.planet_feats[0, 0, 26].item() == -1.0
+    assert batch.planet_feats[0, 0, 27].item() == 0.0
 
 
 def test_featurize_with_history_state_accepts_call() -> None:

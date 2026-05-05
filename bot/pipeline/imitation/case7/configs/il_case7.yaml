@@ -14,10 +14,10 @@ data:
   max_episodes: null
 
 model:
-  # case7 は PLANET_FEAT_DIM=24 (case5 17 + 予測距離 2 + history 3 + 敵 ship 発射 2)。
-  # GLOBAL_FEAT_DIM=10 (case5 6 + 敵/自軍 launch history 4)。
-  planet_in_dim: 24
-  global_in_dim: 10
+  # case7 iter2: PLANET_FEAT_DIM=34 (iter1 24 + fleet trajectory 4 + multi-horizon 4 + production/centroid 2)。
+  # GLOBAL_FEAT_DIM=14 (iter1 10 + comet 2 + home/centroid 2)。
+  planet_in_dim: 34
+  global_in_dim: 14
   hidden: 128
   ships_buckets: 4
 

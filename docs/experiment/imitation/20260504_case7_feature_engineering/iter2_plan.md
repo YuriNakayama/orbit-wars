@@ -8,7 +8,9 @@
 > - `bot/pipeline/imitation/case7/policy/templates.py` — 8 template (NEAREST_NEUTRAL_LOW / NEAREST_ENEMY / HIGH_PROD_NEUTRAL / HIGH_PROD_ENEMY / REINFORCE_FRONTLINE / REINFORCE_WEAKEST / WEAKEST_ENEMY / NO_OP)
 > - `bot/pipeline/imitation/case7/policy/timeline.py` — `simulate_planet_timeline`, horizon 30
 >
-> スコープ: case7 iter1 の featurizer を **in-place 拡張** し、4 カテゴリ ~20 列を追加。focus は **学習精度 (Stage 1 val metrics) 向上**、Stage 2 self-play は今回のスコープ外 (300 ep フォローアップは別途)。
+> スコープ: case7 iter1 の featurizer を **in-place 拡張** し、3 カテゴリ ~14 列を追加。focus は **学習精度 (Stage 1 val metrics) 向上**、Stage 2 self-play は今回のスコープ外 (300 ep フォローアップは別途)。
+>
+> **更新 (2026-05-05 implementation start)**: 元の 4 カテゴリ案のうち「template prefix score」は既存の `template_context_features` (`templates.py`) で `TEMPLATE_CTX_DIM=40` 列が `BatchFeatures.template_ctx` 経由で model に渡っていることが判明。**重複なので削除**、残り 3 カテゴリで実装する。
 
 ## 仮説 (Hypothesis)
 
@@ -79,10 +81,9 @@ iter1 の所見 (`iter1_result.md` より要点):
 
 | Path | 変更内容 |
 |------|----------|
-| `bot/pipeline/imitation/case7/policy/featurizer.py` | PLANET_FEAT_DIM 24 → **42** (+18)、GLOBAL_FEAT_DIM 10 → **14** (+4)。下記 catalogue の列を追加 |
-| `bot/pipeline/imitation/case7/policy/timeline.py` | `simulate_planet_timeline` を horizon=5/15/30 で 3 回呼べるよう、 `summarize_timeline` を multi-horizon 化 (短中長 3 horizon の集約値) |
-| `bot/pipeline/imitation/case7/policy/templates.py` | `score_template(src_row, template_id, planet_rows, player, world_state)` を export。featurizer から 8 template 分の score を pre-compute |
-| `bot/pipeline/imitation/case7/configs/il_case7.yaml` | `model.planet_in_dim: 24 → 42`、`model.global_in_dim: 10 → 14`。他は iter1 と同じ (epochs=15, lr=1e-3, batch=256) |
+| `bot/pipeline/imitation/case7/policy/featurizer.py` | PLANET_FEAT_DIM 24 → **34** (+10)、GLOBAL_FEAT_DIM 10 → **14** (+4)。下記 catalogue の列を追加 |
+| `bot/pipeline/imitation/case7/policy/timeline.py` | `summarize_timeline_multi(timeline, horizons=[5, 15, 30])` を追加して 3 horizon の `loss_window` / `min_owned_window` を 1 回の simulate から取り出す |
+| `bot/pipeline/imitation/case7/configs/il_case7.yaml` | `model.planet_in_dim: 24 → 34`、`model.global_in_dim: 10 → 14`。他は iter1 と同じ (epochs=15, lr=1e-3, batch=256) |
 | `bot/pipeline/imitation/case7/training/preprocess.py` / `dataset.py` / `train.py` | dim 変更のみ (featurizer の constants 経由で自動的に追従、明示変更は不要のはず) |
 | `bot/tests/pipeline/imitation/case7/` | 新規テスト追加: `test_featurizer_template_prefix.py` / `test_featurizer_fleet_trajectory.py` / `test_featurizer_multihorizon.py` / `test_featurizer_production_centroid.py` |
 
@@ -96,27 +97,29 @@ iter1 の所見 (`iter1_result.md` より要点):
 
 ### Feature catalogue (追加予定)
 
-#### planet 列 (24 → 42, +18)
+#### planet 列 (24 → 34, +10)
 
 | idx | 名前 | 定義 | カテゴリ |
 |----|------|------|----------|
-| 24-31 | `template_prefix_score_{0..7}` | source planet が src のとき、各 template (NEAREST_NEUTRAL_LOW...NO_OP) で resolved target を選んで evaluate した normalized scoring (0-1 clip)。NO_OP は no-op 報酬の signed scalar。my_planet のみ非ゼロ、それ以外は 0 fill | template prefix |
-| 32-35 | `inbound_fleet_future_dx`, `..._dy`, `..._dist`, `..._ships_log` | この planet を target とする敵 fleet (LAUNCH_HISTORY_WINDOW 内) の **5 turn 後 future position** を計算し、relative dx/dy/dist を input に含める。複数 fleet の場合は ETA 最早の 1 件 | fleet trajectory |
-| 36-37 | `loss_5turn`, `loss_15turn` | 既存 `loss_3turn` に加えて短期 5 turn / 中期 15 turn の `loss_in_window` を追加。multi-horizon ship-prediction | multi-horizon |
-| 38-39 | `dist_to_home_planet_log`, `dist_to_production_centroid_log` | home (initial_planets[player]) との距離 + production-weighted centroid との距離 (両方 log1p 化) | production / centroid |
-| 40-41 | `min_owned_15turn_log`, `keep_needed_5turn_log` | timeline horizon=15 の min_owned / horizon=5 の keep_needed | multi-horizon |
+| 24 | `inbound_fleet_future_dx` | この planet を target とする敵 fleet (LAUNCH_HISTORY_WINDOW 内、ETA 最早の 1 件) の **5 turn 後 future position** からの relative dx / BOARD_SIZE | fleet trajectory |
+| 25 | `inbound_fleet_future_dy` | 同 dy / BOARD_SIZE | fleet trajectory |
+| 26 | `inbound_fleet_future_dist` | 同 distance / BOARD_SIZE。fleet なしなら -1 (sentinel) | fleet trajectory |
+| 27 | `inbound_fleet_ships_log` | 該当 fleet の ships を log1p。fleet なしなら 0 | fleet trajectory |
+| 28 | `loss_5turn_log` | timeline horizon=5 で `loss_in_window` (現在 ships - 5turn 後 ships) を log1p | multi-horizon |
+| 29 | `loss_15turn_log` | timeline horizon=15 の loss_window log1p | multi-horizon |
+| 30 | `min_owned_5turn_log` | timeline horizon=5 で「自所有期間中の最小 ships」を log1p | multi-horizon |
+| 31 | `min_owned_15turn_log` | timeline horizon=15 の min_owned log1p | multi-horizon |
+| 32 | `dist_to_home_planet_log` | home planet (initial_planets[player]) からの距離 log1p / BOARD_SIZE | production / centroid |
+| 33 | `dist_to_prod_centroid_log` | 自軍 production-weighted centroid からの距離 log1p / BOARD_SIZE。自軍が無いとき sun (50,50) から | production / centroid |
 
 #### global 列 (10 → 14, +4)
 
 | idx | 名前 | 定義 |
 |----|------|------|
-| 10 | `next_comet_eta_norm` | 次 comet 出現 turn (50, 150, 250, 350, 450 のうち > current step の最小) との差 / 100 |
-| 11 | `next_comet_active_flag` | 現在 comet がアクティブ (planet が comet として認識されている) なら 1.0 |
-| 12 | `production_diff_norm` | 自軍 production sum - 敵軍 production sum (log1p 差分の正規化、global 5 と僅差で異なる: production sum は raw、5 は log diff) ※ global 5 と重複なら廃止 |
-| 13 | `home_planet_owner_flag` | 自分の home planet (initial_planets) が現在自軍所有か (1)、奪われたか (0) |
-
-(注: idx 12 は global 5 (`math.log1p(my_total_prod) - math.log1p(enemy_total_prod)`) と内容が
-近いので、実装段階で重複と判明したらこの slot は別 feature に振り直す)
+| 10 | `next_comet_eta_norm` | 次 comet 出現 turn (50, 150, 250, 350, 450 のうち > current step の最小) との差 / 100。最後 (>450) は 1.0 |
+| 11 | `comet_active_flag` | 現在 comet がアクティブ (`comet_planet_ids` 非空) なら 1.0 |
+| 12 | `home_planet_owner_flag` | 自分の home planet (initial_planets) が現在自軍所有か (1.0)、奪われたか (0.0)、initial_planets 不明なら 0.5 |
+| 13 | `prod_centroid_dist_to_enemy_norm` | 自軍 production-weighted centroid と敵軍 production-weighted centroid の距離 / BOARD_SIZE。「戦線距離」の 1 値 summary |
 
 #### 設計原則
 

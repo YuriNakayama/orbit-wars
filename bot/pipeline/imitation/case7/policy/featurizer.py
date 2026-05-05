@@ -39,15 +39,24 @@ from .timeline import (
     TimelinePlanet,
     simulate_planet_timeline,
     summarize_timeline,
+    summarize_timeline_multi_horizon,
 )
 from .types import BatchFeatures, WorldSnapshot
 
-PLANET_FEAT_DIM = 24  # case5 17 + 7 (predicted dist 2 + history 3 + enemy ship event 2)
-GLOBAL_FEAT_DIM = 10  # case5 6 + 4 (enemy/ally launch count/ships last4)
+# iter2: case7 24→34 (+10) planet, 10→14 (+4) global. 追加 catalogue は
+# `docs/experiment/imitation/20260504_case7_feature_engineering/iter2_plan.md` 参照
+PLANET_FEAT_DIM = (
+    34  # iter1 24 + 10 (fleet trajectory 4 + multi-horizon 4 + production/centroid 2)
+)
+GLOBAL_FEAT_DIM = 14  # iter1 10 + 4 (comet 2 + home/centroid 2)
 MAX_PLANETS = 36
 BOARD_SIZE = 100.0
 HORIZON_TURNS = 30  # for incoming-fleet eta normalization
 PREDICT_TURNS = 5  # future-position prediction horizon (orbit rotation)
+INBOUND_FLEET_FUTURE_TURNS = (
+    5  # how far ahead to project the earliest inbound enemy fleet
+)
+COMET_TURNS = (50, 150, 250, 350, 450)  # comet spawn turns (from competition spec)
 SUN_X = 50.0
 SUN_Y = 50.0
 LAUNCH_HISTORY_WINDOW = 4  # last-N turns for ally/enemy launch event aggregation
@@ -218,6 +227,7 @@ def featurize(
     raw_planets = list(_read(obs, "planets", []) or [])
     raw_fleets = list(_read(obs, "fleets", []) or [])
     raw_comet_ids = set(_read(obs, "comet_planet_ids", []) or [])
+    raw_initial_planets = list(_read(obs, "initial_planets", []) or [])
     ang_vel = float(_read(obs, "angular_velocity", 0.0) or 0.0)
 
     n = min(len(raw_planets), MAX_PLANETS)
@@ -274,6 +284,8 @@ def featurize(
 
         # Aggregate per (fleet, slot) hits
         valid = np.isfinite(eta_mat)
+        # iter2: track earliest enemy fleet per slot for trajectory features
+        earliest_enemy_fleet_idx_per_slot: list[int | None] = [None] * MAX_PLANETS
         # For each slot, find nearest_eta and accumulate per-owner ships
         for slot in range(n):
             slot_valid = valid[:, slot]
@@ -282,6 +294,7 @@ def featurize(
             slot_etas = eta_mat[slot_valid, slot]
             slot_owners = fo_arr[slot_valid]
             slot_ships = fs_arr[slot_valid]
+            slot_indices = np.where(slot_valid)[0]
             # min eta
             min_eta = float(slot_etas.min())
             if min_eta < nearest_eta[slot]:
@@ -293,11 +306,56 @@ def featurize(
             incoming[slot][0] += float(slot_ships[mine_mask].sum())
             incoming[slot][2] += float(slot_ships[neut_mask].sum())
             incoming[slot][1] += float(slot_ships[enemy_mask].sum())
+            # iter2: pick earliest enemy inbound fleet for this slot
+            if enemy_mask.any():
+                enemy_etas_in_slot = slot_etas[enemy_mask]
+                enemy_indices_in_slot = slot_indices[enemy_mask]
+                k_min = int(enemy_etas_in_slot.argmin())
+                earliest_enemy_fleet_idx_per_slot[slot] = int(
+                    enemy_indices_in_slot[k_min]
+                )
             # arrivals (timeline 用)
             for eta_v, ow_v, sh_v in zip(
                 slot_etas, slot_owners, slot_ships, strict=True
             ):
                 arrivals_by_slot[slot].append((float(eta_v), int(ow_v), int(sh_v)))
+
+        # iter2: compute per-slot inbound fleet trajectory features (5-turn future pos)
+        inbound_fleet_dx = [0.0] * MAX_PLANETS
+        inbound_fleet_dy = [0.0] * MAX_PLANETS
+        inbound_fleet_dist = [-1.0] * MAX_PLANETS  # sentinel: no inbound
+        inbound_fleet_ships_log = [0.0] * MAX_PLANETS
+        for slot in range(n):
+            f_idx = earliest_enemy_fleet_idx_per_slot[slot]
+            if f_idx is None:
+                continue
+            f_x_now = float(fx_arr[f_idx])
+            f_y_now = float(fy_arr[f_idx])
+            f_angle = float(fa_arr[f_idx])
+            f_ships = int(fs_arr[f_idx])
+            speed = max(0.5, 2.0 - 0.05 * math.sqrt(max(1, f_ships)))
+            travel = speed * float(INBOUND_FLEET_FUTURE_TURNS)
+            f_x_fut = f_x_now + math.cos(f_angle) * travel
+            f_y_fut = f_y_now + math.sin(f_angle) * travel
+            # planet position at the same future turn (orbit if applicable)
+            p_x_now = float(raw_planets[slot][2])
+            p_y_now = float(raw_planets[slot][3])
+            p_x_fut, p_y_fut = _future_position(
+                p_x_now, p_y_now, ang_vel, INBOUND_FLEET_FUTURE_TURNS
+            )
+            dx = (p_x_fut - f_x_fut) / BOARD_SIZE
+            dy = (p_y_fut - f_y_fut) / BOARD_SIZE
+            dist = math.sqrt(dx * dx + dy * dy)
+            inbound_fleet_dx[slot] = dx
+            inbound_fleet_dy[slot] = dy
+            inbound_fleet_dist[slot] = dist
+            inbound_fleet_ships_log[slot] = math.log1p(max(0, f_ships))
+    else:
+        # No fleets in the scene: inbound trajectory features stay default (no-inbound sentinel)
+        inbound_fleet_dx = [0.0] * MAX_PLANETS
+        inbound_fleet_dy = [0.0] * MAX_PLANETS
+        inbound_fleet_dist = [-1.0] * MAX_PLANETS
+        inbound_fleet_ships_log = [0.0] * MAX_PLANETS
 
     # === Predicted-distance columns: pre-compute future positions and centroids ===
     future_xy: list[tuple[float, float]] = []
@@ -325,6 +383,67 @@ def featurize(
         en_cy = sum(p[1] for p in enemy_future_pts) / len(enemy_future_pts)
     else:
         en_cx, en_cy = SUN_X, SUN_Y
+
+    # === iter2: production-weighted centroids (current xy, NOT future) ===
+    my_prod_x = my_prod_y = 0.0
+    my_prod_w = 0.0
+    en_prod_x = en_prod_y = 0.0
+    en_prod_w = 0.0
+    for slot in range(n):
+        _, owner_, px_, py_, _, _, prod_ = raw_planets[slot]
+        owner_i = int(owner_)
+        prod_i = float(prod_)
+        if prod_i <= 0:
+            continue
+        if owner_i == player:
+            my_prod_x += float(px_) * prod_i
+            my_prod_y += float(py_) * prod_i
+            my_prod_w += prod_i
+        elif owner_i != -1:
+            en_prod_x += float(px_) * prod_i
+            en_prod_y += float(py_) * prod_i
+            en_prod_w += prod_i
+    if my_prod_w > 0:
+        my_prod_cx = my_prod_x / my_prod_w
+        my_prod_cy = my_prod_y / my_prod_w
+    else:
+        my_prod_cx, my_prod_cy = SUN_X, SUN_Y
+    if en_prod_w > 0:
+        en_prod_cx = en_prod_x / en_prod_w
+        en_prod_cy = en_prod_y / en_prod_w
+    else:
+        en_prod_cx, en_prod_cy = SUN_X, SUN_Y
+    prod_centroid_dist = (
+        math.sqrt((my_prod_cx - en_prod_cx) ** 2 + (my_prod_cy - en_prod_cy) ** 2)
+        / BOARD_SIZE
+    )
+
+    # === iter2: home planet position (player perspective) ===
+    home_x: float | None = None
+    home_y: float | None = None
+    home_pid: int | None = None
+    for hp in raw_initial_planets:
+        if int(hp[1]) == player:
+            home_pid = int(hp[0])
+            home_x = float(hp[2])
+            home_y = float(hp[3])
+            break
+    home_planet_owner_flag = 0.5  # default: unknown
+    if home_pid is not None:
+        for slot in range(n):
+            if int(raw_planets[slot][0]) == home_pid:
+                home_planet_owner_flag = (
+                    1.0 if int(raw_planets[slot][1]) == player else 0.0
+                )
+                break
+
+    # === iter2: next comet ETA ===
+    next_comet_t: int | None = next((t for t in COMET_TURNS if t > step), None)
+    if next_comet_t is None:
+        next_comet_eta_norm = 1.0
+    else:
+        next_comet_eta_norm = max(0.0, min(1.0, (next_comet_t - step) / 100.0))
+    comet_active_flag = 1.0 if raw_comet_ids else 0.0
 
     # === History (planet-level) — obs_{N-2} / obs_{N-3} only ===
     snap_t1: dict[int, tuple[int, int]] | None = None  # obs_{N-2}
@@ -426,6 +545,8 @@ def featurize(
             tp, arrivals_by_slot[slot], player, horizon=TIMELINE_HORIZON
         )
         ts = summarize_timeline(timeline)
+        # iter2: short/mid horizon summary from the same simulate (no extra cost)
+        ts_multi = summarize_timeline_multi_horizon(timeline, horizons=(5, 15))
 
         # Predicted distance to centroids (future position)
         fx_p, fy_p = future_xy[slot]
@@ -449,6 +570,17 @@ def featurize(
             denom2 = max(1, ships_i)
             delta_t2 = max(-1.0, min(1.0, (ships_i - past_ships_t2) / denom2))
 
+        # iter2: home distance + production-centroid distance per planet
+        if home_x is not None and home_y is not None:
+            home_dist_log = math.log1p(
+                math.sqrt((float(px) - home_x) ** 2 + (float(py) - home_y) ** 2)
+            ) / math.log1p(BOARD_SIZE)
+        else:
+            home_dist_log = 0.0
+        prod_centroid_dist_log = math.log1p(
+            math.sqrt((float(px) - my_prod_cx) ** 2 + (float(py) - my_prod_cy) ** 2)
+        ) / math.log1p(BOARD_SIZE)
+
         feats = [
             float(px) / BOARD_SIZE,
             float(py) / BOARD_SIZE,
@@ -468,16 +600,29 @@ def featurize(
             math.log1p(ts["surplus"]),
             ts["fall_predicted"],
             math.log1p(ts["keep_needed"]),
-            # case7 新規: predicted-distance 2 列
+            # case7 iter1: predicted-distance 2 列
             fut_dist_my,
             fut_dist_enemy,
-            # case7 新規: history 3 列 (obs_{N-2} / obs_{N-3})
+            # case7 iter1: history 3 列 (obs_{N-2} / obs_{N-3})
             delta_t1,
             delta_t2,
             owner_changed_t1,
-            # case7 新規: enemy ship-event 2 列 (per-planet)
+            # case7 iter1: enemy ship-event 2 列 (per-planet)
             enemy_targeted_count[slot] / 5.0,
             math.log1p(enemy_targeted_ships[slot]) / 6.0,
+            # case7 iter2: fleet trajectory 4 列 (earliest enemy inbound, 5-turn future delta)
+            inbound_fleet_dx[slot],
+            inbound_fleet_dy[slot],
+            inbound_fleet_dist[slot],
+            inbound_fleet_ships_log[slot],
+            # case7 iter2: multi-horizon ship-prediction 4 列 (h=5/15)
+            math.log1p(ts_multi["loss_5turn"]),
+            math.log1p(ts_multi["loss_15turn"]),
+            math.log1p(ts_multi["min_owned_5turn"]),
+            math.log1p(ts_multi["min_owned_15turn"]),
+            # case7 iter2: home distance + production centroid distance 2 列
+            home_dist_log,
+            prod_centroid_dist_log,
         ]
         for j in range(PLANET_FEAT_DIM):
             planet_feats[slot, j] = feats[j]
@@ -520,11 +665,16 @@ def featurize(
             math.log1p(enemy_total_ships),
             math.log1p(neutral_total_ships),
             math.log1p(my_total_prod) - math.log1p(enemy_total_prod),
-            # case7 新規: enemy/ally launch history 4 列
+            # case7 iter1: enemy/ally launch history 4 列
             enemy_launch_count_g / 10.0,
             math.log1p(enemy_launch_ships_g) / 6.0,
             ally_launch_count_g / 10.0,
             math.log1p(ally_launch_ships_g) / 6.0,
+            # case7 iter2: comet 2 列 + home/centroid 2 列
+            next_comet_eta_norm,
+            comet_active_flag,
+            home_planet_owner_flag,
+            prod_centroid_dist,
         ],
         dtype=torch.float32,
     )
