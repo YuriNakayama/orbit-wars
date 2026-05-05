@@ -30,6 +30,7 @@ AGENT_REGISTRY: dict[str, str] = {
     "il_v5": "pipeline.imitation.case5.policy.agent:agent",
     "il_v6": "pipeline.imitation.case6.policy.agent:agent",
     "il_v7": "pipeline.imitation.case7.policy.agent:agent",
+    "il_v8": "pipeline.imitation.case8.policy.agent:agent",
     "random": "random",
 }
 
