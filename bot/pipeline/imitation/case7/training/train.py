@@ -41,7 +41,15 @@ from pipeline.imitation.case7.training.losses import (
     compute_class_weights,
     compute_loss,
 )
-from runpod_io.progress import mark_progress
+
+try:
+    from runpod_io.progress import mark_progress  # type: ignore[attr-defined]
+except ImportError:  # local/test env where the helper is absent
+
+    def mark_progress(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
 from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)

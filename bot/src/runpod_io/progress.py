@@ -1,18 +1,27 @@
-"""onstart の S3 marker (`runpod_progress/<RUN_ID>/`) を読んで進捗を返す。
+"""onstart の S3 marker (`runpod_progress/<RUN_ID>/`) を読み書きする。
 
 `onstart.sh.tmpl` 側 (`mark()` 関数) が
 `s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>/<TIMESTAMP>_<STEP>`
 形式の空オブジェクトを各ステップで書き出している。本モジュールはそれを
 `boto3 s3.list_objects_v2` で列挙し、`ProgressMarker` のリストに整形する。
+
+加えて Python 学習プロセス側からも `mark_progress(run_id, step, payload?)` で
+同形式のマーカーを書ける (例: epoch 単位の `train.epoch` ログ)。
 """
 
 from __future__ import annotations
 
+import datetime as _dt
+import json as _json
+import logging as _logging
+import os as _os
 import re
 from dataclasses import dataclass
 from typing import Any
 
 import boto3
+
+_logger = _logging.getLogger(__name__)
 
 PROGRESS_BUCKET = "orbit-wars-dvc-286854171013"
 # IAM の dvc-user は `remote/*` 配下にしか PutObject 権限を持たないので、
@@ -69,6 +78,42 @@ def latest_step(markers: list[ProgressMarker]) -> ProgressMarker | None:
     if not markers:
         return None
     return markers[-1]
+
+
+def mark_progress(
+    run_id: str,
+    step: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = PROGRESS_PREFIX,
+    s3_client: Any | None = None,
+) -> None:
+    """Python 側から S3 progress marker を書き出す (onstart の `mark()` 互換)。
+
+    Key 形式: `<prefix>/<run_id>/<ISO8601 UTC>_<step>`。本体は payload が
+    あれば JSON、無ければ空 (bash 版と同じ)。AWS env / boto creds が無ければ
+    sileent skip (local / test).
+    """
+    if not run_id or not step:
+        return
+    timestamp = _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = f"{prefix}/{run_id}/{timestamp}_{step}"
+    if s3_client is None:
+        access_key = _os.environ.get("AWS_ACCESS_KEY_ID")
+        if not access_key:
+            _logger.debug("mark_progress skipped: no AWS_ACCESS_KEY_ID env")
+            return
+        try:
+            s3_client = _build_s3_client()
+        except Exception as exc:  # pragma: no cover - boto wiring varies
+            _logger.warning("mark_progress: failed to build s3 client: %s", exc)
+            return
+    body = _json.dumps(payload).encode() if payload else b""
+    try:
+        s3_client.put_object(Bucket=bucket, Key=key, Body=body)
+    except Exception as exc:  # pragma: no cover - non-fatal logging path
+        _logger.warning("mark_progress put_object failed for %s: %s", key, exc)
 
 
 @dataclass(frozen=True)
