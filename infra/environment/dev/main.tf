@@ -52,3 +52,25 @@ module "runtime_codebuild" {
   public_ecr_repository_arn = module.ecr_runtime.public_repository_arn
   dvc_bucket_name           = var.dvc_bucket_name
 }
+
+# GitHub Actions OIDC role used by `.github/workflows/build-push.yml` to push
+# container images to ECR and run ECS Fargate tasks. Reuses the existing
+# `auto_research-*` ECR/ECS resources rather than creating orbit-wars-specific
+# ones; if those are decommissioned the var.* values below need updating.
+data "aws_caller_identity" "current" {}
+
+module "github_actions_oidc" {
+  source      = "../../module/application/github_actions_oidc"
+  prefix      = var.resource_prefix
+  github_repo = "YuriNakayama/orbit-wars"
+
+  ecr_repository_arns = [
+    "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/auto_research-dev-task",
+  ]
+  ecs_cluster_arn = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/auto_research_dev"
+  ecs_task_role_arns = [
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/auto_research_dev_task_execution",
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/auto_research_dev_task",
+  ]
+  ecs_log_group_arn = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/auto_research_dev:*"
+}
