@@ -210,6 +210,36 @@ REINFORCE_MIN_DEFICIT: int = 1
 # restores reinforce throughput while keeping cooldown active in normal play.
 LOW_PLANET_BYPASS_THRESHOLD: int = 8
 
+# --- STAY judge (ported from case6/case7, iter5 Phase 1) ----------------------
+# Phase 1 では定数のみ導入。stay.py / strategy.py 配線は Phase 2-3 で実装。
+# 全フラグを False で初期化 → 配線完了まで case9 動作は iter2 と同等。
+STAY_ENABLED: bool = False
+STAY_DEFENSE_ENABLED: bool = False
+STAY_DEFENSE_HORIZON: int = 12
+STAY_DEFENSE_THRESHOLD: float = 1.0
+STAY_DEFENSE_MAX_TRAVEL_TURNS: int = 18
+STAY_BURST_ENABLED: bool = False
+STAY_BURST_MIN_GAIN: int = 1
+STAY_BURST_MIN_SHIPS: int = 8
+STAY_BURST_MAX_TARGET_TURNS: int = 30
+STAY_BURST_MAX_HOLD_TURNS: int = 3
+
+# --- ACCUMULATE mission (ported from case7, iter5 Phase 1) --------------------
+# 多ターン蓄積: 敵脅威スコアが低い友軍 source で「目標惑星捕獲必要量 +
+# safety + fleet_speed knee」までの ships が揃うまで複数ターン保持、揃った
+# 時点で遠距離 (ETA >= ACCUMULATE_MIN_TARGET_TURNS) の target に単発攻撃。
+# Phase 1 では ENABLED=False (配線なし)、Phase 2 で stay.py 実装、Phase 3 で
+# strategy.py 配線、Phase 4 で True に切り替え評価。
+ACCUMULATE_ENABLED: bool = False
+ACCUMULATE_THREAT_RESERVE_MAX: int = 0
+ACCUMULATE_SAFETY_SHIPS: int = 4
+ACCUMULATE_KNEE_SHIPS: int = 60
+ACCUMULATE_MIN_TARGET_TURNS: int = 15
+ACCUMULATE_MAX_TARGET_TURNS: int = 60
+ACCUMULATE_MAX_HOLD_TURNS: int = 12
+ACCUMULATE_VALUE_MULT: float = 1.0
+ACCUMULATE_COST_TURN_WEIGHT: float = 0.4
+
 
 def load_config(path: Path) -> dict[str, Any]:
     """Load the YAML copy of these constants for reference / future tuning."""
