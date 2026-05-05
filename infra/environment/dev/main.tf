@@ -73,4 +73,8 @@ module "github_actions_oidc" {
     "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/auto_research_dev_task",
   ]
   ecs_log_group_arn = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/auto_research_dev:*"
+  # Construct the ARN from `var.dvc_bucket_name` directly so this module can be
+  # applied with `-target=module.github_actions_oidc` without dragging in the
+  # (already-existing-on-AWS) `module.dvc_remote` resources.
+  dvc_bucket_arn = "arn:aws:s3:::${var.dvc_bucket_name}"
 }

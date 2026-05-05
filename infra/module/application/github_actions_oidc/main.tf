@@ -117,3 +117,29 @@ resource "aws_iam_role_policy" "ecs_deploy" {
   role   = aws_iam_role.github_actions.id
   policy = data.aws_iam_policy_document.ecs_deploy.json
 }
+
+# Read access to the DVC remote bucket. The runtime Dockerfile bakes the DVC
+# cache into the image via `aws s3 sync s3://<dvc_bucket>/remote/files/md5`,
+# so docker build (running as the GitHub Actions OIDC role) needs read on the
+# bucket and its `remote/*` keys.
+data "aws_iam_policy_document" "dvc_read" {
+  statement {
+    sid       = "ListDvcBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.dvc_bucket_arn]
+  }
+
+  statement {
+    sid       = "GetDvcObjects"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${var.dvc_bucket_arn}/remote/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "dvc_read" {
+  name   = "dvc-read"
+  role   = aws_iam_role.github_actions.id
+  policy = data.aws_iam_policy_document.dvc_read.json
+}

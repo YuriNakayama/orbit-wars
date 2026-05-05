@@ -28,3 +28,8 @@ variable "ecs_log_group_arn" {
   description = "CloudWatch log group ARN (with `:*` suffix) the role can read for ECS task logs."
   type        = string
 }
+
+variable "dvc_bucket_arn" {
+  description = "DVC remote S3 bucket ARN; the role gets read access so docker build can sync the DVC cache into the runtime image."
+  type        = string
+}
