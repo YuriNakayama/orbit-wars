@@ -230,7 +230,7 @@ STAY_BURST_MAX_HOLD_TURNS: int = 3
 # 時点で遠距離 (ETA >= ACCUMULATE_MIN_TARGET_TURNS) の target に単発攻撃。
 # Phase 1 では ENABLED=False (配線なし)、Phase 2 で stay.py 実装、Phase 3 で
 # strategy.py 配線、Phase 4 で True に切り替え評価。
-ACCUMULATE_ENABLED: bool = True
+ACCUMULATE_ENABLED: bool = False
 ACCUMULATE_THREAT_RESERVE_MAX: int = 0
 ACCUMULATE_SAFETY_SHIPS: int = 4
 ACCUMULATE_KNEE_SHIPS: int = 60
