@@ -22,6 +22,7 @@ dependencies = [
     "vastai>=0.3.0",
     "orbit-wars-vendor",
     "runpod>=1.7.0",
+    "psutil>=6.0.0",
 ]
 
 [tool.uv.sources]
@@ -110,6 +111,19 @@ max-complexity = 5
 "pipeline/imitation/case5/training/train.py" = ["B008"]
 "pipeline/imitation/case5/evaluation/eval_vs_baseline.py" = ["B008"]
 "pipeline/imitation/case5/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case6/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case6/training/train.py" = ["B008"]
+"pipeline/imitation/case6/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case6/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case7/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case7/training/train.py" = ["B008"]
+"pipeline/imitation/case7/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case7/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case8/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case8/training/train.py" = ["B008"]
+"pipeline/imitation/case8/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case8/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case8/policy/featurizer.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/pipeline/**/test_*.py" = ["E501"]
 "tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
@@ -128,6 +142,10 @@ max-complexity = 5
 "tests/pipeline/rulebase/case6/snapshots/**" = ["ALL"]
 "pipeline/rulebase/case7/evaluation/**/*.py" = ["B008", "E501"]
 "tests/pipeline/rulebase/case7/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case8/evaluation/**/*.py" = ["B008", "E501"]
+"tests/pipeline/rulebase/case8/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case9/evaluation/**/*.py" = ["B008", "E501"]
+"tests/pipeline/rulebase/case9/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/dataset/cli.py" = ["B008"]  # typer の慣習
 "src/vast/cli.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
@@ -171,6 +189,7 @@ module = [
     "pipeline.rulebase.case5.baseline.core.config",
     "pipeline.rulebase.case5.baseline.core.types",
     "pipeline.rulebase.case5.baseline.core.physics",
+    "pipeline.rulebase.case5.baseline.core.safety",
     "pipeline.rulebase.case5.baseline.core.world_helpers",
 ]
 ignore_errors = true
@@ -182,6 +201,7 @@ module = [
     "tests.pipeline.rulebase.case5.test_baseline_agent",
     "tests.pipeline.rulebase.case5.test_core_physics",
     "tests.pipeline.rulebase.case5.test_core_world_helpers",
+    "tests.pipeline.rulebase.case5.test_plan_shot_safety",
 ]
 disallow_untyped_calls = false
 
@@ -199,6 +219,18 @@ module = [
     "pipeline.imitation.case5.training.train",
     "pipeline.imitation.case5.evaluation.eval_vs_baseline",
     "pipeline.imitation.case5.evaluation.calibrate_heads",
+    "pipeline.imitation.case6.training.preprocess",
+    "pipeline.imitation.case6.training.train",
+    "pipeline.imitation.case6.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case6.evaluation.calibrate_heads",
+    "pipeline.imitation.case7.training.preprocess",
+    "pipeline.imitation.case7.training.train",
+    "pipeline.imitation.case7.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case7.evaluation.calibrate_heads",
+    "pipeline.imitation.case8.training.preprocess",
+    "pipeline.imitation.case8.training.train",
+    "pipeline.imitation.case8.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case8.evaluation.calibrate_heads",
 ]
 ignore_errors = true
 

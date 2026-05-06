@@ -120,6 +120,26 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case5/policy/weights.pt",
     },
+    "case6": {
+        "stage": "train_imitation_case6",
+        "train_module": "pipeline.imitation.case6.training.train",
+        "config_arg": "--config pipeline/imitation/case6/configs/il_case6.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case6.training.preprocess "
+            "--config pipeline/imitation/case6/configs/il_case6.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case6/policy/weights.pt",
+    },
+    "case7": {
+        "stage": "train_imitation_case7",
+        "train_module": "pipeline.imitation.case7.training.train",
+        "config_arg": "--config pipeline/imitation/case7/configs/il_case7.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case7.training.preprocess "
+            "--config pipeline/imitation/case7/configs/il_case7.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case7/policy/weights.pt",
+    },
     "case8": {
         "stage": "train_imitation_case8",
         "train_module": "pipeline.imitation.case8.training.train",
@@ -129,6 +149,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config pipeline/imitation/case8/configs/il_case8.yaml"
         ),
         "canonical_weights": "bot/pipeline/imitation/case8/policy/weights.pt",
+    },
+    # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
+    # is a 200-param MLP on synthetic data, designed to finish in minutes so
+    # the GPU basis itself can be verified end-to-end.
+    "case0": {
+        "stage": "train_imitation_case0",
+        "train_module": "pipeline.imitation.case0.training.train",
+        "config_arg": "--config pipeline/imitation/case0/configs/smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
     },
 }
 
@@ -173,6 +203,81 @@ def _git_remote_url() -> str:
 
 def _git_current_branch() -> str:
     return _git("rev-parse", "--abbrev-ref", "HEAD")
+
+
+def _run_preflight_smoke(case: str) -> None:
+    """Run the case0 CPU smoke train + case-specific import sanity.
+
+    Why: every RunPod attempt costs $0.20–$1.50 (varies by case) and ties up
+    a GPU node. A single broken import or YAML typo can burn the whole run
+    in onstart. Catching these locally — fast, free — is the cheapest
+    insurance against the failure modes recorded in `memory/runpod_5_traps`.
+
+    Behavior:
+      * For ``case0``: invoke ``pipeline.imitation.case0.training.train`` on
+        CPU and assert it succeeds within 60s.
+      * For all cases: assert ``CASE_DEFAULTS[case].train_module`` is
+        importable from the bot venv (catches typos and import-time errors
+        without paying RunPod boot time).
+
+    Failure raises ``typer.Exit(1)`` so the gate blocks ``runpod_sdk`` calls.
+    """
+    repo_root = _repo_root()
+    bot_dir = repo_root / "bot"
+    case_default = _case_defaults(case)
+    train_module = case_default["train_module"]
+
+    console.print(f"[cyan]preflight:[/] importing {train_module} ...")
+    import_check = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--directory",
+            str(bot_dir),
+            "python",
+            "-c",
+            f"import {train_module}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if import_check.returncode != 0:
+        console.print(
+            f"[red]preflight:[/] cannot import {train_module}\n"
+            f"{import_check.stderr.strip()}"
+        )
+        raise typer.Exit(code=1)
+
+    console.print("[cyan]preflight:[/] running case0 CPU smoke train (timeout 60s)...")
+    smoke = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--directory",
+            str(bot_dir),
+            "python",
+            "-m",
+            "pipeline.imitation.case0.training.train",
+            "--config",
+            "pipeline/imitation/case0/configs/smoke.yaml",
+            "--device",
+            "cpu",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if smoke.returncode != 0:
+        tail = "\n".join(
+            smoke.stdout.splitlines()[-15:] + smoke.stderr.splitlines()[-15:]
+        )
+        console.print(
+            f"[red]preflight:[/] case0 smoke train failed; refusing to launch.\n{tail}"
+        )
+        raise typer.Exit(code=1)
+    console.print("[green]preflight:[/] smoke train OK.")
 
 
 def _verify_commit_pushed(commit_sha: str) -> None:
@@ -314,9 +419,24 @@ def train(
         help="対話 prompt をスキップし最初の offer を自動選択 / cost limit 内なら "
         "確認なしで起動。loop / cron 経由の自動運転用。",
     ),
+    skip_smoke: bool = typer.Option(
+        False,
+        "--skip-smoke",
+        help="ローカル smoke test (case0 train CPU + case 別 import sanity) を"
+        " スキップする。本来は失敗時に RunPod 起動を block する gate。",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="smoke test と git/aws 検証だけ走らせて pod は起動しない。"
+        " loop / CI から起動前検証のみしたいとき。",
+    ),
 ) -> None:
     """Search RunPod GPU offers, pick one, and launch training for a given commit."""
     defaults = _case_defaults(case)
+
+    if not skip_smoke:
+        _run_preflight_smoke(case)
 
     try:
         repo_url = _git_remote_url()
@@ -326,6 +446,12 @@ def train(
         ) from exc
     _verify_commit_pushed(commit_sha)
     branch = _git_current_branch()
+
+    if dry_run:
+        console.print(
+            "[green]dry-run OK:[/] smoke + git checks passed; skipping pod launch."
+        )
+        raise typer.Exit(code=0)
 
     try:
         aws_creds = load_aws_creds(profile=aws_profile)
@@ -386,6 +512,35 @@ def train(
                 "  --auto-create-volume + --data-center-id で初回作成、"
                 "以降は --volume-name で自動再利用。"
             )
+
+    # case0 は RunPod 基盤の E2E smoke 専用なので、最安の GPU 1 種に絞り
+    # cost_limit / max_dph も縮める。ユーザーが明示的に上書きしている場合は
+    # その値を尊重する (デフォルト値とのみ比較)。
+    if case == "case0":
+        if list(gpu_names) == list(DEFAULT_GPU_NAMES):
+            # SECURE 候補。`pick_offer` は dph 昇順で選ぶので
+            # A4000 ($0.25) → 4000 Ada ($0.26) → A5000 ($0.27) → 3090 ($0.46)
+            # → A6000 ($0.49) の順で fallback する。
+            # 4090 は memory:runpod_5_traps と attempt 3 で「pod RUNNING だが
+            # bash 開始すら届かない (markers ゼロ)」失敗を再現したので除外。
+            # A6000 は 4090 ガチャ回避策として実績あり (memory)。
+            gpu_names = [
+                "NVIDIA GeForce RTX 3090",
+                "NVIDIA RTX A4000",
+                "NVIDIA RTX A5000",
+                "NVIDIA RTX A6000",
+                "NVIDIA RTX 4000 Ada Generation",
+            ]
+            console.print(
+                "[cyan]case0:[/] GPU を A4000/4000Ada/A5000/3090/A6000 に絞り込み"
+                " (4090 はノードガチャ trap を引いたため除外)"
+            )
+        if max_dph == 2.0:
+            max_dph = 0.6
+            console.print("[cyan]case0:[/] --max-dph を 0.6 に縮小")
+        if cost_limit_usd == DEFAULT_COST_LIMIT_USD:
+            cost_limit_usd = 0.40
+            console.print("[cyan]case0:[/] --cost-limit を $0.40 に縮小")
 
     offers = search_offers(
         sdk,
@@ -572,6 +727,15 @@ def train(
             "to see the full marker timeline."
         )
         if not result.is_success:
+            # Defense in depth: ensure the pod is terminated even if onstart
+            # trap missed it. Idempotent — already-removed pods are accepted.
+            from runpod_io.cleanup import terminate_pod
+
+            cleanup_result = terminate_pod(sdk, pod_id)
+            if cleanup_result.terminated:
+                console.print(f"[dim]cleanup: pod {pod_id} terminated[/]")
+            elif cleanup_result.error:
+                console.print(f"[yellow]cleanup warning:[/] {cleanup_result.error}")
             raise typer.Exit(code=1)
 
 
@@ -1060,6 +1224,7 @@ TAIL_SOURCES: dict[str, str] = {
     "onstart": "tail -F /var/log/onstart.log",
     "train": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/train.log"),
     "gpu": "tail -F data/output/models/imitation/{case}/runs/{run_id}/gpu.log",
+    "system": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/system.log"),
 }
 
 
@@ -1070,7 +1235,7 @@ def tail_cmd(
     source: str = typer.Option(
         "onstart",
         "--source",
-        help="onstart / train / gpu — どのログを SSH 経由 tail するか",
+        help="onstart / train / gpu / system — どのログを SSH 経由 tail するか",
     ),
     follow: bool = typer.Option(
         True,
@@ -1083,6 +1248,7 @@ def tail_cmd(
     `--source onstart`: /var/log/onstart.log (立ち上げ + 全体)
     `--source train`:   run_dir/train.log (学習プロセスの stdout のみ)
     `--source gpu`:     run_dir/gpu.log (nvidia-smi 10s 周期サンプル)
+    `--source system`:  run_dir/system.log (psutil で CPU%/RAM 10s 周期)
 
     pod が RUNNING 中のみ。terminate 後は `dev/runpod logs --source onstart`
     で S3 fallback を使う。Community Cloud は port 公開仕様が異なる場合あり。

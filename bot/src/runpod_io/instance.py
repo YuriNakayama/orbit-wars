@@ -39,15 +39,16 @@ _TEMPLATE_PLACEHOLDERS = (
     "<PREPROCESS_CMD>",
 )
 
-# RunPod 公式 PyTorch image。Docker Hub に確実に存在し、SSH/Jupyter/runpodctl
-# が pre-install されている。古いタグ (2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04)
-# や pytorch/pytorch image は pull 中に止まる挙動を観測したため、こちらを採用。
-#
-# CUDA 12.4 系 (`cu1241`) を採用: RunPod ホストの driver 個体差で `cu1300`
-# image が `nvidia-container-cli: requirement error: cuda>=13.0` で起動失敗
-# する事象を観測 (case8 1b93ecb run, pod dm1xswahvt2d7x)。CUDA 12.4 は driver
-# 525+ で動作し RunPod の全 host で互換 (確認済 RTX 3090/4090/A6000)。
-# PyTorch 2.6 + CUDA 12.4 で本プロジェクトの train.py / preprocess は十分。
+# RunPod 公式 PyTorch image。SSH/Jupyter/runpodctl が pre-install されている。
+# CUDA 12.4 系を default とする: CUDA 13 系 (cu1300-torch291-ubuntu2404) は
+# host NVIDIA driver 580+ 必須で、RunPod の SECURE 4090 fallback ノードに
+# 古い driver (CUDA 12.x までしか提供しない) が混在しており、運悪く当たると
+# OCI prestart hook で `nvidia-container-cli: requirement error: cuda>=13.0`
+# で起動失敗する。CUDA 12.4 (driver 550+ 要件) はほぼ全 host driver で動く。
+# 観測 (2026-05-04, EU-RO-1 SECURE 4090): cu1300 image で `pretart hook #0:
+# exit status 1` を返したノードあり → cu1241 にダウングレードで回避。
+# 古いタグ (pytorch/pytorch:2.4.0-cuda12.4.1-devel-ubuntu22.04) は pull 中
+# に止まる挙動を観測したため runpod/pytorch 系を採用。
 DEFAULT_IMAGE = os.environ.get(
     "ORBIT_WARS_RUNPOD_IMAGE",
     "runpod/pytorch:0.7.0-cu1241-torch260-ubuntu2204",
