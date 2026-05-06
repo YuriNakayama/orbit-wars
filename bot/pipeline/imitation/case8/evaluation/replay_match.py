@@ -1,4 +1,4 @@
-"""Replay a single il_v1 vs baseline_v1 match for a given seed with save_replay=True.
+"""Replay a single il_v8 vs baseline_v1 match for a given seed with save_replay=True.
 
 Uses the canonical selfplay runner (same code path as eval_vs_baseline) so the
 outcome matches the original 100-game batch. Writes a JSON trace summary.
@@ -20,7 +20,7 @@ import typer
 
 from dataset.selfplay.runner import RunSpec, run_episodes
 
-DEFAULT_OUT_DIR = Path("data/output/experiment/imitation_case1_replays")
+DEFAULT_OUT_DIR = Path("data/output/experiment/imitation_case8_replays")
 
 ReplayLabel = Literal["win", "loss"]
 

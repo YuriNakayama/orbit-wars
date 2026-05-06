@@ -100,7 +100,8 @@ pipeline/imitation/case3/
 │   ├── geometry.py          # aim_with_prediction (独立コピー)
 │   ├── templates.py         # target template definitions
 │   ├── types.py             # BatchFeatures / PolicyOutput / WorldSnapshot
-│   └── weights_phase2.pt    # 学習済み重み (training 後生成)
+│   ├── weights.pt           # canonical (= weights_iter1.pt のコピー)
+│   └── weights_iter1.pt     # phase2 iter (旧 weights_phase2.pt)
 ├── training/                # 開発用 (.submitignore)
 │   ├── preprocess.py        # replay → parquet (history 同梱)
 │   ├── dataset.py           # torch Dataset
@@ -165,6 +166,13 @@ uv run pytest tests/pipeline/imitation/case3 -v   # determinism / integration �
 ```python
 "il_v3": "pipeline.imitation.case3.policy.agent_phase2:agent",
 ```
+
+## モデルバージョン
+
+| ファイル | 説明 |
+|---------|------|
+| `policy/weights.pt` | canonical。`agent_phase2.py` (`il_v3`) が読み込む |
+| `policy/weights_iter1.pt` | phase2 iter (旧 `weights_phase2.pt`) |
 
 ## 学習結果 (run `20260430-075004 / 0e9337d / seed0`)
 

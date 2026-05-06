@@ -1,4 +1,20 @@
-# Orbit Wars
+# rulebase/case0 — Nearest Planet Sniper (学習用参考実装)
+
+Orbit Wars 環境への入門用 archive case。`main.py` は **Nearest Planet Sniper** —
+所有惑星ごとに最寄りの非所有惑星を探し、駐留 ships + 1 で発射する単純戦略。
+他の rulebase case (case1..case8) のような complex mission / planner / lookahead は持たず、
+**observation の読み方 / action 形式 / atan2 による角度計算** のチュートリアル素材として残置。
+
+- レジストリ名: `case0` (`pipeline.rulebase.case0.main:agent`)
+- 戦略: 最寄り未所有惑星を 1 ターンスナイプ
+- 構造: `main.py` 単一ファイル (planner / config 等は無し)
+- Status: archive (refactor 対象外、学習用)
+
+以下はゲーム仕様の参考資料 (Orbit Wars 環境の README 由来、`docs/competition/abstract.md` も参照)。
+
+---
+
+# Orbit Wars (環境仕様)
 
 Conquer planets rotating around a sun in continuous 2D space. A real-time strategy game for 2 or 4 players.
 

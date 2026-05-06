@@ -1,4 +1,10 @@
-"""Evaluate il_v8 (imitation/case8) vs baseline_v1 (rulebase/case1) over N episodes."""
+"""Evaluate il_v8 (imitation/case8) vs baseline_v1 (rulebase/case1) over N episodes.
+
+Params are read from repo-root `params.yaml` (`evaluation.*`).
+CLI flags (`--episodes`, `--seed`, `--out`, `--label`) override params for ad-hoc runs.
+
+Wilson CI summarization lives in `src/evaluation/vs_baseline.py`.
+"""
 
 from __future__ import annotations
 

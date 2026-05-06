@@ -1,7 +1,7 @@
 """Phase 1-2: temperature scaling for target_head / ships_head on val.parquet.
 
 For each head we minimize val NLL over T ∈ [0.5, 3.0], measure ECE, and save
-the optimal T* to data/output/experiment/imitation_case1_calibration.json.
+the optimal T* to data/output/experiment/imitation_case6_calibration.json.
 
 Only the fired-source rows are used (consistent with how training-time losses
 compute target/ships accuracy).
@@ -25,9 +25,9 @@ from pipeline.imitation.case6.training.dataset import (
     collate,
 )
 
-CONFIG_PATH = Path("pipeline/imitation/case5/configs/il_baseline.yaml")
-WEIGHTS_PATH = Path("pipeline/imitation/case5/policy/weights.pt")
-REPORT_PATH = Path("data/output/experiment/imitation_case1_calibration.json")
+CONFIG_PATH = Path("pipeline/imitation/case6/configs/il_case6.yaml")
+WEIGHTS_PATH = Path("pipeline/imitation/case6/policy/weights.pt")
+REPORT_PATH = Path("data/output/experiment/imitation_case6_calibration.json")
 SHIPS_BUCKETS = 4
 
 

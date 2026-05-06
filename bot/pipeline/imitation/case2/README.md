@@ -52,7 +52,9 @@ pipeline/imitation/case2/
 │   ├── geometry.py          # aim_with_prediction (独立コピー)
 │   ├── templates.py         # target template definitions
 │   ├── types.py             # BatchFeatures / PolicyOutput / WorldSnapshot
-│   └── weights.pt           # 学習済み重み (training 後生成)
+│   ├── weights.pt           # canonical (= weights_iter1.pt のコピー)
+│   ├── weights_iter0.pt     # baseline iter (旧 weights_baseline.pt)
+│   └── weights_iter1.pt     # phase1 iter (旧 weights_phase1.pt)
 ├── training/                # 開発用 (.submitignore)
 │   ├── preprocess.py        # replay → parquet
 │   ├── dataset.py           # torch Dataset
@@ -101,8 +103,19 @@ uv run pytest tests/pipeline/imitation/case2 -v   # determinism / integration �
 
 ## レジストリ
 
-`src/dataset/selfplay/agents.py` に `il_v2` として登録:
+`src/dataset/selfplay/agents.py` に `il_v2` / `il_v2_phase1` として登録:
 
 ```python
-"il_v2": "pipeline.imitation.case2.policy.agent:agent",
+"il_v2":         "pipeline.imitation.case2.policy.agent:agent",
+"il_v2_phase1":  "pipeline.imitation.case2.policy.agent_phase1:agent",
 ```
+
+## モデルバージョン
+
+| ファイル | 説明 |
+|---------|------|
+| `policy/weights.pt` | canonical。`agent.py` (`il_v2`) が読み込む |
+| `policy/weights_iter0.pt` | baseline iter (旧 `weights_baseline.pt`) |
+| `policy/weights_iter1.pt` | phase1 iter (旧 `weights_phase1.pt`)。`agent_phase1.py` (`il_v2_phase1`) が読み込む |
+
+ablation variant (`weights_phase1_no_a..no_e`, `weights_phase1_clean_c`) は `configs/il_phase1_*.yaml` 経由で出力される一時アーティファクト。`policy/` 配下には保持しない。

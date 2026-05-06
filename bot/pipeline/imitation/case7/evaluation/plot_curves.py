@@ -19,7 +19,7 @@ from typing import Any
 import typer
 
 DEFAULT_LOG = Path("/tmp/train_iter6.log")
-DEFAULT_OUT = Path("data/output/experiment/imitation_case1_learning_curves.png")
+DEFAULT_OUT = Path("data/output/experiment/imitation_case7_learning_curves.png")
 DEFAULT_LABEL = "iter6 (focal α=0.25, canonical)"
 COLOR = "#1f77b4"
 

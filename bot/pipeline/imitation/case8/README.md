@@ -1,4 +1,4 @@
-# Imitation Case4 — Kaggle tutorial-style candidate head (BC)
+# Imitation Case8 — Kaggle tutorial-style candidate head (BC)
 
 `pipeline/imitation/case3` の Graph U-Net バックボーンと history feature 群を
 そのまま受け継ぎ、出力 head を Kaggle ノートブック
@@ -113,3 +113,10 @@ uv run --directory backend python -m pipeline.imitation.case8.evaluation.eval_vs
   slot 1..7 は notebook 流の候補リストへ写像。`ships` は `max(tgt.ships+1, 20)` 固定。
 - **Evaluation**: Kaggle publicScore は使わない。ローカル `eval_vs_baseline` の勝率のみ。
   300 戦未満の結果は noise として扱う (`project_imitation_case1_phase3` の知見)。
+
+## モデルバージョン
+
+| ファイル | 説明 |
+|---------|------|
+| `policy/weights.pt` | canonical。`dev/{vast,runpod} promote` で上書き |
+| `policy/weights_iter<N>.pt` | iteration 履歴 (生成された場合のみ。命名規則は `imitation/README.md` 参照) |

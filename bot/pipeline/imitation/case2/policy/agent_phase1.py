@@ -1,6 +1,6 @@
 """Kaggle entry: phase1 agent(obs) using extended featurizer + Graph U-Net.
 
-Mirrors `agent.py` but uses `featurizer_phase1` and `weights_phase1.pt`.
+Mirrors `agent.py` but uses `featurizer_phase1` and `weights_iter1.pt`.
 Inference knobs (from_threshold etc.) match the baseline; tuning will be
 revisited once phase1 metrics are established.
 """
@@ -17,7 +17,7 @@ from .decoder import decode
 from .featurizer_phase1 import GLOBAL_FEAT_DIM, PLANET_FEAT_DIM, featurize
 from .model import DeepSetsPolicy, ModelConfig
 
-_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights_phase1.pt"
+_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights_iter1.pt"
 
 _TARGET_TEMPERATURE = 0.8
 _SHIPS_TEMPERATURE = 1.1

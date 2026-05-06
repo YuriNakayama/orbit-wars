@@ -1,4 +1,4 @@
-"""Evaluate il_v1 (imitation/case5) vs baseline_v1 (rulebase/case1) over N episodes.
+"""Evaluate il_v5 (imitation/case5) vs baseline_v1 (rulebase/case1) over N episodes.
 
 Params are read from repo-root `params.yaml` (`evaluation.*`).
 CLI flags (`--episodes`, `--seed`, `--out`, `--label`) override params for ad-hoc runs.
