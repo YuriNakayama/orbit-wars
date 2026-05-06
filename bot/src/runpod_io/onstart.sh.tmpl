@@ -471,6 +471,21 @@ else
     mark "45_dvc_pull_full_failed"
     exit 1
   fi
+  # iter14 fix (case9 retry2 2026-05-06 11:50): `dvc pull --allow-missing` は
+  # graph 解析で衝突 (case8 outs vs .dvc 重複) を検出すると case9 parquet を
+  # "hash info not found" の WARNING で skip して exit 0 になる。 case9 parquet
+  # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
+  # を 1 段追加する。
+  CASE_SUBDIR="$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//')"
+  CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
+  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
+     && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
+    echo "[onstart] dvc pull TARGETED: ${CASE_MART_DIR}/{train,val}.parquet.dvc"
+    ${DVC_BIN} pull --force \
+      "${CASE_MART_DIR}/train.parquet.dvc" \
+      "${CASE_MART_DIR}/val.parquet.dvc" \
+      || echo "[onstart] targeted dvc pull WARN (continuing)" >&2
+  fi
 fi
 
 mark "50_dvc_pull_done"
