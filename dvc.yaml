@@ -73,6 +73,60 @@ stages:
     outs:
       - bot/pipeline/imitation/case5/policy/weights.pt
 
+  preprocess_imitation_case6:
+    cmd: uv run --directory bot python -m pipeline.imitation.case6.training.preprocess --config pipeline/imitation/case6/configs/il_case6.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case6/training/preprocess.py
+      - bot/pipeline/imitation/case6/policy/featurizer.py
+      - bot/pipeline/imitation/case6/policy/timeline.py
+      - bot/pipeline/imitation/case6/policy/geometry.py
+      - bot/pipeline/imitation/case6/policy/templates.py
+      - bot/pipeline/imitation/case6/configs/il_case6.yaml
+    outs:
+      - data/mart/imitation/case6/train.parquet
+      - data/mart/imitation/case6/val.parquet
+
+  train_imitation_case6:
+    cmd: uv run --directory bot python -m pipeline.imitation.case6.training.train --config pipeline/imitation/case6/configs/il_case6.yaml
+    deps:
+      - data/mart/imitation/case6/train.parquet
+      - data/mart/imitation/case6/val.parquet
+      - bot/pipeline/imitation/case6/training/train.py
+      - bot/pipeline/imitation/case6/training/losses.py
+      - bot/pipeline/imitation/case6/training/dataset.py
+      - bot/pipeline/imitation/case6/policy/model.py
+      - bot/pipeline/imitation/case6/configs/il_case6.yaml
+    outs:
+      - bot/pipeline/imitation/case6/policy/weights.pt
+
+  preprocess_imitation_case7:
+    cmd: uv run --directory bot python -m pipeline.imitation.case7.training.preprocess --config pipeline/imitation/case7/configs/il_case7.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case7/training/preprocess.py
+      - bot/pipeline/imitation/case7/policy/featurizer.py
+      - bot/pipeline/imitation/case7/policy/timeline.py
+      - bot/pipeline/imitation/case7/policy/geometry.py
+      - bot/pipeline/imitation/case7/policy/templates.py
+      - bot/pipeline/imitation/case7/configs/il_case7.yaml
+    outs:
+      - data/mart/imitation/case7/train.parquet
+      - data/mart/imitation/case7/val.parquet
+
+  train_imitation_case7:
+    cmd: uv run --directory bot python -m pipeline.imitation.case7.training.train --config pipeline/imitation/case7/configs/il_case7.yaml
+    deps:
+      - data/mart/imitation/case7/train.parquet
+      - data/mart/imitation/case7/val.parquet
+      - bot/pipeline/imitation/case7/training/train.py
+      - bot/pipeline/imitation/case7/training/losses.py
+      - bot/pipeline/imitation/case7/training/dataset.py
+      - bot/pipeline/imitation/case7/policy/model.py
+      - bot/pipeline/imitation/case7/configs/il_case7.yaml
+    outs:
+      - bot/pipeline/imitation/case7/policy/weights.pt
+
   preprocess_imitation_case8:
     cmd: uv run --directory bot python -m pipeline.imitation.case8.training.preprocess --config pipeline/imitation/case8/configs/il_case8.yaml
     deps:

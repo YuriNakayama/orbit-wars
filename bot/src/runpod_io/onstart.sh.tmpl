@@ -295,11 +295,16 @@ if [ -d /persist ]; then
   # 復元されていたとしても .dvc stub のみなので symlink で問題ない。
   # 既に dir として実体がある (例: 過去 run の遺物) 場合は中身を /persist に
   # 引っ越してから symlink (再起動で持続化される ⇒ 次回以降 dvc pull が冪等)。
+  #
+  # 重要: 過去 run の preprocess 中途破損 parquet が /persist に残ると新 run の
+  # train が `parquet: File must end with PAR1` で死亡する (memory
+  # `project_runpod_5_traps_2026_05_04` の trap #7)。冒頭で /persist 側を
+  # 完全クリアし、毎 run preprocess を fresh で走らせる方が信頼性が高い。
+  rm -rf /persist/data-mart-imitation
+  mkdir -p /persist/data-mart-imitation
   if [ -L data/mart/imitation ]; then
     : # already linked
   elif [ -d data/mart/imitation ]; then
-    # 既存 dir の中身を /persist にマージしてから symlink に置換
-    cp -an data/mart/imitation/. /persist/data-mart-imitation/ 2>/dev/null || true
     rm -rf data/mart/imitation
     ln -sfn /persist/data-mart-imitation data/mart/imitation
   else
@@ -419,8 +424,14 @@ else
     mark "45_dvc_pull_kaggle_failed"
     exit 1
   fi
-  # --allow-missing: case7 など他 case の orphan outs を許容 (trap #5)
-  # --force: 既存の persist parquet を新しい blob で上書き (trap #6)
+  # --allow-missing: dvc.yaml stage の outs が S3 にまだ無い (= 未学習の case の
+  # weights.pt などが orphan stub として残っている) ケースで FAIL せず WARNING に
+  # 降格させる。
+  # --force: /persist volume に前回 preprocess の残骸 parquet が unsaved file として
+  # 残っている場合に dvc pull が "Can't remove unsaved files" で fail するのを回避。
+  # 残骸自体は preprocess skip ロジックで再利用される (新規 preprocess も上書き可能)。
+  # memory `project_runpod_5_traps_2026_05_04.md` および
+  # `project_runpod_onstart_pitfalls.md` 参照。
   if ! uv run --project bot dvc pull --allow-missing --force; then
     echo "[onstart] dvc pull (full) FAILED" >&2
     mark "45_dvc_pull_full_failed"
@@ -486,7 +497,15 @@ if [ -n "<PREPROCESS_CMD>" ]; then
           \( -type l -xtype l \) -print -delete 2>&1 || true
       fi
     fi
-    uv run --directory bot python -m <PREPROCESS_CMD>
+    # preprocess の exit code を check して、 失敗時は train に進まず onstart fail。
+    # case7 iter2 (epoch=50) で sanity check が val parquet の reshape 失敗を
+    # 検出して RuntimeError を raise したが、 onstart は exit code を見ずに
+    # train に進んで再度同じエラーで死亡 ($1.10 損失) のため。
+    if ! uv run --directory bot python -m <PREPROCESS_CMD>; then
+      echo "[onstart] step=preprocess FAILED (exit code != 0)" >&2
+      mark "55_preprocess_failed"
+      exit 1
+    fi
     PREPROCESS_RAN=1
   fi
 fi

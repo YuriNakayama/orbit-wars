@@ -120,6 +120,26 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case5/policy/weights.pt",
     },
+    "case6": {
+        "stage": "train_imitation_case6",
+        "train_module": "pipeline.imitation.case6.training.train",
+        "config_arg": "--config pipeline/imitation/case6/configs/il_case6.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case6.training.preprocess "
+            "--config pipeline/imitation/case6/configs/il_case6.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case6/policy/weights.pt",
+    },
+    "case7": {
+        "stage": "train_imitation_case7",
+        "train_module": "pipeline.imitation.case7.training.train",
+        "config_arg": "--config pipeline/imitation/case7/configs/il_case7.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case7.training.preprocess "
+            "--config pipeline/imitation/case7/configs/il_case7.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case7/policy/weights.pt",
+    },
     "case8": {
         "stage": "train_imitation_case8",
         "train_module": "pipeline.imitation.case8.training.train",

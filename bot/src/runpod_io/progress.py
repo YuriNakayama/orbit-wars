@@ -5,23 +5,24 @@
 形式の空オブジェクトを各ステップで書き出している。本モジュールはそれを
 `boto3 s3.list_objects_v2` で列挙し、`ProgressMarker` のリストに整形する。
 
-加えて Python 学習プロセス側からも `mark_progress(run_id, step, payload?)` で
-同形式のマーカーを書ける (例: epoch 単位の `train.epoch` ログ)。
+加えて Pod 内の Python (case5/case6/case8 の preprocess.py / train.py) からも
+`mark_progress(run_id, step, payload?)` を呼ぶことで、同じ S3 prefix に
+JSON payload 付きの marker を書ける (例: epoch 単位の `train.epoch` ログ)。
 """
 
 from __future__ import annotations
 
-import datetime as _dt
-import json as _json
-import logging as _logging
-import os as _os
+import json
+import logging
+import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import boto3
 
-_logger = _logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 PROGRESS_BUCKET = "orbit-wars-dvc-286854171013"
 # IAM の dvc-user は `remote/*` 配下にしか PutObject 権限を持たないので、
@@ -89,31 +90,39 @@ def mark_progress(
     prefix: str = PROGRESS_PREFIX,
     s3_client: Any | None = None,
 ) -> None:
-    """Python 側から S3 progress marker を書き出す (onstart の `mark()` 互換)。
+    """Pod 内 Python から S3 に進捗 marker を書く (best-effort、失敗は warning)。
 
-    Key 形式: `<prefix>/<run_id>/<ISO8601 UTC>_<step>`。本体は payload が
-    あれば JSON、無ければ空 (bash 版と同じ)。AWS env / boto creds が無ければ
-    sileent skip (local / test).
+    onstart.sh.tmpl の `mark()` と同じ key 命名規則
+    (`<prefix>/<run_id>/<TS>_<step>`) で `<payload>` を JSON body として put。
+    payload が None の場合は空 body (numeric marker と同等)。
+
+    認証は IAM role / 環境変数 (RunPod pod 上では AWS_ACCESS_KEY_ID 等で渡す)。
+    profile を渡したい場合は呼び出し側で `s3_client` を渡す。
     """
-    if not run_id or not step:
-        return
-    timestamp = _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    key = f"{prefix}/{run_id}/{timestamp}_{step}"
     if s3_client is None:
-        access_key = _os.environ.get("AWS_ACCESS_KEY_ID")
-        if not access_key:
-            _logger.debug("mark_progress skipped: no AWS_ACCESS_KEY_ID env")
-            return
-        try:
-            s3_client = _build_s3_client()
-        except Exception as exc:  # pragma: no cover - boto wiring varies
-            _logger.warning("mark_progress: failed to build s3 client: %s", exc)
-            return
-    body = _json.dumps(payload).encode() if payload else b""
+        s3_client = boto3.client("s3")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = f"{prefix}/{run_id}/{timestamp}_{step}"
+    body: bytes
+    if payload is None:
+        body = b""
+    else:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     try:
         s3_client.put_object(Bucket=bucket, Key=key, Body=body)
-    except Exception as exc:  # pragma: no cover - non-fatal logging path
-        _logger.warning("mark_progress put_object failed for %s: %s", key, exc)
+    except Exception as exc:  # noqa: BLE001 — best-effort marker
+        logger.warning("mark_progress failed run_id=%s step=%s: %s", run_id, step, exc)
+
+
+def get_run_id() -> str | None:
+    """RunPod pod 上で onstart が export した run_id を取得する補助。
+
+    train.py は `ORBIT_WARS_RUN_ID` を env で受ける (onstart 側が
+    `ORBIT_WARS_RUN_ID="<RUN_ID>"` 付きで `python -m ...train` を起動)。
+    ローカル開発で env 未設定なら None。呼び出し側は None なら
+    `mark_progress` を no-op にすればよい。
+    """
+    return os.environ.get("ORBIT_WARS_RUN_ID")
 
 
 @dataclass(frozen=True)
