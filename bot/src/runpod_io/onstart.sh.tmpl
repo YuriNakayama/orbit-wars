@@ -458,6 +458,26 @@ else
     mark "45_dvc_pull_kaggle_failed"
     exit 1
   fi
+  # iter15 fix (case9 retry3 2026-05-06 12:00): `dvc pull --allow-missing` は
+  # graph 解析で衝突 (case8 outs vs .dvc 重複) を検出すると case9 parquet を
+  # "hash info not found" の WARNING で skip して exit 0 になる。 case9 parquet
+  # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
+  # を **--allow-missing の前** に 1 段追加する (--allow-missing 後に置くと
+  # block 自体に到達しない事故が retry3 で発生)。
+  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//')
+  CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
+  echo "[onstart] iter15 targeted pull: case='<CASE>' subdir='${CASE_SUBDIR}' dir='${CASE_MART_DIR}'"
+  ls -la "${CASE_MART_DIR}/" 2>&1 | head -10
+  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
+     && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
+    echo "[onstart] dvc pull TARGETED (iter15): ${CASE_MART_DIR}/{train,val}.parquet.dvc"
+    ${DVC_BIN} pull --force \
+      "${CASE_MART_DIR}/train.parquet.dvc" \
+      "${CASE_MART_DIR}/val.parquet.dvc" 2>&1 | tail -30
+    echo "[onstart] iter15 targeted pull exit=$?"
+  else
+    echo "[onstart] iter15 targeted pull SKIP: case .dvc files not found" >&2
+  fi
   # --allow-missing: dvc.yaml stage の outs が S3 にまだ無い (= 未学習の case の
   # weights.pt などが orphan stub として残っている) ケースで FAIL せず WARNING に
   # 降格させる。
@@ -470,21 +490,6 @@ else
     echo "[onstart] dvc pull (full) FAILED" >&2
     mark "45_dvc_pull_full_failed"
     exit 1
-  fi
-  # iter14 fix (case9 retry2 2026-05-06 11:50): `dvc pull --allow-missing` は
-  # graph 解析で衝突 (case8 outs vs .dvc 重複) を検出すると case9 parquet を
-  # "hash info not found" の WARNING で skip して exit 0 になる。 case9 parquet
-  # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
-  # を 1 段追加する。
-  CASE_SUBDIR="$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//')"
-  CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
-  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
-     && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
-    echo "[onstart] dvc pull TARGETED: ${CASE_MART_DIR}/{train,val}.parquet.dvc"
-    ${DVC_BIN} pull --force \
-      "${CASE_MART_DIR}/train.parquet.dvc" \
-      "${CASE_MART_DIR}/val.parquet.dvc" \
-      || echo "[onstart] targeted dvc pull WARN (continuing)" >&2
   fi
 fi
 
