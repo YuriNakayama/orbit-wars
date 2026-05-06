@@ -305,6 +305,14 @@ if [ -d /persist ]; then
   if [ -L data/mart/imitation ]; then
     : # already linked
   elif [ -d data/mart/imitation ]; then
+    # iter16 fix (case9 retry4 2026-05-06 12:04): git clone で復元される
+    # case 別の .dvc ファイル (`data/mart/imitation/<case>/{train,val}.parquet.dvc`)
+    # を rm -rf で消す前に /persist 側へ copy 退避する。 過去 cases (case3/4/8)
+    # は preprocess を pod 内部で走らせるので .dvc を不要にしていたが、 case9 は
+    # preprocess を local で済ませ、 mart parquet は dvc pull で取りにいく形。
+    # そのため .dvc ファイルが symlink target に存在することが必須。
+    cp -an data/mart/imitation/. /persist/data-mart-imitation/ 2>/dev/null \
+      || echo "[onstart] mart .dvc copy failed (non-fatal)" >&2
     rm -rf data/mart/imitation
     ln -sfn /persist/data-mart-imitation data/mart/imitation
   else
