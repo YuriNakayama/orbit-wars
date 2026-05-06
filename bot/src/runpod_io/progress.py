@@ -4,15 +4,24 @@
 `s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>/<TIMESTAMP>_<STEP>`
 形式の空オブジェクトを各ステップで書き出している。本モジュールはそれを
 `boto3 s3.list_objects_v2` で列挙し、`ProgressMarker` のリストに整形する。
+
+Pod 内の Python (case5/case6 の preprocess.py / train.py) からは `mark_progress`
+を呼ぶことで、同じ S3 prefix に JSON payload 付きの marker を書ける。
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import boto3
+
+logger = logging.getLogger(__name__)
 
 PROGRESS_BUCKET = "orbit-wars-dvc-286854171013"
 # IAM の dvc-user は `remote/*` 配下にしか PutObject 権限を持たないので、
@@ -69,6 +78,50 @@ def latest_step(markers: list[ProgressMarker]) -> ProgressMarker | None:
     if not markers:
         return None
     return markers[-1]
+
+
+def mark_progress(
+    run_id: str,
+    step: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = PROGRESS_PREFIX,
+    s3_client: Any | None = None,
+) -> None:
+    """Pod 内 Python から S3 に進捗 marker を書く (best-effort、失敗は warning)。
+
+    onstart.sh.tmpl の `mark()` と同じ key 命名規則
+    (`<prefix>/<run_id>/<TS>_<step>`) で `<payload>` を JSON body として put。
+    payload が None の場合は空 body (numeric marker と同等)。
+
+    認証は IAM role / 環境変数 (RunPod pod 上では AWS_ACCESS_KEY_ID 等で渡す)。
+    profile を渡したい場合は呼び出し側で `s3_client` を渡す。
+    """
+    if s3_client is None:
+        s3_client = boto3.client("s3")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = f"{prefix}/{run_id}/{timestamp}_{step}"
+    body: bytes
+    if payload is None:
+        body = b""
+    else:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        s3_client.put_object(Bucket=bucket, Key=key, Body=body)
+    except Exception as exc:  # noqa: BLE001 — best-effort marker
+        logger.warning("mark_progress failed run_id=%s step=%s: %s", run_id, step, exc)
+
+
+def get_run_id() -> str | None:
+    """RunPod pod 上で onstart が export した run_id を取得する補助。
+
+    train.py は `ORBIT_WARS_RUN_ID` を env で受ける (onstart 側が
+    `ORBIT_WARS_RUN_ID="<RUN_ID>"` 付きで `python -m ...train` を起動)。
+    ローカル開発で env 未設定なら None。呼び出し側は None なら
+    `mark_progress` を no-op にすればよい。
+    """
+    return os.environ.get("ORBIT_WARS_RUN_ID")
 
 
 @dataclass(frozen=True)
