@@ -9,6 +9,7 @@ Kaggle sub-app (`python -m dataset kaggle ...`):
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -213,6 +214,92 @@ def _render_scrape_summary(result: scraper.ScrapeResult) -> None:
     table.add_row("replays_written", str(result.replays_written))
     table.add_row("dry_run", str(result.dry_run))
     console.print(table)
+
+
+@kaggle_app.command("scrape-plan")
+def kaggle_scrape_plan(
+    plan_out: Path = typer.Option(
+        ..., "--plan-out", help="Path to write the plan JSON (run_id + planned)."
+    ),
+    top: int = typer.Option(20, "--top", help="Leaderboard top N teams."),
+    modes: str = typer.Option("1v1,ffa4", "--modes", help="Comma-separated modes."),
+    limit_per_team: int | None = typer.Option(
+        None, "--limit-per-team", help="Max episodes per team (None=all)."
+    ),
+    include_failed: bool = typer.Option(
+        False, "--include-failed", help="Include ERROR/INVALID episodes."
+    ),
+    data_root: Path = typer.Option(
+        DEFAULT_KAGGLE_ROOT, "--data-root", help="Root directory for output."
+    ),
+) -> None:
+    """Phase 1 (plan) のみ実行し JSON を出力。fetch は scrape-fetch で行う。"""
+
+    _configure_logging()
+    spec = ScrapeSpec(
+        top=top,
+        modes=_parse_modes(modes),
+        limit_per_team=limit_per_team,
+        data_root=data_root,
+        dry_run=False,
+        include_failed=include_failed,
+    )
+    result, plan = scraper.plan_only(spec)
+    plan_out.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": result.run_id,
+        "spec": {
+            "top": spec.top,
+            "modes": list(spec.modes),
+            "limit_per_team": spec.limit_per_team,
+            "data_root": str(spec.data_root),
+            "include_failed": spec.include_failed,
+        },
+        "plan": scraper.serialize_plan(plan),
+    }
+    plan_out.write_text(json.dumps(payload), encoding="utf-8")
+    _render_scrape_summary(result)
+    console.print(f"[green]plan written to {plan_out}[/green]")
+
+
+@kaggle_app.command("scrape-fetch")
+def kaggle_scrape_fetch(
+    plan_in: Path = typer.Option(
+        ..., "--plan-in", help="Plan JSON written by scrape-plan."
+    ),
+    data_root: Path = typer.Option(
+        DEFAULT_KAGGLE_ROOT, "--data-root", help="Root directory for output."
+    ),
+    dvc_add: bool = typer.Option(
+        False,
+        "--dvc-add/--no-dvc-add",
+        help="Run `dvc add <data_root>/matches` after persisting.",
+    ),
+    progress_every: int = typer.Option(
+        10, "--progress-every", help="Log every N fetched episodes."
+    ),
+) -> None:
+    """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
+
+    _configure_logging()
+    payload = json.loads(plan_in.read_text(encoding="utf-8"))
+    plan_data = payload["plan"]
+    spec_data = payload["spec"]
+    spec = ScrapeSpec(
+        top=int(spec_data["top"]),
+        modes=tuple(spec_data["modes"]),
+        limit_per_team=spec_data.get("limit_per_team"),
+        data_root=data_root,
+        dry_run=False,
+        include_failed=bool(spec_data.get("include_failed", False)),
+    )
+    plan = scraper.deserialize_plan(plan_data)
+    result = scraper.fetch_with_plan(
+        spec, plan, run_id=str(payload["run_id"]), progress_every=progress_every
+    )
+    _render_scrape_summary(result)
+    if dvc_add and result.records_written > 0:
+        _dvc_add_matches(data_root)
 
 
 @kaggle_app.command("scrape")

@@ -306,6 +306,94 @@ def test_run_logs_phase_progress(
     assert any("phase=fetch [3/3]" in m for m in msgs)
 
 
+def test_plan_only_emits_plan_without_fetching(tmp_path: Path) -> None:
+    """`plan_only` は replay を呼ばず planned を ScrapeResult に反映する。"""
+
+    spec = _make_spec(tmp_path)
+    fetcher_calls: list[int] = []
+
+    def _replay_fetcher(_s: Any, eid: int) -> dict[str, Any]:
+        fetcher_calls.append(eid)
+        return _replay_response(eid)
+
+    result, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(1), _episode(2)]),
+    )
+    assert len(plan) == 2
+    assert result.episodes_planned == 2
+    assert result.episodes_fetched == 0
+    assert fetcher_calls == []
+
+
+def test_serialize_round_trip_preserves_plan(tmp_path: Path) -> None:
+    spec = _make_spec(tmp_path)
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(1)]),
+    )
+    payload = scraper.serialize_plan(plan)
+    restored = scraper.deserialize_plan(payload)
+    assert [p.episode_id for p in restored] == [p.episode_id for p in plan]
+
+
+def test_fetch_with_plan_persists_records(tmp_path: Path) -> None:
+    spec = _make_spec(tmp_path)
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(1), _episode(2)]),
+    )
+    result = scraper.fetch_with_plan(
+        spec,
+        plan,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        replay_fetcher=lambda _s, eid: _replay_response(eid),
+        run_id="rid",
+    )
+    assert result.episodes_fetched == 2
+    assert result.records_written == 2
+    assert result.episodes_planned == 2
+
+
+def test_fetch_logs_eta_and_percent(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    spec = _make_spec(tmp_path)
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(eid) for eid in (1, 2)]),
+    )
+    with caplog.at_level("INFO", logger="dataset.kaggle.scraper"):
+        scraper.fetch_with_plan(
+            spec,
+            plan,
+            session=MagicMock(),
+            rate_limit=_fast_bucket(),
+            replay_fetcher=lambda _s, eid: _replay_response(eid),
+            run_id="rid",
+            progress_every=1,
+        )
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("phase=fetch [1/2]" in m and "%" in m and "eta=" in m for m in msgs)
+
+
 def test_run_no_plan_no_fetch(tmp_path: Path) -> None:
     """既取得 episode のみの場合 fetch が走らずも fetched=0。"""
 

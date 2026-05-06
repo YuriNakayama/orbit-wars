@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import gzip
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
@@ -229,6 +230,7 @@ def _plan(
         len(seen_ids),
     )
     plan: list[_PlannedEpisode] = []
+    started = time.monotonic()
 
     for team_idx, team in enumerate(teams, start=1):
         acc.teams_scanned += 1
@@ -278,15 +280,21 @@ def _plan(
             )
             planned_for_team += 1
 
+        elapsed = time.monotonic() - started
+        pct = 100.0 * team_idx / total_teams if total_teams else 0.0
+        eta_sec = elapsed * (total_teams - team_idx) / team_idx if team_idx > 0 else 0.0
         logger.info(
-            "scrape phase=plan team=[%d/%d] team_id=%d "
-            "listed=%d planned=%d cumulative=%d",
+            "scrape phase=plan team=[%d/%d] %.1f%% team_id=%d "
+            "listed=%d planned=%d cumulative=%d elapsed=%ds eta=%s",
             team_idx,
             total_teams,
+            pct,
             team.team_id,
             len(episodes),
             planned_for_team,
             len(plan),
+            int(elapsed),
+            _format_eta(eta_sec),
         )
 
     logger.info(
@@ -299,6 +307,13 @@ def _plan(
         acc.episodes_skipped_mode,
     )
     return plan
+
+
+def _format_eta(seconds: float) -> str:
+    if seconds <= 0 or seconds != seconds:  # NaN
+        return "-"
+    eta = datetime.now(tz=UTC) + timedelta(seconds=seconds)
+    return f"{int(seconds)}s ({eta.strftime('%H:%M:%S')}Z)"
 
 
 def _fetch_all(
@@ -318,6 +333,7 @@ def _fetch_all(
         logger.info("scrape phase=fetch nothing to download")
         return
     logger.info("scrape phase=fetch total=%d", total)
+    started = time.monotonic()
     for idx, planned in enumerate(plan, start=1):
         _fetch_planned_episode(
             session=session,
@@ -330,13 +346,169 @@ def _fetch_all(
             seen_ids=seen_ids,
         )
         if idx == total or idx % progress_every == 0:
+            elapsed = time.monotonic() - started
+            pct = 100.0 * idx / total
+            eta_sec = elapsed * (total - idx) / idx if idx > 0 else 0.0
             logger.info(
-                "scrape phase=fetch [%d/%d] fetched=%d failed=%d",
+                "scrape phase=fetch [%d/%d] %.1f%% fetched=%d failed=%d "
+                "elapsed=%ds eta=%s",
                 idx,
                 total,
+                pct,
                 acc.episodes_fetched,
                 acc.episodes_failed,
+                int(elapsed),
+                _format_eta(eta_sec),
             )
+
+
+def plan_only(
+    spec: ScrapeSpec,
+    *,
+    session: requests.Session | None = None,
+    rate_limit: TokenBucket | None = None,
+    leaderboard_fetcher: LeaderboardFetcher | None = None,
+    team_fetcher: TeamFetcher | None = None,
+    episodes_lister: EpisodesLister | None = None,
+    run_id: str | None = None,
+) -> tuple[ScrapeResult, list[_PlannedEpisode]]:
+    """Phase 1 のみ実行。確定 plan と途中 ScrapeResult (planned 件数まで) を返す。"""
+
+    if spec.top <= 0:
+        raise ValueError(f"spec.top must be positive, got {spec.top}")
+    if not spec.modes:
+        raise ValueError("spec.modes must be non-empty")
+
+    owns_session = session is None
+    session = session or client.build_session()
+    rate_limit = rate_limit or _default_rate_limit()
+    leaderboard_fetcher = leaderboard_fetcher or leaderboard.fetch
+    team_fetcher = team_fetcher or client.get_team
+    episodes_lister = episodes_lister or client.list_episodes_for_submission
+    run_id = run_id or f"kaggle_{uuid.uuid4().hex[:8]}"
+
+    seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
+    acc = _Accumulator()
+    try:
+        plan = _plan(
+            session=session,
+            spec=spec,
+            seen_ids=seen_ids,
+            acc=acc,
+            rate_limit=rate_limit,
+            leaderboard_fetcher=leaderboard_fetcher,
+            team_fetcher=team_fetcher,
+            episodes_lister=episodes_lister,
+        )
+    finally:
+        if owns_session:
+            session.close()
+
+    result = ScrapeResult(
+        run_id=run_id,
+        teams_scanned=acc.teams_scanned,
+        teams_without_submission=acc.teams_without_submission,
+        episodes_considered=acc.episodes_considered,
+        episodes_skipped_existing=acc.episodes_skipped_existing,
+        episodes_skipped_failed=acc.episodes_skipped_failed,
+        episodes_skipped_mode=acc.episodes_skipped_mode,
+        episodes_planned=len(plan),
+        episodes_fetched=0,
+        episodes_failed=acc.episodes_failed,
+        records_written=0,
+        replays_written=0,
+        dry_run=spec.dry_run,
+    )
+    return result, plan
+
+
+def fetch_with_plan(
+    spec: ScrapeSpec,
+    plan: list[_PlannedEpisode],
+    *,
+    session: requests.Session | None = None,
+    rate_limit: TokenBucket | None = None,
+    replay_fetcher: ReplayFetcher | None = None,
+    run_id: str,
+    progress_every: int = 10,
+) -> ScrapeResult:
+    """Phase 1 で確定した plan を受け取り Phase 2 のみ実行する。"""
+
+    if not spec.modes:
+        raise ValueError("spec.modes must be non-empty")
+    if progress_every <= 0:
+        raise ValueError(f"progress_every must be positive, got {progress_every}")
+
+    owns_session = session is None
+    session = session or client.build_session()
+    rate_limit = rate_limit or _default_rate_limit()
+    replay_fetcher = replay_fetcher or client.get_episode_replay
+
+    seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
+    acc = _Accumulator()
+    try:
+        _fetch_all(
+            session=session,
+            spec=spec,
+            plan=plan,
+            seen_ids=seen_ids,
+            acc=acc,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+            progress_every=progress_every,
+        )
+        records_written, replays_written = _flush(acc, spec)
+    except KeyboardInterrupt:
+        records_written, replays_written = _flush(acc, spec)
+        raise
+    finally:
+        if owns_session:
+            session.close()
+
+    return ScrapeResult(
+        run_id=run_id,
+        teams_scanned=0,
+        teams_without_submission=0,
+        episodes_considered=len(plan),
+        episodes_skipped_existing=0,
+        episodes_skipped_failed=0,
+        episodes_skipped_mode=0,
+        episodes_planned=len(plan),
+        episodes_fetched=acc.episodes_fetched,
+        episodes_failed=acc.episodes_failed,
+        records_written=records_written,
+        replays_written=replays_written,
+        dry_run=spec.dry_run,
+    )
+
+
+def serialize_plan(plan: list[_PlannedEpisode]) -> list[dict[str, Any]]:
+    """JSON 化可能な plan 表現。`save_plan` / `load_plan` で永続化に使う。"""
+
+    return [
+        {
+            "episode_id": p.episode_id,
+            "raw": p.raw,
+            "team_id_by_submission": {
+                str(k): v for k, v in p.team_id_by_submission.items()
+            },
+        }
+        for p in plan
+    ]
+
+
+def deserialize_plan(payload: list[dict[str, Any]]) -> list[_PlannedEpisode]:
+    return [
+        _PlannedEpisode(
+            episode_id=int(item["episode_id"]),
+            raw=item["raw"],
+            team_id_by_submission={
+                int(k): int(v) for k, v in item["team_id_by_submission"].items()
+            },
+        )
+        for item in payload
+    ]
 
 
 def run(

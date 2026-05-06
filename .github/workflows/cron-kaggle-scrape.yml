@@ -62,19 +62,26 @@ jobs:
         # 探してしまうため (`workspace not found` + `matches.dvc does not exist`) NG。
         run: uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc
 
-      - name: Scrape kaggle episodes
+      - name: Scrape phase 1 (plan)
         run: |
           # SCRAPE_LIMIT_PER_TEAM=0 → omit the flag so the CLI default (None=all) applies.
           limit_args=()
           if [ "${SCRAPE_LIMIT_PER_TEAM}" -gt 0 ]; then
             limit_args=(--limit-per-team "${SCRAPE_LIMIT_PER_TEAM}")
           fi
-          uv run --project bot python -m dataset kaggle scrape \
+          uv run --project bot python -m dataset kaggle scrape-plan \
+            --plan-out /tmp/scrape_plan.json \
             --top "${SCRAPE_TOP}" \
             --modes "${SCRAPE_MODES}" \
             "${limit_args[@]}" \
+            2>&1 | tee /tmp/scrape_plan.log
+
+      - name: Scrape phase 2 (fetch)
+        run: |
+          uv run --project bot python -m dataset kaggle scrape-fetch \
+            --plan-in /tmp/scrape_plan.json \
             --dvc-add \
-            2>&1 | tee /tmp/scrape.log
+            2>&1 | tee /tmp/scrape_fetch.log
 
       - name: Detect data changes
         id: diff
@@ -109,11 +116,14 @@ jobs:
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           labels: data-refresh
 
-      - name: Upload scrape log
+      - name: Upload scrape logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kaggle-scrape-log
-          path: /tmp/scrape.log
+          path: |
+            /tmp/scrape_plan.log
+            /tmp/scrape_fetch.log
+            /tmp/scrape_plan.json
           if-no-files-found: ignore
           retention-days: 30
