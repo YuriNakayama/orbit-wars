@@ -1,10 +1,4 @@
-"""Evaluate il_v1 (imitation/case8) vs baseline_v1 (rulebase/case1) over N episodes.
-
-Params are read from repo-root `params.yaml` (`evaluation.*`).
-CLI flags (`--episodes`, `--seed`, `--out`, `--label`) override params for ad-hoc runs.
-
-Wilson CI summarization lives in `src/evaluation/vs_baseline.py`.
-"""
+"""Evaluate il_v8 (imitation/case8) vs baseline_v1 (rulebase/case1) over N episodes."""
 
 from __future__ import annotations
 
@@ -14,15 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import typer
-import yaml
 
 from dataset.selfplay.runner import RunSpec, run_episodes
 from evaluation.vs_baseline import summarize_records
-from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
 
-CHALLENGER = "il_v7"
+CHALLENGER = "il_v8"
 BASELINE = "baseline_v1"
 
 app = typer.Typer(
@@ -31,48 +23,20 @@ app = typer.Typer(
 )
 
 
-def _abspath(rel: str | Path) -> Path:
-    return absolute_under_repo(rel, start=Path(__file__))
-
-
-def _load_params() -> dict[str, Any]:
-    # case5 は params.yaml ではなく configs/il_case8.yaml を参照する。
-    cfg_path = (
-        find_repo_root(Path(__file__))
-        / "bot/pipeline/imitation/case8/configs/il_case8.yaml"
-    )
-    with cfg_path.open() as f:
-        loaded = yaml.safe_load(f)
-    assert isinstance(loaded, dict), f"{cfg_path} must be a mapping"
-    return loaded
-
-
 @app.command()
 def main(
-    episodes: int | None = typer.Option(None, "--episodes", "-n"),
+    episodes: int = typer.Option(30, "--episodes", "-n"),
     mode: str = typer.Option("1v1", "--mode"),
-    seed: int | None = typer.Option(None, "--seed"),
+    seed: int = typer.Option(0, "--seed"),
     parallel: int = typer.Option(1, "--parallel", "-p"),
-    data_root: Path = typer.Option(Path("data"), "--data-root"),
-    out: Path | None = typer.Option(None, "--out"),
-    label: str = typer.Option(
-        "", "--label", help="Free-form tag (e.g. iter10) recorded in the JSON"
+    data_root: Path = typer.Option(Path("data"), "--data-root"),  # noqa: B008
+    out: Path = typer.Option(  # noqa: B008
+        Path("pipeline/imitation/case8/evaluation/results.json"), "--out"
     ),
+    label: str = typer.Option("", "--label", help="Free-form tag recorded in the JSON"),
 ) -> None:
     if mode != "1v1":
         raise typer.BadParameter("only 1v1 supported in this entry point")
-    cfg = _load_params()
-    eval_cfg = cfg.get("evaluation", {})
-    episodes = int(episodes if episodes is not None else eval_cfg.get("episodes", 100))
-    seed = int(seed if seed is not None else eval_cfg.get("seed", 0))
-    out_path = (
-        _abspath(out)
-        if out is not None
-        else _abspath(
-            eval_cfg.get("metrics_out", "data/mart/imitation/case8/eval_metrics.json")
-        )
-    )
-
     agents = (CHALLENGER, BASELINE)
     spec = RunSpec(
         agents=agents,
@@ -92,8 +56,8 @@ def main(
     summary["seed_end_exclusive"] = float(seed + episodes)
     if label:
         summary["label"] = label
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(summary, indent=2, default=str))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(summary, indent=2, default=str))
     logger.info("vs-baseline result: %s", json.dumps(summary, default=str))
 
 

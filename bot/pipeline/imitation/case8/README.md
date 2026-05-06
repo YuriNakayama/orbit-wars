@@ -1,114 +1,115 @@
-# Imitation Case1 — Imitation Learning Baseline
+# Imitation Case4 — Kaggle tutorial-style candidate head (BC)
 
-過去の Kaggle 上位リプレイ (`data/lake/kaggle_episodes/matches/`) からの **行動クローニング (BC)** で
-動く PyTorch エージェント。`pipeline/rulebase/case1` (rule-based) との 1v1 勝率 ≥ 50% を目標とする。
+`pipeline/imitation/case3` の Graph U-Net バックボーンと history feature 群を
+そのまま受け継ぎ、出力 head を Kaggle ノートブック
+[`kashiwaba/orbit-wars-reinforcement-learning-tutorial`](https://www.kaggle.com/code/kashiwaba/orbit-wars-reinforcement-learning-tutorial)
+に倣った **per-source × candidate categorical** に差し替えた模倣学習エージェント。
 
-設計詳細は [`docs/plans/imitation-learning-baseline/`](../../../docs/plans/imitation-learning-baseline/) を参照。
+## case3 からの差分
+
+| カテゴリ | case3 | case8 |
+|---|---|---|
+| Backbone | Graph U-Net (kNN k=8, hidden=128, TopK pool 3 段) | **完全同一** |
+| `PLANET_FEAT_DIM` | 35 | 35 (変更なし) |
+| `GLOBAL_FEAT_DIM` | 20 | 20 (変更なし) |
+| Per-source context | `template_ctx` (40 dim) | **`candidate_feats` (K=8 × 14 dim)** |
+| `from_head` | per-planet sigmoid (P,) | **削除** (slot 0 で no-op 表現) |
+| `target_head` | per-planet × NUM_TEMPLATES=8 | **削除** |
+| `ships_head` | per-planet × 4 buckets | **削除** (rule-based) |
+| `candidate_head` | — | **新設**: per-source K=8 categorical |
+| Ships rule | learned (4 buckets) | `max(target.ships+1, 20)` (notebook 流) |
+
+## Action / observation 設計
+
+ノートブックの per-source × K candidate 構造を BC で再現:
+
+- `target_index = 0` → no-op (この惑星は撃たない)
+- `target_index = 1..K-1` → 候補スロット (距離順 enemy / neutral / friendly bucket)
+
+候補ビルダーは `policy/candidates.py` 参照: enemy_quota = neutral_quota = ⌊(K-1)/3⌋,
+残りは friendly。足りなければ近距離順 fallback。
+
+per-candidate 14 次元 (notebook と同形):
+
+| idx | 名前 | 概要 |
+|---|---|---|
+| 0 | `is_valid` | スロットが populated か |
+| 1..3 | `is_neutral / is_mine / is_enemy` | 候補の所有者 1-hot |
+| 4..5 | `tgt.x, tgt.y` | (board_size 正規化) |
+| 6..7 | `dx, dy` | src→target 相対座標 |
+| 8 | `dist` | src→target 距離 (board_size 正規化) |
+| 9 | `tgt.ships` | (max_ships=400 正規化) |
+| 10 | `tgt.production` | (max=5 正規化) |
+| 11 | `tgt_is_rotating` | 軌道惑星か |
+| 12 | **`crosses_sun`** | src→target 直線が sun に被るか (case3 にない新シグナル) |
+| 13 | `src.ships` | reference signal |
+
+slot 0 (no-op) は `is_valid=1.0` 以外 0.0。
+
+`candidate_mask`: slot 0 = 常に True。slot 1..K-1 は
+`ships_needed > 0 AND not crosses_sun AND src.ships >= ships_needed` で True。
+無効 slot は logit を `-inf` でマスクする。
 
 ## ディレクトリ構成
 
 ```
 pipeline/imitation/case8/
-├── main.py                  # Kaggle entry (Path.cwd() ベース)
-├── policy/                  # 提出物
-│   ├── agent.py             # agent(obs) エントリ
-│   ├── featurizer.py        # obs → torch.Tensor
-│   ├── model.py             # DeepSets policy
-│   ├── decoder.py           # PolicyOutput → action list
-│   ├── geometry.py          # aim_with_prediction (独立コピー)
-│   └── weights.pt           # 学習済み重み (DVC 管理、git untracked)
+├── main.py                  # Kaggle entry (sys.path.insert(0, str(Path.cwd())))
+├── policy/
+│   ├── agent.py             # agent(obs) — HistoryState を per-match 保持
+│   ├── candidates.py        # build_candidates / candidate_features (notebook 流)
+│   ├── featurizer.py        # planet 35 / global 20 / candidate 8x14
+│   ├── geometry.py          # aim_with_prediction (case3 から独立コピー)
+│   ├── decoder.py           # candidate_logits → action list (rule-based ships)
+│   ├── model.py             # Graph U-Net + per-source candidate head
+│   ├── types.py             # BatchFeatures / PolicyOutput / WorldSnapshot
+│   └── weights.pt           # 学習済み重み (training 後生成)
 ├── training/                # 開発用 (.submitignore)
-│   ├── preprocess.py        # replay → parquet
-│   ├── dataset.py           # torch Dataset
-│   ├── train.py             # BC 学習ループ
-│   └── losses.py            # 3-head CE loss
-└── evaluation/              # 開発用 (.submitignore)
-    └── eval_vs_baseline.py
+│   ├── preprocess.py
+│   ├── dataset.py
+│   ├── losses.py
+│   └── train.py
+├── evaluation/              # 開発用 (.submitignore)
+│   └── eval_vs_baseline.py
+└── configs/                 # 開発用 (.submitignore)
+    └── il_case8.yaml
 ```
-
-ハイパーパラメータはリポジトリルートの `params.yaml` に集約されており、
-CLI は `--config` 引数を持たず常に `params.yaml` を読みます。
 
 ## 手順
 
-### DVC 経由 (推奨)
-
 ```bash
-# 全 pipeline を依存グラフで再実行（data/weights が最新なら skip）
-uv run --directory backend dvc repro
-
-# 単一 stage のみ
-uv run --directory backend dvc repro preprocess_imitation_case1
-uv run --directory backend dvc repro train_imitation_case1
-uv run --directory backend dvc repro eval_imitation_case1
-```
-
-### 直接実行
-
-```bash
-cd backend
-
 # 1) データ前処理 (replay → parquet)
-uv run python -m pipeline.imitation.case8.training.preprocess
+uv run --directory backend python -m pipeline.imitation.case8.training.preprocess \
+    --config pipeline/imitation/case8/configs/il_case8.yaml
 
-# 2) 学習 (BC) — weights.pt を上書き
-uv run python -m pipeline.imitation.case8.training.train
+# 2) 学習 (BC, ローカル)
+uv run --directory backend python -m pipeline.imitation.case8.training.train \
+    --config pipeline/imitation/case8/configs/il_case8.yaml
 
-# 3) ローカル評価 (vs rulebase/case1 baseline_v1, 100 戦)
-uv run python -m pipeline.imitation.case8.evaluation.eval_vs_baseline --episodes 100 --seed 0
-```
-
-パラメータを変更したい場合はリポジトリルートの `params.yaml` を編集します。
-
-### Vast.ai 経由 (GPU 学習、ローカルから直接起動)
-
-```bash
+# 2') GPU 学習 (Vast.ai)
 git push origin <branch>
-dev/vast train <commit-sha>            # search offers → pick → onstart 起動
-dev/vast pull <run_id>                 # 完了後にローカル取得
-dev/vast promote <run_id>              # 採用なら canonical weights に昇格
+dev/vast train <commit-sha> --case case8 --stage train_imitation_case8
+
+# 3) ローカル評価 (vs rulebase/case1 baseline_v1)
+uv run --directory backend python -m pipeline.imitation.case8.evaluation.eval_vs_baseline \
+    --episodes 30 --seed 0
 ```
 
-`train.py` は `ORBIT_WARS_RUN_DIR` env が指定されているとき、その下に `best.pt`、
-`metrics.json`、`run.json` を出力する設計です（canonical `policy/weights.pt` は
-`dev/vast promote` を経由しないと更新されません）。詳細は
-[`docs/plans/vast-ai-basis/`](../../../../docs/plans/vast-ai-basis/) を参照。
+## レジストリ
 
-## テスト
+`src/dataset/selfplay/agents.py` に `il_v8` として登録:
 
-```bash
-uv run pytest tests/pipeline/imitation/case8 -v -m "not slow"
-uv run pytest tests/pipeline/imitation/case8 -v   # determinism 含む
+```python
+"il_v8": "pipeline.imitation.case8.policy.agent:agent",
 ```
 
 ## 設計原則
 
-- **case 間独立**: `pipeline/imitation/case8/` は `pipeline/rulebase/case[012]/` に依存しない / されない。
-- **Action 表現**: `(from_planet 分類, target_planet 分類, ships_bucket 分類)` の 3 ヘッド。
-  `angle` は `aim_with_prediction()` で決定論的に再構成。
-- **推論**: greedy argmax + 有効ターゲットマスク + from_threshold で no-op 判定。
-- **モデル**: DeepSets (惑星集合の順不同 invariant), hidden=64, weights < 1MB。
-
-## 評価結果 (2026-04-19)
-
-旧 baseline (10 epoch) は `il_v1` vs `baseline_v1` で win_rate 0.00。
-診断書 [`docs/experiment/imitation/20260419_case1_diagnosis/result.md`](../../../docs/experiment/imitation/20260419_case1_diagnosis/result.md)
-の Bug 1/3/4 + 追加バグを以下のとおり修正済み:
-
-- preprocess: 1 フレーム = 1 row、`from_multihot` + `target_per_src` + `ships_per_src`
-  形式。target は `aim_with_prediction` 順方向逆解決。敗者側 obs も採用。
-- preprocess (新規): kaggle replay の **loser 側 obs.step / obs.player が None**
-  になっているため、`step_idx` と `slot` から注入。これを直さないと敗者フレームが
-  全て step=0 として扱われ、序盤特徴量が壊滅的に汚染される。
-- losses: from-head は my_planets に限定した multi-hot BCE。target/ships は
-  発射 source の per-row CE。
-- model: target_pair に (dx, dy, distance, ship_log_diff, tgt_is_enemy,
-  tgt_is_neutral) の pairwise 幾何特徴を追加し、対角 (src=tgt) を -inf マスク。
-- decoder: ships バケットを 4 分類 (25/50/75/100%) に変更し、`bucket=0` でも
-  最低 1 艦は送る。
-- config: `from_threshold=0.05` (n_my=1 の serve prior 0.14 を考慮し低く),
-  `target_w=2.0`, `rating_quantile=0.5`, `epochs=15`, `modes=["1v1"]`。
-
-vs random / vs noop は安定して勝てるが、vs `rulebase/case1` baseline_v1 は
-依然 0/100 (Apr 19)。BC 単体ではタクティカル決定力に課題が残るため、
-target/ships head の精度向上 (val_target_acc=0.34) が次の改善ポイント。
+- **case 間独立**: case8 は case1/case2/case3 / rulebase/* に依存しない独立コピー。
+  shared なヘルパー (`geometry.py` 等) は **直接コピー** している。
+- **Backbone 不変**: Graph U-Net (kNN k=8, hidden=128, TopK pool 3 段) は case3 と
+  完全一致させる (user 指示)。head 部のみ再設計。
+- **Action 表現**: `(per-source candidate slot)` の 1 head。slot 0 は no-op、
+  slot 1..7 は notebook 流の候補リストへ写像。`ships` は `max(tgt.ships+1, 20)` 固定。
+- **Evaluation**: Kaggle publicScore は使わない。ローカル `eval_vs_baseline` の勝率のみ。
+  300 戦未満の結果は noise として扱う (`project_imitation_case1_phase3` の知見)。

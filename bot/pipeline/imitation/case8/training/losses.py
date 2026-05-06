@@ -1,10 +1,19 @@
-"""3-head BC loss for imitation/case8 IL baseline.
+"""2-head BC loss for imitation/case8 (candidate categorical + ship-count regression).
 
-Per-frame supervision:
-- from_head: per-planet BCE over my_planet_mask. Positives = sources actually
-  fired in this frame (multi-hot). Negatives = my_planet_mask & ~from_multihot.
-- target_head: cross-entropy on every fired source's pairwise logits.
-- ships_head: cross-entropy on every fired source's ships-bucket logits.
+Per active source (my_planet_mask AND cand_slot_per_src != -1):
+
+  cand_loss = CE(candidate_logits, cand_slot_label, weight=class_weights)
+              or focal_loss(candidate_logits, label, alpha, gamma, weight)
+
+For sources whose label slot != 0 (= fire) AND ship_label_per_src != -1:
+
+  ship_loss = SmoothL1(ship_pred, ship_label)  # Huber delta=1, robust to outliers
+
+Total: total = cand_w * cand_loss + ship_w * ship_loss
+
+iter3 (2026-05-05): focal loss option added to mitigate cand head oscillation
+caused by extreme noop/fire label imbalance. CE + label_smoothing kept as
+default for backward compat.
 """
 
 from __future__ import annotations
@@ -14,242 +23,148 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from pipeline.imitation.case8.policy.featurizer import MAX_PLANETS
 from pipeline.imitation.case8.policy.types import PolicyOutput
-
-NO_OP_LABEL = MAX_PLANETS
 
 
 @dataclass(frozen=True)
 class LossWeights:
-    from_w: float = 1.0
-    target_w: float = 1.0
-    ships_w: float = 0.5
-    from_pos_weight: float = 8.5  # neg/pos ratio in training data
-    from_focal_gamma: float = 2.0  # focal loss focusing on hard examples
-    from_focal_alpha: float = 0.75  # weight on positive class
-    target_label_smoothing: float = 0.1
-    target_entropy_bonus: float = 0.05  # weight on -H(softmax(target_logits))
-    # Phase 2: per-class weight tensors (length NUM_TEMPLATES / SHIPS_BUCKETS),
-    # passed into F.cross_entropy(weight=...). None disables weighting.
-    target_class_weights: torch.Tensor | None = None
-    ships_class_weights: torch.Tensor | None = None
-    # Phase 2: ordinal-aware label smoothing for ships head. When > 0, the true
-    # bucket receives (1 - α) mass and each *adjacent* bucket gets α/2 (edge
-    # buckets keep the full spill on the single neighbour). 0 disables it.
-    ships_ordinal_smoothing: float = 0.0
-    # Phase 3-B2: multiclass focal on ships head. Replaces plain CE with
-    # (1-p_t)^γ * CE so well-classified majority bucket 3 examples contribute
-    # less to gradients. γ=0 disables it (= plain CE). α is optional per-class
-    # scaling — use to lift minority buckets further or leave as None.
-    ships_focal_gamma: float = 0.0
-    ships_focal_alpha: torch.Tensor | None = None
-
-
-def compute_class_weights(
-    labels: torch.Tensor,
-    num_classes: int,
-    beta: float = 0.9999,
-    ignore_index: int = -1,
-) -> torch.Tensor:
-    """Effective-number-of-samples class weights (Cui et al. 2019).
-
-    For each class c: w_c = (1 - β) / (1 - β^{n_c}), then normalize so the mean
-    weight is 1.0 — this keeps the overall loss scale comparable to unweighted
-    CE and avoids having to retune per-head loss coefficients.
-
-    β=0.9999 gives a gentler re-balance than pure 1/freq: majority classes are
-    only modestly down-weighted, minority classes are lifted without exploding.
-    """
-    labels = labels.flatten()
-    labels = labels[labels != ignore_index]
-    counts = torch.bincount(labels, minlength=num_classes).to(torch.float64)
-    # "effective number": (1 - β^n) / (1 - β)
-    # Empty classes get count=0 → eff_num=0 → weight would be inf; clamp to 1.
-    eff_num = (1.0 - torch.pow(torch.tensor(beta, dtype=torch.float64), counts)) / (
-        1.0 - beta
-    )
-    eff_num = eff_num.clamp_min(1.0)
-    weights = (1.0 - beta) / (
-        (1.0 - torch.pow(torch.tensor(beta, dtype=torch.float64), counts)).clamp_min(
-            1e-12
-        )
-    )
-    # Replace inf (empty class) with 0 so it does not affect training.
-    weights = torch.where(counts > 0, weights, torch.zeros_like(weights))
-    # Normalize so weighted mean over present classes == 1.0.
-    present = (counts > 0).to(torch.float64)
-    n_present = present.sum().clamp_min(1.0)
-    weights = weights * (n_present / weights.sum().clamp_min(1e-12))
-    return weights.to(torch.float32)
-
-
-def _smooth_ordinal_labels(
-    labels: torch.Tensor,
-    num_classes: int,
-    alpha: float,
-) -> torch.Tensor:
-    """Build soft targets that leak `alpha` mass to the adjacent bucket(s).
-
-    Example (num_classes=4, alpha=0.1): bucket 2 → [0, 0, 0.90, 0.10];
-    bucket 1 → [0, 0.90, 0.05, 0.05] if both neighbours exist, otherwise the
-    α mass spills entirely to the single neighbour.
-    """
-    n = labels.numel()
-    soft = torch.zeros((n, num_classes), dtype=torch.float32, device=labels.device)
-    for i, c in enumerate(labels.tolist()):
-        below = c - 1 >= 0
-        above = c + 1 < num_classes
-        spill_slots = int(below) + int(above)
-        if spill_slots == 0:
-            soft[i, c] = 1.0
-            continue
-        per_neighbour = alpha / spill_slots
-        soft[i, c] = 1.0 - alpha
-        if below:
-            soft[i, c - 1] = per_neighbour
-        if above:
-            soft[i, c + 1] = per_neighbour
-    return soft
+    cand_w: float = 1.0
+    cand_class_weights: torch.Tensor | None = None
+    label_smoothing: float = 0.0
+    ship_w: float = 1.0
+    # iter3: cand_loss_type="focal" で focal loss、"ce" (default) で従来 CE。
+    # focal は label imbalance に頑健 (easy examples を down-weight)、
+    # FL(p_t) = -α_t (1 - p_t)^γ log(p_t) (Lin et al., 2017).
+    cand_loss_type: str = "ce"
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
 
 
 @dataclass(frozen=True)
 class LossReport:
     total: torch.Tensor
-    from_loss: torch.Tensor
-    target_loss: torch.Tensor
-    ships_loss: torch.Tensor
-    from_acc: float
-    target_acc: float
-    ships_acc: float
+    cand_loss: torch.Tensor
+    cand_acc: float
+    cand_noop_acc: float
+    cand_fire_acc: float
+    ship_loss: torch.Tensor
+    ship_mae: float
+    ship_count: int
+
+
+def _focal_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    alpha: float,
+    gamma: float,
+    weight: torch.Tensor | None,
+) -> torch.Tensor:
+    """Focal cross-entropy (Lin et al., 2017).
+
+    `weight` (per-class) is applied multiplicatively after the focal term, so
+    the iter1/iter2 inverse-frequency class_weight remains compatible.
+    """
+    log_probs = nn.functional.log_softmax(logits, dim=-1)
+    log_pt = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+    pt = log_pt.exp()
+    focal_factor = (1.0 - pt).clamp_min(1e-12).pow(gamma)
+    loss = -alpha * focal_factor * log_pt
+    if weight is not None:
+        weight_t = weight.to(logits.device).gather(-1, targets)
+        loss = loss * weight_t
+    mean_loss: torch.Tensor = loss.mean()
+    return mean_loss
 
 
 def compute_loss(
     output: PolicyOutput,
-    from_multihot: torch.Tensor,  # (B, P) bool
-    target_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
-    ships_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    cand_slot_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
     my_planet_mask: torch.Tensor,  # (B, P) bool
     weights: LossWeights,
+    ship_label_per_src: torch.Tensor | None = None,  # (B, P) int64; -1 = unused
 ) -> LossReport:
-    device = from_multihot.device
+    device = cand_slot_per_src.device
+    zero = torch.zeros((), device=device)
 
-    # ---- from head: multi-hot focal loss over my_planet_mask ----
-    # Focal loss (Lin et al. 2017): alpha-balanced, gamma-focused BCE.
-    # Solves the problem that median(sigmoid(from_logit)) was 0.01 in iter1-3
-    # because easy negatives dominate the gradient under plain BCE+pos_weight.
-    from_target = from_multihot.float()
-    valid = my_planet_mask
-    safe_logits = torch.where(valid, output.from_logits, torch.zeros_like(from_target))
-    bce_per_elem = nn.functional.binary_cross_entropy_with_logits(
-        safe_logits, from_target, reduction="none"
-    )
-    p = torch.sigmoid(safe_logits)
-    p_t = from_target * p + (1.0 - from_target) * (1.0 - p)
-    alpha_t = weights.from_focal_alpha * from_target + (
-        1.0 - weights.from_focal_alpha
-    ) * (1.0 - from_target)
-    focal_factor = alpha_t * (1.0 - p_t).clamp_min(1e-6).pow(weights.from_focal_gamma)
-    focal = focal_factor * bce_per_elem
-    focal = focal * valid.float()
-    from_loss = focal.sum() / valid.float().sum().clamp_min(1.0)
-
-    # ---- gather "fired" rows across the batch ----
-    fired_mask = from_multihot & valid  # (B, P)
-    if fired_mask.any():
-        b_idx, src_idx = fired_mask.nonzero(as_tuple=True)
-        sel_target_logits = output.target_logits[b_idx, src_idx]  # (N, NUM_TEMPLATES)
-        sel_ships_logits = output.ships_logits[b_idx, src_idx]  # (N, K)
-        target_labels = target_per_src[b_idx, src_idx]  # (N,)
-        ships_labels = ships_per_src[b_idx, src_idx]  # (N,)
-
-        target_cw = None
-        if weights.target_class_weights is not None:
-            target_cw = weights.target_class_weights.to(sel_target_logits.device)
-        target_loss = nn.functional.cross_entropy(
-            sel_target_logits,
-            target_labels,
-            weight=target_cw,
-            label_smoothing=weights.target_label_smoothing,
+    valid = my_planet_mask & (cand_slot_per_src != -1)  # (B, P)
+    if not valid.any():
+        return LossReport(
+            total=zero,
+            cand_loss=zero,
+            cand_acc=0.0,
+            cand_noop_acc=0.0,
+            cand_fire_acc=0.0,
+            ship_loss=zero,
+            ship_mae=0.0,
+            ship_count=0,
         )
-        if weights.target_entropy_bonus > 0.0:
-            log_p = nn.functional.log_softmax(sel_target_logits, dim=-1)
-            p = log_p.exp()
-            entropy = -(p * log_p).sum(dim=-1).mean()
-            # subtract entropy → encourages higher entropy (anti-collapse)
-            target_loss = target_loss - weights.target_entropy_bonus * entropy
 
-        ships_cw = None
-        if weights.ships_class_weights is not None:
-            ships_cw = weights.ships_class_weights.to(sel_ships_logits.device)
-        if weights.ships_focal_gamma > 0.0:
-            # Multiclass focal: -α_t * (1 - p_t)^γ * log p_t.
-            # p_t is the softmax prob on the true class for each sample.
-            log_p = nn.functional.log_softmax(sel_ships_logits, dim=-1)
-            p = log_p.exp()
-            p_t = p.gather(1, ships_labels.view(-1, 1)).squeeze(1).clamp_min(1e-8)
-            log_p_t = log_p.gather(1, ships_labels.view(-1, 1)).squeeze(1)
-            focal_factor = (1.0 - p_t).pow(weights.ships_focal_gamma)
-            per_sample = -focal_factor * log_p_t
-            if weights.ships_focal_alpha is not None:
-                alpha = weights.ships_focal_alpha.to(sel_ships_logits.device)
-                per_sample = per_sample * alpha[ships_labels]
-            if ships_cw is not None:
-                sample_w = ships_cw[ships_labels]
-                ships_loss = (per_sample * sample_w).sum() / sample_w.sum().clamp_min(
-                    1e-6
-                )
-            else:
-                ships_loss = per_sample.mean()
-        elif weights.ships_ordinal_smoothing > 0.0:
-            # Manual CE over soft ordinal targets; class weights applied per-sample
-            # via the true-label column (matches CE's per-sample weighting).
-            num_ships_classes = sel_ships_logits.size(-1)
-            soft = _smooth_ordinal_labels(
-                ships_labels, num_ships_classes, weights.ships_ordinal_smoothing
-            )
-            log_p = nn.functional.log_softmax(sel_ships_logits, dim=-1)
-            per_sample = -(soft * log_p).sum(dim=-1)
-            if ships_cw is not None:
-                sample_w = ships_cw[ships_labels]
-                ships_loss = (per_sample * sample_w).sum() / sample_w.sum().clamp_min(
-                    1e-6
-                )
-            else:
-                ships_loss = per_sample.mean()
-        else:
-            ships_loss = nn.functional.cross_entropy(
-                sel_ships_logits, ships_labels, weight=ships_cw
-            )
+    b_idx, src_idx = valid.nonzero(as_tuple=True)
+    sel_logits = output.candidate_logits[b_idx, src_idx]  # (N, CAND_K)
+    sel_labels = cand_slot_per_src[b_idx, src_idx]  # (N,)
 
-        target_pred = sel_target_logits.argmax(dim=-1)
-        ships_pred = sel_ships_logits.argmax(dim=-1)
-        target_acc = float((target_pred == target_labels).float().mean().item())
-        ships_acc = float((ships_pred == ships_labels).float().mean().item())
-    else:
-        target_loss = torch.zeros((), device=device)
-        ships_loss = torch.zeros((), device=device)
-        target_acc = 0.0
-        ships_acc = 0.0
-
-    # from accuracy: per-(B,P) match between sigmoid>0.5 and gt, on my_planets only.
-    with torch.no_grad():
-        from_pred = (torch.sigmoid(output.from_logits) > 0.5) & valid
-        denom = valid.float().sum().clamp_min(1.0)
-        match = (from_pred == (from_multihot & valid)) & valid
-        from_acc = float((match.float().sum() / denom).item())
-
-    total = (
-        weights.from_w * from_loss
-        + weights.target_w * target_loss
-        + weights.ships_w * ships_loss
+    cand_cw = (
+        weights.cand_class_weights.to(sel_logits.device)
+        if weights.cand_class_weights is not None
+        else None
     )
+    loss_type = weights.cand_loss_type.lower()
+    if loss_type == "focal":
+        cand_loss = _focal_cross_entropy(
+            sel_logits,
+            sel_labels,
+            alpha=weights.focal_alpha,
+            gamma=weights.focal_gamma,
+            weight=cand_cw,
+        )
+    elif loss_type == "ce":
+        cand_loss = nn.functional.cross_entropy(
+            sel_logits,
+            sel_labels,
+            weight=cand_cw,
+            label_smoothing=weights.label_smoothing,
+        )
+    else:
+        raise ValueError(
+            f"unknown cand_loss_type {weights.cand_loss_type!r}"
+            " (expected 'ce' or 'focal')"
+        )
+
+    with torch.no_grad():
+        pred = sel_logits.argmax(dim=-1)
+        match = (pred == sel_labels).float()
+        cand_acc = float(match.mean().item())
+        is_noop = sel_labels == 0
+        is_fire = ~is_noop
+        n_noop = int(is_noop.sum().item())
+        n_fire = int(is_fire.sum().item())
+        cand_noop_acc = float(match[is_noop].mean().item()) if n_noop > 0 else 0.0
+        cand_fire_acc = float(match[is_fire].mean().item()) if n_fire > 0 else 0.0
+
+    ship_loss = zero
+    ship_mae = 0.0
+    ship_count = 0
+    if ship_label_per_src is not None:
+        ship_valid = my_planet_mask & (ship_label_per_src != -1)  # (B, P)
+        if ship_valid.any():
+            sb_idx, ss_idx = ship_valid.nonzero(as_tuple=True)
+            ship_pred_sel = output.ship_pred[sb_idx, ss_idx]
+            ship_target_sel = ship_label_per_src[sb_idx, ss_idx].to(ship_pred_sel.dtype)
+            ship_loss = nn.functional.smooth_l1_loss(
+                ship_pred_sel, ship_target_sel, reduction="mean"
+            )
+            with torch.no_grad():
+                ship_mae = float((ship_pred_sel - ship_target_sel).abs().mean().item())
+                ship_count = int(ship_valid.sum().item())
+
+    total = weights.cand_w * cand_loss + weights.ship_w * ship_loss
     return LossReport(
         total=total,
-        from_loss=from_loss.detach(),
-        target_loss=target_loss.detach(),
-        ships_loss=ships_loss.detach(),
-        from_acc=from_acc,
-        target_acc=target_acc,
-        ships_acc=ships_acc,
+        cand_loss=cand_loss.detach(),
+        cand_acc=cand_acc,
+        cand_noop_acc=cand_noop_acc,
+        cand_fire_acc=cand_fire_acc,
+        ship_loss=ship_loss.detach() if isinstance(ship_loss, torch.Tensor) else zero,
+        ship_mae=ship_mae,
+        ship_count=ship_count,
     )

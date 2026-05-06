@@ -393,6 +393,21 @@ UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
 echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s (skip=${SKIP_UV_SYNC})"
 
 mark "40_uv_sync_done"
+
+# iter11 fix: `uv run --project bot` / `uv run --directory bot` を以後の
+# step (dvc / python) で**一切**使わない。`uv run` は呼ぶたびに
+# pyproject.toml と uv.lock の整合性を再確認し、必要なら裏で `uv sync` を
+# 走らせる仕様。同じ venv を 2 つの `uv run` がほぼ並行で触ると、片方の
+# sync 中間状態を他方が踏んで `ModuleNotFoundError` (dvc / pathspec /
+# diskcache / rich._emoji_codes / s3fs) が頻発する race condition を
+# iter9 (`Installed 180 packages` retry chain) と iter10
+# (`Uninstalled 25 packages + Installed 5` during dvc pull) で観測。
+# 直接 .venv/bin の bin を呼べば uv は介在せず venv は line 319 の
+# `uv sync --locked --no-dev` 状態のまま固定される。
+PY_BIN="$(pwd)/bot/.venv/bin/python"
+DVC_BIN="$(pwd)/bot/.venv/bin/dvc"
+echo "[onstart] iter11 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
+
 echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE>"
 # case0 は RunPod 基盤の E2E smoke 専用なので、dvc pull 経路の正常性検証だけ
 # 行い、他 case の outs を巻き込まない (memory: runpod_5_traps)。
@@ -400,7 +415,7 @@ echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE>"
 if [ "<CASE>" = "case0" ]; then
   echo "[onstart] dvc pull SCOPED to data/lake/case0_smoke (case0 smoke path)"
   ls -la data/lake/case0_smoke.dvc 2>&1 | head -3
-  if ! uv run --project bot dvc pull data/lake/case0_smoke.dvc; then
+  if ! "${DVC_BIN}" pull data/lake/case0_smoke.dvc; then
     echo "[onstart] dvc pull (case0_smoke) FAILED" >&2
     ls -la data/lake/ 2>&1 | head -5
     git status --short 2>&1 | head -5
@@ -414,7 +429,7 @@ else
   echo "[onstart] dvc pull diagnostic:"
   ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
   # set -e は外しているので明示的に exit code を確認
-  if ! uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc; then
+  if ! "${DVC_BIN}" pull data/lake/kaggle_episodes/matches.dvc; then
     echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
     echo "[onstart] dvc pull diagnostic listing:"
     ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
@@ -432,7 +447,7 @@ else
   # 残骸自体は preprocess skip ロジックで再利用される (新規 preprocess も上書き可能)。
   # memory `project_runpod_5_traps_2026_05_04.md` および
   # `project_runpod_onstart_pitfalls.md` 参照。
-  if ! uv run --project bot dvc pull --allow-missing --force; then
+  if ! "${DVC_BIN}" pull --allow-missing --force; then
     echo "[onstart] dvc pull (full) FAILED" >&2
     mark "45_dvc_pull_full_failed"
     exit 1
@@ -446,6 +461,23 @@ echo "[onstart] step=mkdir_run"
 # ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
 RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
+
+# iter4 fix: preprocess の前に mart symlink を物理 dir に materialize する。
+# 後段 (mart_dvc_persist) で materialize するパターンだと、preprocess が
+# /persist 配下に書き込んだ parquet が cp -RL でコピー後に glob で見えない
+# 事象を A6000 host で観測 (case8 iter4 1st run の `65_train_failed_exit_1`)。
+# 順序を「materialize → preprocess」に変えれば preprocess は materialize 済みの
+# 実 dir に直接書き込むため symlink chain を経由せず安全。
+MART_PARENT_PRE="data/mart/imitation"
+if [ -L "${MART_PARENT_PRE}" ]; then
+  echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
+  MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
+  rm "${MART_PARENT_PRE}"
+  mkdir -p "${MART_PARENT_PRE}"
+  if [ -d "${MART_TARGET_PRE}" ]; then
+    cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+  fi
+fi
 
 PREPROCESS_RAN=0
 if [ -n "<PREPROCESS_CMD>" ]; then
@@ -472,7 +504,7 @@ if [ -n "<PREPROCESS_CMD>" ]; then
   STAGE_UPTODATE=0
   if [ "${PARQUET_PRESENT}" -eq 1 ]; then
     echo "[onstart] checking ${PREPROCESS_STAGE_NAME} freshness via dvc status"
-    DVC_STATUS_OUT=$(uv run --project bot dvc status "${PREPROCESS_STAGE_NAME}" 2>&1)
+    DVC_STATUS_OUT=$("${DVC_BIN}" status "${PREPROCESS_STAGE_NAME}" 2>&1)
     echo "${DVC_STATUS_OUT}" | head -20
     if echo "${DVC_STATUS_OUT}" | grep -qiE "up to date|nothing to reproduce"; then
       STAGE_UPTODATE=1
@@ -497,11 +529,10 @@ if [ -n "<PREPROCESS_CMD>" ]; then
           \( -type l -xtype l \) -print -delete 2>&1 || true
       fi
     fi
+    # iter11: `uv run` 経由を排除 (race condition 回避)。cwd を bot に揃えて
+    # .venv/bin/python を直接起動すれば uv は介在せず deps は固定。
     # preprocess の exit code を check して、 失敗時は train に進まず onstart fail。
-    # case7 iter2 (epoch=50) で sanity check が val parquet の reshape 失敗を
-    # 検出して RuntimeError を raise したが、 onstart は exit code を見ずに
-    # train に進んで再度同じエラーで死亡 ($1.10 損失) のため。
-    if ! uv run --directory bot python -m <PREPROCESS_CMD>; then
+    if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> ); then
       echo "[onstart] step=preprocess FAILED (exit code != 0)" >&2
       mark "55_preprocess_failed"
       exit 1
@@ -549,7 +580,7 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
     # 観測: 2026-05-04 case7 で `dvc add` が "overlaps with an output of stage"
     # で fatal exit (4回目の試行)。
     echo "[onstart] dvc commit -f ${PREPROCESS_STAGE}"
-    if ! uv run --project bot dvc commit -f "${PREPROCESS_STAGE}" 2>&1; then
+    if ! "${DVC_BIN}" commit -f "${PREPROCESS_STAGE}" 2>&1; then
       echo "[onstart] dvc commit ${PREPROCESS_STAGE} FATAL" >&2
       mark "55_mart_dvc_add_failed"
       # symlink を再構築してから exit (次回 run の cache 維持)
@@ -560,7 +591,6 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
       fi
       exit 1
     fi
-
     # dvc push: stage 単位で remote にアップロード。3 回までリトライ。
     # `-j 1` で multipart upload の並列度を 1 に下げる: DVC + s3fs の既知 bug
     # (treeverse/dvc#10374) で、高並列 + 高 RTT remote (ap-northeast-1) では
@@ -568,10 +598,11 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
     # `-v` で進捗を onstart.log に出して運用観測性を確保。
     # 観測: 2026-05-04 case7 試行 #6 で `dvc push <stage>` (default -j) が
     # 20+ 分 hang → terminate 余儀なくされ A100 で $0.88 浪費。
+    # iter11: `uv run` 経由を排除して uv race condition を回避。
     push_ok=0
     for attempt in 1 2 3; do
       echo "[onstart] dvc push -j 1 -v ${PREPROCESS_STAGE} (attempt ${attempt}/3)"
-      if uv run --project bot dvc push -j 1 -v "${PREPROCESS_STAGE}" 2>&1; then
+      if "${DVC_BIN}" push -j 1 -v "${PREPROCESS_STAGE}" 2>&1; then
         push_ok=1
         break
       fi
@@ -665,21 +696,26 @@ fi
 
 # CPU / RAM を python (psutil) で 10s 周期サンプリング → system.log
 # nvidia-smi が不在 (CPU smoke / 古い image) でも常に走る。
+# iter11: `uv run` 経由排除して .venv/bin/python 直接呼び。train プロセスと
+# 同じ venv を共有しているため uv による sync が起動中に走らないようにする。
 SYSMON_LOG="${RUN_DIR_ABS}/system.log"
 SYSMON_PID=""
-( uv run --directory bot python -m runpod_io.system_monitor \
+( cd bot && "${PY_BIN}" -m runpod_io.system_monitor \
     --interval 10 --output "${SYSMON_LOG}" >/dev/null 2>&1 ) &
 SYSMON_PID=$!
 echo "[onstart] system sampler pid=${SYSMON_PID} -> ${SYSMON_LOG}"
 
+# iter11: `uv run` 経由排除。cwd=bot に切り替えて .venv/bin/python 直接呼び。
+# train は最長プロセスで、起動時に裏で別の uv コマンドが走ると hang or crash
+# (case8 iter4-9 の `60_before_train` 直後 hang はこれが root cause 候補)。
 ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
   ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
-  ORBIT_WARS_COMMAND="uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG>" \
-  uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG> \
+  ORBIT_WARS_COMMAND="cd bot && ${PY_BIN} -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  bash -c "cd bot && '${PY_BIN}' -m <TRAIN_MODULE> <CONFIG_ARG>" \
   2>&1 | tee "${TRAIN_LOG}"
 TRAIN_EXIT=${PIPESTATUS[0]}
 
@@ -762,7 +798,8 @@ _relink_output() {
   fi
 }
 
-if ! uv run --project bot dvc add "${RUN_DIR_REL}" 2>&1; then
+# iter11: uv run を排除して .venv/bin/dvc 直接呼び。
+if ! "${DVC_BIN}" add "${RUN_DIR_REL}" 2>&1; then
   echo "[onstart] dvc_add_run FATAL" >&2
   mark "75_dvc_add_run_failed"
   _relink_output
@@ -789,7 +826,7 @@ fi
 push_runs_ok=0
 for attempt in 1 2 3; do
   echo "[onstart] dvc push -j 1 -v ${RUN_DVC_FILE} (attempt ${attempt}/3)"
-  if uv run --project bot dvc push -j 1 -v "${RUN_DVC_FILE}" 2>&1; then
+  if "${DVC_BIN}" push -j 1 -v "${RUN_DVC_FILE}" 2>&1; then
     push_runs_ok=1
     break
   fi

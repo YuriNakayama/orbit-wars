@@ -1,4 +1,8 @@
-"""Frozen dataclasses for imitation/case8 IL baseline data flow."""
+"""Frozen dataclasses for imitation/case8.
+
+Differences from case4:
+  - PolicyOutput adds `ship_pred` (per-source continuous regression).
+"""
 
 from __future__ import annotations
 
@@ -14,18 +18,17 @@ class BatchFeatures:
     my_planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — owner == player
     target_mask: torch.Tensor  # (B, MAX_PLANETS) bool — valid target candidates
     global_feats: torch.Tensor  # (B, GLOBAL_FEAT_DIM)
-    template_ctx: (
-        torch.Tensor
-    )  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM) per-source template scores
+    candidate_feats: torch.Tensor  # (B, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
+    candidate_mask: torch.Tensor  # (B, MAX_PLANETS, CAND_K) bool — slot 0 always True
+    candidate_pid: torch.Tensor  # (B, MAX_PLANETS, CAND_K) int64 — -1 for invalid
 
 
 @dataclass(frozen=True)
 class PolicyOutput:
-    from_logits: torch.Tensor  # (B, MAX_PLANETS) — sigmoid → from_prob
-    target_logits: (
+    candidate_logits: torch.Tensor  # (B, MAX_PLANETS, CAND_K) — slot 0 = no-op
+    ship_pred: (
         torch.Tensor
-    )  # (B, MAX_PLANETS, NUM_TEMPLATES) — argmax = template id
-    ships_logits: torch.Tensor  # (B, MAX_PLANETS, SHIPS_BUCKETS)
+    )  # (B, MAX_PLANETS) — continuous ship-count prediction per source
 
 
 @dataclass(frozen=True)
