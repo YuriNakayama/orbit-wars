@@ -172,6 +172,7 @@ module = [
     "pipeline.rulebase.case5.baseline.core.config",
     "pipeline.rulebase.case5.baseline.core.types",
     "pipeline.rulebase.case5.baseline.core.physics",
+    "pipeline.rulebase.case5.baseline.core.safety",
     "pipeline.rulebase.case5.baseline.core.world_helpers",
 ]
 ignore_errors = true
@@ -183,6 +184,7 @@ module = [
     "tests.pipeline.rulebase.case5.test_baseline_agent",
     "tests.pipeline.rulebase.case5.test_core_physics",
     "tests.pipeline.rulebase.case5.test_core_world_helpers",
+    "tests.pipeline.rulebase.case5.test_plan_shot_safety",
 ]
 disallow_untyped_calls = false
 

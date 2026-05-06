@@ -13,13 +13,13 @@ The module is pure (no kaggle_environments dependency) and shared via bot/src/ut
 
 from __future__ import annotations
 
-from src.utils.orbit_constants import (
+from utils.orbit_constants import (
     CENTER_X,
     CENTER_Y,
     SUN_R,
     SUN_SAFETY,
 )
-from src.utils.trajectory_safety import (
+from utils.trajectory_safety import (
     Planet,
     comet_appearance_imminent,
     fleet_crosses_other_comet,

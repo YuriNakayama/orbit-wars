@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,7 +38,7 @@ def _noop(_obs: object) -> list[list[int | float]]:
     return []
 
 
-def _walk_fleets(env: object) -> list[tuple[int, int, float, float]]:
+def _walk_fleets(env: Any) -> list[tuple[int, int, float, float]]:
     out: list[tuple[int, int, float, float]] = []
     for step_idx, step in enumerate(env.steps):
         for entry in step:
