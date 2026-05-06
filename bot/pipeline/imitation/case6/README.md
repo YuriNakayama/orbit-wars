@@ -22,7 +22,8 @@ pipeline/imitation/case6/
 │   ├── decoder.py           # PolicyOutput → action list
 │   ├── geometry.py          # aim_with_prediction (独立コピー)
 │   ├── templates.py         # target template 定義
-│   └── weights.pt           # 学習済み重み (DVC 管理、git untracked)
+│   ├── weights.pt           # canonical (DVC 管理、git untracked)
+│   └── weights_smoke.pt     # 1-epoch smoke test 用 (DVC 管理)
 ├── configs/
 │   └── il_case6.yaml        # case5 config + attn_heads=4
 ├── training/                # 開発用 (.submitignore)
@@ -71,3 +72,11 @@ uv run python -m pipeline.imitation.case6.training.train --config pipeline/imita
 # 3) ローカル評価 (vs baseline_v1)
 uv run python -m pipeline.imitation.case6.evaluation.eval_vs_baseline --episodes 50 --seed 0
 ```
+
+## モデルバージョン
+
+| ファイル | 説明 |
+|---------|------|
+| `policy/weights.pt` | canonical。`dev/{vast,runpod} promote` で上書き |
+| `policy/weights_smoke.pt` | 1-epoch smoke test 用 (RunPod 動作確認向け) |
+| `policy/weights_iter<N>.pt` | iteration 履歴 (生成された場合のみ。命名規則は imitation/README.md 参照) |

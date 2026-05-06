@@ -112,3 +112,14 @@ uv run pytest tests/pipeline/imitation/case1 -v   # determinism 含む
 vs random / vs noop は安定して勝てるが、vs `rulebase/case1` baseline_v1 は
 依然 0/100 (Apr 19)。BC 単体ではタクティカル決定力に課題が残るため、
 target/ships head の精度向上 (val_target_acc=0.34) が次の改善ポイント。
+
+## モデルバージョン
+
+| ファイル | 説明 |
+|---------|------|
+| `policy/weights.pt` | canonical。`dev/{vast,runpod} promote` で上書き |
+| `policy/weights_iter<N>.pt` | iteration 履歴 (iter6..iter15)。`<N>` は学習回数の連番 |
+| `policy/weights_iter10b.pt` | iter10 の variant (`aggregate="mean"`)。同 iter 内別設定の identifier として `b` suffix を使う |
+
+過去 iter の比較・再評価は `--weights pipeline/imitation/case1/policy/weights_iter<N>.pt` で
+明示指定する。詳細な iter ごとの差分は `docs/experiment/imitation/20260422_case1_phase3/result.md` を参照。
