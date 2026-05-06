@@ -19,6 +19,7 @@ case1 (sigmaborov LB897 port) を起点に、mission / movement / lookahead / fl
 | case6 | `baseline_v6` | active (experiment) | case4 のフルコピー + **STAY 判定** (発射せず保留する STAY_BURST 1 ターン arbitrage) | n/a | defense hold + burst hold |
 | case7 | `baseline_v7` | active (experiment) | case6 + **多ターン蓄積からの遠距離単発攻撃 mission** (ACCUMULATE_BURST) | n/a | t14 ship-loss trap が確認済み (60 ships 一斉発射) |
 | case8 | `baseline_v8` | **採用版** | case4 base + `physics.predict_planet_position` の **dict cache 化**。挙動完全等価で速度最適化 | n/a | 200 戦 50.5%、turn_p95 -25%。multi-step 最適化試行 (beam/PGS/NaïveMCTS 等) の集約先 |
+| case9 | `baseline_v9` | rejected (anti-ping-pong) | case4 + cooldown bypass + plan_shot cache | n/a | 9 iter 探索で +5pp 不可確定 (真値 ~50%)。iter6 plan_shot cache のみ採用、`docs/experiment/rulebase/20260504_case9_anti_ping_pong/` |
 
 ## 系譜
 
@@ -31,7 +32,8 @@ case1 (sigmaborov LB897 port)
             └─ case4 (+ fleet_consolidation)  ★ production LB745
                  ├─ case6 (+ STAY judge)
                  │    └─ case7 (+ multi-turn accumulate burst)
-                 └─ case8 (predict cache, 速度最適化、採用版)
+                 ├─ case8 (predict cache, 速度最適化、採用版)
+                 └─ case9 (anti-ping-pong, rejected)
 
 case5  独立 (Roman Tamrazov LB1224 notebook の verbatim port)
 ```

@@ -1,8 +1,26 @@
-"""Replay → parquet preprocess for imitation/case8 IL baseline.
+"""Replay → parquet preprocess for imitation/case8.
 
-One row per (obs, player) frame. Multi-hot from-set + per-source target/ships
-labels (slot -1 for "not selected" sources). Both winner and loser sides are
-included.
+Per-frame supervision schema:
+
+  - planet_feats : (MAX_PLANETS * 35,) float32
+  - global_feats : (20,)              float32
+  - planet_mask  : (MAX_PLANETS,)     bool
+  - my_planet_mask, target_mask : (MAX_PLANETS,) bool
+  - candidate_feats : (MAX_PLANETS * CAND_K * CAND_FEAT_DIM,) float32
+  - candidate_mask  : (MAX_PLANETS * CAND_K,) bool
+  - candidate_pid   : (MAX_PLANETS * CAND_K,) int32
+  - cand_slot_per_src : (MAX_PLANETS,) int32  (-1 = src not active in label)
+                        0 = no-op label (src had option to fire but did not)
+                        1..K-1 = candidate slot the actual fired target maps to
+  - is_noop : bool
+
+For "fired" sources: reverse-resolve the (angle, ships) to a target planet id;
+look up that pid in candidate_pid; if found at slot s, set cand_slot_per_src=s;
+if not present in candidates (rare, K=8 might not include the actual target),
+set cand_slot_per_src=-1 (excluded from loss).
+
+For "not-fired my planets": cand_slot_per_src=0 (no-op label).
+For "not my planets": cand_slot_per_src=-1.
 """
 
 from __future__ import annotations
@@ -12,10 +30,9 @@ import hashlib
 import json
 import logging
 import math
-import multiprocessing as mp
 import os
-import resource
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,37 +44,20 @@ import pyarrow.parquet as pq
 import typer
 import yaml
 
+from pipeline.imitation.case8.policy import featurizer
+from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
 from pipeline.imitation.case8.policy.featurizer import (
-    GLOBAL_FEAT_DIM,
     MAX_PLANETS,
-    PLANET_FEAT_DIM,
     HistoryState,
-    featurize,
-    fleet_snapshot_from_obs,
-    planet_snapshot_from_obs,
 )
 from pipeline.imitation.case8.policy.geometry import Planet, aim_with_prediction
-from pipeline.imitation.case8.policy.templates import (
-    T_NO_OP,
-    classify_actual_target,
-)
-
-try:
-    from runpod_io.progress import mark_progress  # type: ignore[attr-defined]
-except ImportError:  # local/test env where the helper is absent
-
-    def mark_progress(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-
-from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
 
 UNUSED_LABEL = -1
-SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100%
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
-CHUNK_EPISODES = 100  # episode を 100 件 buffer したら ParquetWriter に flush
+PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
+FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,21 @@ class PreprocessReport:
     val_frames: int
     out_train: Path
     out_val: Path
+    label_outside_candidates: int
+    fired_total: int
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "bot").is_dir() and (parent / ".git").exists():
+            return parent
+    raise RuntimeError(f"repo root not found from {here}")
+
+
+def _abspath(rel: str | Path) -> Path:
+    p = Path(rel)
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
 
 
 def _build_planet(row: list[Any]) -> Planet:
@@ -100,12 +115,6 @@ def _resolve_action_target(
     comets: list[dict[str, Any]],
     comet_ids: set[int],
 ) -> int | None:
-    """Reverse-resolve fired (angle, ships) into the most likely target planet id.
-
-    Walks every non-source planet, calls aim_with_prediction (the same routine the
-    pro player uses) and picks the candidate whose predicted angle is closest to
-    the actually-fired angle (within ANGLE_TOLERANCE).
-    """
     best_id: int | None = None
     best_diff = ANGLE_TOLERANCE
     for cand in candidates:
@@ -121,19 +130,6 @@ def _resolve_action_target(
             best_diff = diff
             best_id = cand.id
     return best_id
-
-
-def _ships_bucket(ships: int, src_ships: int) -> int:
-    if src_ships <= 0:
-        return 0
-    ratio = max(0.0, min(1.0, ships / max(1, src_ships)))
-    # Map (0, 1] to bucket [0, SHIPS_BUCKETS-1]:
-    #  ratio in (0,    0.375] → 0 (~25%)
-    #  ratio in (0.375,0.625] → 1 (~50%)
-    #  ratio in (0.625,0.875] → 2 (~75%)
-    #  ratio in (0.875,1.0  ] → 3 (~100%)
-    bucket = int(round(ratio * (SHIPS_BUCKETS - 1) - 0.001))
-    return max(0, min(SHIPS_BUCKETS - 1, bucket))
 
 
 def _split_episode(match_id: str, val_split: float) -> str:
@@ -152,16 +148,18 @@ def _build_frame(
     obs: dict[str, Any],
     action_list: list[list[Any]],
     raw_planets: list[list[Any]],
-    history: HistoryState | None = None,
-) -> dict[str, Any] | None:
-    """Build one parquet row representing the frame's full action set."""
-    batch, snap = featurize(obs, history=history)
+    history: HistoryState,
+) -> tuple[dict[str, Any], int, int] | None:
+    """Build one parquet row + (fired_total_delta, outside_candidates_delta)."""
+    batch, snap = featurizer.featurize(obs, history)
     planet_feats = batch.planet_feats[0].numpy().astype(np.float32)
     global_feats = batch.global_feats[0].numpy().astype(np.float32)
     planet_mask = batch.planet_mask[0].numpy().astype(np.bool_)
     my_planet_mask = batch.my_planet_mask[0].numpy().astype(np.bool_)
     target_mask = batch.target_mask[0].numpy().astype(np.bool_)
-    template_ctx = batch.template_ctx[0].numpy().astype(np.float32)
+    cand_feats = batch.candidate_feats[0].numpy().astype(np.float32)
+    cand_mask = batch.candidate_mask[0].numpy().astype(np.bool_)
+    cand_pid = batch.candidate_pid[0].numpy().astype(np.int32)
 
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
     planets = [_build_planet(row) for row in raw_planets]
@@ -172,59 +170,82 @@ def _build_frame(
     comets = list(obs.get("comets") or [])
     comet_ids = set(obs.get("comet_planet_ids") or [])
 
-    from_multihot = np.zeros(MAX_PLANETS, dtype=np.bool_)
-    target_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
-    ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    cand_slot_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    ship_label_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
 
-    player = int(obs.get("player", 0) or 0)
+    # Default: my_planets that did not fire → label = 0 (no-op slot)
+    for slot in range(MAX_PLANETS):
+        if my_planet_mask[slot]:
+            cand_slot_per_src[slot] = 0
+
+    fired_total = 0
+    outside = 0
+
     for act in action_list:
         from_pid = int(act[0])
         angle = float(act[1])
         ships = int(act[2])
-        slot = pid_to_slot.get(from_pid)
-        if slot is None or not my_planet_mask[slot]:
+        maybe_slot = pid_to_slot.get(from_pid)
+        if maybe_slot is None or not my_planet_mask[maybe_slot]:
             continue
+        slot = int(maybe_slot)
         src = by_id.get(from_pid)
         if src is None:
             continue
         target_pid = _resolve_action_target(
             src, angle, ships, planets, initial_by_id, ang_vel, comets, comet_ids
         )
-        if target_pid is None or target_pid not in pid_to_slot:
-            template_id = T_NO_OP
+        fired_total += 1
+        if target_pid is None:
+            # Could not recover target; treat as label-unknown
+            cand_slot_per_src[slot] = UNUSED_LABEL
+            outside += 1
+            continue
+        # Look up target_pid in this src's candidate list (slots 1..K-1)
+        slot_idx = -1
+        for k in range(1, CAND_K):
+            if int(cand_pid[slot, k]) == int(target_pid):
+                slot_idx = k
+                break
+        if slot_idx == -1:
+            # Actual fired target is outside K=8 candidate set — drop this src's
+            # label so we don't push the model toward no-op when it should fire.
+            cand_slot_per_src[slot] = UNUSED_LABEL
+            outside += 1
         else:
-            src_row = raw_planets[slot]
-            tgt_row = raw_planets[pid_to_slot[target_pid]]
-            template_id = classify_actual_target(src_row, tgt_row, raw_planets, player)
-        from_multihot[slot] = True
-        target_per_src[slot] = int(template_id)
-        ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
+            cand_slot_per_src[slot] = slot_idx
+            ship_label_per_src[slot] = ships
 
-    is_noop = not bool(from_multihot.any())
+    is_noop = bool(np.all(cand_slot_per_src[my_planet_mask] == 0))
 
-    return {
+    row = {
         "planet_feats": planet_feats.reshape(-1).tolist(),
         "global_feats": global_feats.tolist(),
         "planet_mask": planet_mask.tolist(),
         "my_planet_mask": my_planet_mask.tolist(),
         "target_mask": target_mask.tolist(),
-        "template_ctx": template_ctx.reshape(-1).tolist(),
-        "from_multihot": from_multihot.tolist(),
-        "target_per_src": target_per_src.tolist(),
-        "ships_per_src": ships_per_src.tolist(),
-        "is_noop": bool(is_noop),
+        "candidate_feats": cand_feats.reshape(-1).tolist(),
+        "candidate_mask": cand_mask.reshape(-1).tolist(),
+        "candidate_pid": cand_pid.reshape(-1).tolist(),
+        "cand_slot_per_src": cand_slot_per_src.tolist(),
+        "ship_label_per_src": ship_label_per_src.tolist(),
+        "is_noop": is_noop,
     }
+    return row, fired_total, outside
 
 
 def _iter_episode_frames(
     replay_path: Path,
     player_slots: list[int],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int, int]:
     with gzip.open(replay_path, "rt") as f:
         data = json.load(f)
     steps = data.get("steps", [])
     out: list[dict[str, Any]] = []
     histories: dict[int, HistoryState] = {slot: HistoryState() for slot in player_slots}
+    fired_total = 0
+    outside_total = 0
+
     for step_idx, step in enumerate(steps):
         for slot in player_slots:
             if slot >= len(step):
@@ -237,33 +258,61 @@ def _iter_episode_frames(
             planets = obs.get("planets") or []
             if not planets:
                 continue
-            # Kaggle replay の loser 側 obs は `step` が None なので注入する
             if obs.get("step") is None:
                 obs = {**obs, "step": step_idx}
             if obs.get("player") is None:
                 obs = {**obs, "player": slot}
+
             history = histories[slot]
-            frame = _build_frame(obs, action_list, planets, history=history)
-            history.push(planet_snapshot_from_obs(obs), fleet_snapshot_from_obs(obs))
-            if frame is not None:
-                out.append(frame)
-    return out
+            built = _build_frame(obs, action_list, planets, history)
+            if built is not None:
+                row, fired, outside = built
+                out.append(row)
+                fired_total += fired
+                outside_total += outside
+            featurizer.update_history(history, obs, action_list)
+    return out, fired_total, outside_total
 
 
-def _episode_worker(
-    args: tuple[str, list[int], str],
-) -> tuple[str, list[dict[str, Any]]]:
-    """Pool worker: process one replay end-to-end and return (match_id, frames).
+@dataclass(frozen=True)
+class _EpisodeResult:
+    bucket: str  # "train" | "val"
+    frames: list[dict[str, Any]]
+    fired: int
+    outside: int
+    skip_reason: str | None  # None | "no_slots" | "no_replay" | "no_frames"
 
-    Memory note: each worker holds at most one episode's frames in memory; the
-    parent consumes them via imap_unordered(chunksize=1) and discards as it
-    streams to the parquet writer.
+
+def _process_episode(
+    rec: dict[str, Any],
+    base_dir: Path,
+    val_split: float,
+    num_player_slots: int,
+) -> _EpisodeResult:
+    """Worker: process one episode record into frames.
+
+    Pure function (importable / picklable). Returns a single result.
     """
-    replay_path_s, slots, match_id = args
-    replay_path = Path(replay_path_s)
-    if not replay_path.exists():
-        return match_id, []
-    return match_id, _iter_episode_frames(replay_path, slots)
+    if num_player_slots == 0 or rec.get("draw"):
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
+        )
+    slots = list(range(num_player_slots))
+    rp = rec.get("replay_path") or ""
+    replay_path = (base_dir / rp).resolve() if rp else None
+    if replay_path is None or not replay_path.exists():
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
+        )
+    frames, fired, outside = _iter_episode_frames(replay_path, slots)
+    if not frames:
+        return _EpisodeResult(
+            bucket="", frames=[], fired=fired, outside=outside, skip_reason="no_frames"
+        )
+    bucket = _split_episode(str(rec["match_id"]), val_split)
+    return _EpisodeResult(
+        bucket=bucket, frames=frames, fired=fired, outside=outside, skip_reason=None
+    )
 
 
 def _filter_index(
@@ -280,8 +329,6 @@ def _filter_index(
     if rating.is_empty():
         return df, 0.0
     cutoff = float(rating.quantile(rating_quantile).item())
-
-    # require AT LEAST ONE seat to clear cutoff (loser side included).
     cond = pl.lit(False)
     for col in rating_cols:
         cond = cond | (pl.col(col) >= cutoff)
@@ -289,96 +336,58 @@ def _filter_index(
     return df, cutoff
 
 
-def _write_parquet(rows: list[dict[str, Any]], path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        empty = pl.DataFrame(schema=_empty_schema())
-        empty.write_parquet(path)
-        return 0
-    df = pl.DataFrame(rows)
-    df.write_parquet(path)
-    return df.height
-
-
-def _empty_schema() -> dict[str, pl.DataType]:
-    return {
-        "planet_feats": pl.List(pl.Float32),
-        "global_feats": pl.List(pl.Float32),
-        "planet_mask": pl.List(pl.Boolean),
-        "my_planet_mask": pl.List(pl.Boolean),
-        "target_mask": pl.List(pl.Boolean),
-        "template_ctx": pl.List(pl.Float32),
-        "from_multihot": pl.List(pl.Boolean),
-        "target_per_src": pl.List(pl.Int32),
-        "ships_per_src": pl.List(pl.Int32),
-        "is_noop": pl.Boolean(),
-    }
-
-
 def _arrow_schema() -> pa.Schema:
     return pa.schema(
         [
-            ("planet_feats", pa.list_(pa.float32())),
-            ("global_feats", pa.list_(pa.float32())),
-            ("planet_mask", pa.list_(pa.bool_())),
-            ("my_planet_mask", pa.list_(pa.bool_())),
-            ("target_mask", pa.list_(pa.bool_())),
-            ("template_ctx", pa.list_(pa.float32())),
-            ("from_multihot", pa.list_(pa.bool_())),
-            ("target_per_src", pa.list_(pa.int32())),
-            ("ships_per_src", pa.list_(pa.int32())),
-            ("is_noop", pa.bool_()),
+            pa.field("planet_feats", pa.list_(pa.float32())),
+            pa.field("global_feats", pa.list_(pa.float32())),
+            pa.field("planet_mask", pa.list_(pa.bool_())),
+            pa.field("my_planet_mask", pa.list_(pa.bool_())),
+            pa.field("target_mask", pa.list_(pa.bool_())),
+            pa.field("candidate_feats", pa.list_(pa.float32())),
+            pa.field("candidate_mask", pa.list_(pa.bool_())),
+            pa.field("candidate_pid", pa.list_(pa.int32())),
+            pa.field("cand_slot_per_src", pa.list_(pa.int32())),
+            pa.field("ship_label_per_src", pa.list_(pa.int32())),
+            pa.field("is_noop", pa.bool_()),
         ]
     )
 
 
-class _StreamingParquetWriter:
-    """case1 schema 用 streaming ParquetWriter wrapper。
+class StreamingParquetWriter:
+    """Buffer rows and flush in chunks to keep RAM bounded.
 
-    `polars.DataFrame -> pyarrow.Table -> writer.write_table` で chunk 単位に
-    flush する。途中失敗時の中途半端な parquet を残さないよう、`*.tmp` に書いて
-    close 時に target に rename する。
+    All rows for the parquet file go through this single instance; flushing
+    is automatic when the buffer reaches ``flush_every`` rows. Call
+    :meth:`close` after the last append to flush the tail and close the
+    underlying ParquetWriter. ``rows_written`` reports the cumulative count.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, flush_every: int = FLUSH_EVERY_FRAMES) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._schema = _arrow_schema()
-        self._tmp_path = path.with_suffix(path.suffix + ".tmp")
-        if self._tmp_path.exists():
-            self._tmp_path.unlink()
-        self._writer: pq.ParquetWriter | None = None
-        self._rows_written = 0
+        self._flush_every = flush_every
+        self._buf: list[dict[str, Any]] = []
+        self._writer = pq.ParquetWriter(str(path), _arrow_schema(), compression="zstd")
+        self.rows_written = 0
 
-    def write(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
+    def append(self, row: dict[str, Any]) -> None:
+        self._buf.append(row)
+        if len(self._buf) >= self._flush_every:
+            self._flush()
+
+    def _flush(self) -> None:
+        if not self._buf:
             return
-        df = pl.DataFrame(rows, schema=_empty_schema())
-        table = df.to_arrow().cast(self._schema)
-        if self._writer is None:
-            self._writer = pq.ParquetWriter(str(self._tmp_path), self._schema)
+        table = pa.Table.from_pylist(self._buf, schema=_arrow_schema())
         self._writer.write_table(table)
-        self._rows_written += df.height
+        self.rows_written += len(self._buf)
+        self._buf.clear()
 
-    def close(self) -> None:
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
-        if self._tmp_path.exists():
-            self._tmp_path.replace(self._path)
-        elif self._rows_written == 0:
-            pl.DataFrame(schema=_empty_schema()).write_parquet(self._path)
-
-    @property
-    def rows_written(self) -> int:
-        return self._rows_written
-
-
-def _rss_mb() -> float:
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if rss > 10_000_000:
-        return rss / (1024 * 1024)
-    return rss / 1024
+    def close(self) -> int:
+        self._flush()
+        self._writer.close()
+        return self.rows_written
 
 
 def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
@@ -388,77 +397,29 @@ def _num_player_slots(row: dict[str, Any], modes: list[str]) -> int:
     return 2
 
 
-def _resolve_num_workers() -> int:
-    """Episode-level multiprocessing pool size.
-
-    Default = min(cpu_count, 8) which scales linearly on RunPod (typically
-    4-12 vCPU) without exhausting memory: each worker holds ~1 episode of
-    frames (~few MB). Override via env ORBIT_WARS_PREPROCESS_WORKERS, set
-    to "1" to disable multiprocessing entirely (debug/CI).
-    """
-    raw = os.environ.get("ORBIT_WARS_PREPROCESS_WORKERS")
-    if raw is not None:
-        try:
-            return max(1, int(raw))
-        except ValueError:
-            pass
-    cpu = os.cpu_count() or 1
-    return max(1, min(cpu, 8))
-
-
-def _repo_root() -> Path:
-    return find_repo_root(Path(__file__))
-
-
-def _abspath(rel: str | Path) -> Path:
-    return absolute_under_repo(rel, start=Path(__file__))
-
-
-def _duplicate_minority_frames(
-    train_rows: list[dict[str, Any]],
-    cfg: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Row-level augmentation: frames that fire a minority target template get
-    duplicated `multiplier` times so their gradient contribution grows per
-    epoch. Unlike WeightedRandomSampler (which picks the same row repeatedly),
-    this increases the true count of minority frames in the parquet so shuffled
-    training sees fresh pairings against non-duplicated rows each epoch.
-
-    `cfg["templates"]`: list of template ids to treat as minority.
-    `cfg["multiplier"]`: positive int. `2` = frame appears twice total.
-    """
-    templates = set(int(t) for t in cfg.get("templates", []))
-    multiplier = int(cfg.get("multiplier", 2))
-    if not templates or multiplier <= 1:
-        return train_rows
-    extra_copies = multiplier - 1
-    out: list[dict[str, Any]] = []
-    n_dupe = 0
-    for row in train_rows:
-        out.append(row)
-        fired = [int(t) for t in row.get("target_per_src", []) if int(t) != -1]
-        if any(t in templates for t in fired):
-            out.extend(row for _ in range(extra_copies))
-            n_dupe += extra_copies
-    logger.info(
-        "duplicate_minority: original=%d, duplicated_rows=%d, total=%d",
-        len(train_rows),
-        n_dupe,
-        len(out),
-    )
-    return out
-
-
 def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     data_cfg = cfg["data"]
     modes = list(data_cfg.get("modes", ["1v1"]))
-    rating_quantile = float(data_cfg.get("rating_quantile", 0.75))
+    rating_quantile = float(data_cfg.get("rating_quantile", 0.50))
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
+
+    logger.info(
+        "preprocess case8 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
+        "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s",
+        featurizer.PLANET_FEAT_DIM,
+        featurizer.GLOBAL_FEAT_DIM,
+        CAND_K,
+        CAND_FEAT_DIM,
+        modes,
+        rating_quantile,
+        val_split,
+        max_episodes,
+    )
 
     index = pl.read_parquet(index_path)
     filtered, cutoff = _filter_index(index, modes, rating_quantile)
@@ -467,109 +428,167 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         filtered = filtered.head(int(max_episodes))
 
     rows = filtered.to_dicts()
-    expected_dim = MAX_PLANETS * PLANET_FEAT_DIM
-    assert expected_dim > 0 and GLOBAL_FEAT_DIM > 0  # sanity
-
-    duplicate_cfg = data_cfg.get("duplicate_minority", {}) or {}
-    duplicate_enabled = bool(duplicate_cfg.get("enabled", False))
-
-    run_id = os.environ.get("ORBIT_WARS_RUN_ID", "local")
-    started = time.monotonic()
-
-    train_writer = _StreamingParquetWriter(out_train)
-    val_writer = _StreamingParquetWriter(out_val)
-    train_buffer: list[dict[str, Any]] = []
-    val_buffer: list[dict[str, Any]] = []
-    # duplicate_minority enabled だと train_rows 全件を一度集めて dup する必要がある
-    # ため、それだけ memory に retain する (val 側は streaming のまま)。
-    train_collect: list[dict[str, Any]] | None = [] if duplicate_enabled else None
-
-    # Build worker job list: (replay_path_str, slots, match_id, bucket)
-    jobs: list[tuple[str, list[int], str]] = []
-    bucket_by_match: dict[str, str] = {}
-    for rec in rows:
-        slots = _player_slots(rec, _num_player_slots(rec, modes))
-        if not slots:
-            continue
-        rp = rec.get("replay_path") or ""
-        replay_path = (base_dir / rp).resolve() if rp else None
-        if replay_path is None or not replay_path.exists():
-            continue
-        match_id = str(rec["match_id"])
-        jobs.append((str(replay_path), slots, match_id))
-        bucket_by_match[match_id] = _split_episode(match_id, val_split)
-
-    n_workers = _resolve_num_workers()
+    n_to_process = len(rows)
     logger.info(
-        "preprocess: %d episodes, %d workers (memory-budgeted)",
-        len(jobs),
-        n_workers,
+        "preprocess case8 filter: cutoff=%.2f episodes_total=%d to_process=%d",
+        cutoff,
+        episodes_total,
+        n_to_process,
     )
 
+    train_writer = StreamingParquetWriter(out_train)
+    val_writer = StreamingParquetWriter(out_val)
+
+    started_at = time.monotonic()
     kept = 0
+    skipped_no_slots = 0
+    skipped_no_replay = 0
+    skipped_no_frames = 0
+    fired_total = 0
+    outside_total = 0
+
+    def _log_progress(processed: int) -> None:
+        elapsed = time.monotonic() - started_at
+        rate = processed / elapsed if elapsed > 0 else 0.0
+        remaining = (n_to_process - processed) / rate if rate > 0 else float("inf")
+        outside_pct = 100.0 * outside_total / max(1, fired_total)
+        logger.info(
+            "preprocess progress: %d/%d (%.1f%%) kept=%d "
+            "skip(no_slots=%d, no_replay=%d, no_frames=%d) "
+            "frames(train=%d val=%d) fired=%d outside=%d (%.1f%%) "
+            "elapsed=%.1fs rate=%.2f ep/s eta=%.0fs",
+            processed,
+            n_to_process,
+            100.0 * processed / max(1, n_to_process),
+            kept,
+            skipped_no_slots,
+            skipped_no_replay,
+            skipped_no_frames,
+            train_writer.rows_written,
+            val_writer.rows_written,
+            fired_total,
+            outside_total,
+            outside_pct,
+            elapsed,
+            rate,
+            remaining,
+        )
+
+    workers_env = os.environ.get("ORBIT_WARS_PREPROCESS_WORKERS")
+    if workers_env is not None:
+        max_workers = max(0, int(workers_env))
+    else:
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
+    # inflight cap = 4x workers — bounds memory of pending future results
+    inflight_cap = max(4, max_workers * 4)
+    logger.info(
+        "preprocess case8 parallel: workers=%d inflight_cap=%d (override via "
+        "ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
+        max_workers,
+        inflight_cap,
+    )
+
+    def _consume_result(result: _EpisodeResult) -> None:
+        nonlocal kept, fired_total, outside_total
+        nonlocal skipped_no_slots, skipped_no_replay, skipped_no_frames
+        if result.skip_reason == "no_slots":
+            skipped_no_slots += 1
+            return
+        if result.skip_reason == "no_replay":
+            skipped_no_replay += 1
+            return
+        if result.skip_reason == "no_frames":
+            skipped_no_frames += 1
+            fired_total += result.fired
+            outside_total += result.outside
+            return
+        writer = val_writer if result.bucket == "val" else train_writer
+        for frame in result.frames:
+            writer.append(frame)
+        kept += 1
+        fired_total += result.fired
+        outside_total += result.outside
+
     try:
-        if n_workers <= 1:
-            iterator = (_episode_worker(job) for job in jobs)
-        else:
-            # `spawn` start method ensures a clean fork on macOS and avoids
-            # CoW pages from the parent (keeps per-worker memory bounded).
-            ctx = mp.get_context("spawn")
-            pool = ctx.Pool(processes=n_workers)
-            iterator = pool.imap_unordered(_episode_worker, jobs, chunksize=1)
-        try:
-            for match_id, frames in iterator:
-                if not frames:
-                    continue
-                bucket = bucket_by_match.get(match_id, "train")
-                if bucket == "val":
-                    val_buffer.extend(frames)
-                else:
-                    if train_collect is not None:
-                        train_collect.extend(frames)
-                    else:
-                        train_buffer.extend(frames)
-                kept += 1
-
-                if kept % CHUNK_EPISODES == 0:
-                    if train_collect is None:
-                        train_writer.write(train_buffer)
-                        train_buffer.clear()
-                    val_writer.write(val_buffer)
-                    val_buffer.clear()
-                    mark_progress(
-                        run_id,
-                        "preprocess.episode",
-                        {
-                            "episodes_done": kept,
-                            "frames_train": (
-                                len(train_collect)
-                                if train_collect is not None
-                                else train_writer.rows_written
-                            ),
-                            "frames_val": val_writer.rows_written,
-                            "mem_rss_mb": round(_rss_mb(), 1),
-                            "elapsed_s": round(time.monotonic() - started, 1),
-                        },
+        if max_workers <= 1:
+            # Serial path — same behavior as the original single-process loop.
+            for processed, rec in enumerate(rows, start=1):
+                try:
+                    result = _process_episode(
+                        rec, base_dir, val_split, _num_player_slots(rec, modes)
                     )
-        finally:
-            if n_workers > 1:
-                pool.close()
-                pool.join()
-
-        if train_collect is not None:
-            duplicated = _duplicate_minority_frames(train_collect, duplicate_cfg)
-            train_writer.write(duplicated)
+                    _consume_result(result)
+                finally:
+                    if processed % PROGRESS_LOG_EVERY == 0 or processed == n_to_process:
+                        _log_progress(processed)
         else:
-            train_writer.write(train_buffer)
-            train_buffer.clear()
-        val_writer.write(val_buffer)
-        val_buffer.clear()
-    finally:
-        train_writer.close()
-        val_writer.close()
+            with ProcessPoolExecutor(max_workers=max_workers) as pool:
+                in_iter = iter(enumerate(rows, start=1))
+                inflight: dict[Any, int] = {}
 
-    n_train = train_writer.rows_written
-    n_val = val_writer.rows_written
+                def _submit_next() -> bool:
+                    try:
+                        idx, rec = next(in_iter)
+                    except StopIteration:
+                        return False
+                    fut = pool.submit(
+                        _process_episode,
+                        rec,
+                        base_dir,
+                        val_split,
+                        _num_player_slots(rec, modes),
+                    )
+                    inflight[fut] = idx
+                    return True
+
+                # prime the pool up to inflight_cap
+                for _ in range(inflight_cap):
+                    if not _submit_next():
+                        break
+
+                completed = 0
+                while inflight:
+                    for fut in as_completed(list(inflight)):
+                        idx = inflight.pop(fut)
+                        try:
+                            result = fut.result()
+                            _consume_result(result)
+                        except Exception:
+                            logger.exception(
+                                "preprocess worker failed on episode idx=%d", idx
+                            )
+                            skipped_no_frames += 1
+                        completed += 1
+                        if (
+                            completed % PROGRESS_LOG_EVERY == 0
+                            or completed == n_to_process
+                        ):
+                            _log_progress(completed)
+                        # Refill so total inflight stays at inflight_cap
+                        _submit_next()
+                        # Re-poll as_completed after refill so that newly
+                        # submitted futures also enter the wait set; break the
+                        # inner loop and re-check the outer `while inflight`.
+                        break
+    finally:
+        logger.info(
+            "preprocess case8 closing parquet writers: "
+            "train_flushed_so_far=%d val_flushed_so_far=%d",
+            train_writer.rows_written,
+            val_writer.rows_written,
+        )
+        close_started = time.monotonic()
+        n_train = train_writer.close()
+        n_val = val_writer.close()
+        logger.info(
+            "preprocess case8 parquet finalized: train=%d val=%d close_elapsed=%.1fs "
+            "out_train=%s out_val=%s",
+            n_train,
+            n_val,
+            time.monotonic() - close_started,
+            out_train,
+            out_val,
+        )
 
     report = PreprocessReport(
         rating_cutoff=cutoff,
@@ -579,25 +598,28 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         val_frames=n_val,
         out_train=out_train,
         out_val=out_val,
+        label_outside_candidates=outside_total,
+        fired_total=fired_total,
     )
+    pct = 100.0 * outside_total / max(1, fired_total)
+    total_elapsed = time.monotonic() - started_at
     logger.info(
-        "preprocess done: rating_cutoff=%.2f episodes=%d/%d frames train=%d val=%d",
+        "preprocess case8 done: cutoff=%.2f kept=%d/%d "
+        "skip(no_slots=%d, no_replay=%d, no_frames=%d) "
+        "frames train=%d val=%d label_outside_K=%d / fired=%d (%.1f%%) "
+        "total_elapsed=%.1fs",
         report.rating_cutoff,
         report.episodes_kept,
         report.episodes_total,
+        skipped_no_slots,
+        skipped_no_replay,
+        skipped_no_frames,
         report.train_frames,
         report.val_frames,
-    )
-    mark_progress(
-        run_id,
-        "preprocess.done",
-        {
-            "episodes_kept": kept,
-            "frames_train": n_train,
-            "frames_val": n_val,
-            "mem_rss_mb": round(_rss_mb(), 1),
-            "elapsed_s": round(time.monotonic() - started, 1),
-        },
+        outside_total,
+        fired_total,
+        pct,
+        total_elapsed,
     )
     return report
 
@@ -605,53 +627,27 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 app = typer.Typer(add_completion=False)
 
 
-def _load_params(config_path: Path | None = None) -> dict[str, Any]:
-    if config_path is None:
-        path = _repo_root() / "params.yaml"
-    else:
-        path = config_path
-        if not path.is_absolute():
-            # 相対 path は cwd → repo_root/bot → repo_root の順で探す。
-            # `uv run --directory bot python -m ...` cwd は bot/ なので
-            # `pipeline/imitation/case8/configs/il_case8.yaml` のような cwd
-            # 相対 path がまず通る。fallback でも見つからなければ最後の path
-            # を投げて FileNotFoundError を出す (デバッグ用に最終 path 残す)。
-            candidates = [
-                Path.cwd() / path,
-                _repo_root() / "bot" / path,
-                _repo_root() / path,
-            ]
-            for c in candidates:
-                if c.is_file():
-                    path = c
-                    break
-            else:
-                path = candidates[0]
-    with path.open() as f:
-        loaded = yaml.safe_load(f)
-    assert isinstance(loaded, dict), f"{path} must be a mapping"
-    return loaded
-
-
 @app.command()
 def main(
-    config: Path = typer.Option(
-        None,
+    config: Path = typer.Option(  # noqa: B008
+        Path("pipeline/imitation/case8/configs/il_case8.yaml"),
         "--config",
         "-c",
-        help="YAML config path (default=params.yaml, case5 は configs/il_case8.yaml)",
+        help="YAML config path",
     ),
 ) -> None:
-    """CLI: run preprocess using repo-root params.yaml or --config override."""
+    """CLI: run preprocess with the given config."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    cfg = _load_params(config)
+    with config.open() as f:
+        cfg = yaml.safe_load(f)
     report = preprocess(cfg)
     typer.echo(
         f"rating_cutoff={report.rating_cutoff:.2f} "
         f"episodes_kept={report.episodes_kept}/{report.episodes_total} "
-        f"train_frames={report.train_frames} val_frames={report.val_frames}"
+        f"train_frames={report.train_frames} val_frames={report.val_frames} "
+        f"label_outside={report.label_outside_candidates}/{report.fired_total}"
     )
 
 

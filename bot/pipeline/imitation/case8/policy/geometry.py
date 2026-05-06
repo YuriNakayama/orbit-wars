@@ -1,11 +1,11 @@
 # Adapted from "Orbit Wars 2026 - Reinforce" by sigmaborov
 # https://www.kaggle.com/code/sigmaborov/lb-897-orbit-wars-2026-reinforce
 # Licensed under Apache License 2.0
-"""Aim/intercept geometry for imitation/case8.
+"""Aim/intercept geometry for imitation/case3.
 
 Independent copy of the subset of pipeline/rulebase/case1/baseline/core/{geometry,
 physics,config}.py needed to compute angles for fired fleets. Keeping this
-self-contained guarantees imitation/case8 has no runtime dependency on rulebase.
+self-contained guarantees imitation/case3 has no runtime dependency on rulebase.
 """
 
 from __future__ import annotations

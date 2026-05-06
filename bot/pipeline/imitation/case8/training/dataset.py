@@ -1,4 +1,19 @@
-"""Parquet → torch Dataset/DataLoader for imitation/case8 IL baseline."""
+"""Parquet → torch Dataset/DataLoader for imitation/case8.
+
+iter13: in-memory load via pyarrow zero-copy. iter5-12 lazy + per-row-group
+to_pylist refactor caused epoch=0 hang on RunPod RTX 4090 (likely host-RAM
+swap thrash from cache + arrow buffer pool overhead under shuffle=True).
+
+Reverts to the iter1-3 in-memory shape but **avoids the polars+pylist+numpy
+triple-allocation that triggered the iter4 OOM**: list-typed columns are
+flattened via pyarrow `flatten().to_numpy(zero_copy_only=False)` so only one
+numpy buffer is materialised per column.
+
+RAM peak estimate: ~6-8 GB for 300k rows (vs. 30 GB for the iter1
+read_parquet→to_list→np.array path that OOM'd, and vs. iter5-12 lazy that
+hung at epoch_start). Comfortably under the 24-32 GB host of an RTX 4090
+pod.
+"""
 
 from __future__ import annotations
 
@@ -6,16 +21,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
+from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
 from pipeline.imitation.case8.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case8.policy.templates import TEMPLATE_CTX_DIM
 
 
 @dataclass(frozen=True)
@@ -25,110 +41,174 @@ class Sample:
     planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     my_planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     target_mask: torch.Tensor  # (MAX_PLANETS,) bool
-    template_ctx: torch.Tensor  # (MAX_PLANETS, TEMPLATE_CTX_DIM)
-    from_multihot: torch.Tensor  # (MAX_PLANETS,) bool — True for fired-from sources
-    target_per_src: (
-        torch.Tensor
-    )  # (MAX_PLANETS,) int64 — target slot or NO_OP, -1 if unused
-    ships_per_src: torch.Tensor  # (MAX_PLANETS,) int64 — bucket index, -1 if unused
+    candidate_feats: torch.Tensor  # (MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
+    candidate_mask: torch.Tensor  # (MAX_PLANETS, CAND_K) bool
+    candidate_pid: torch.Tensor  # (MAX_PLANETS, CAND_K) int64
+    cand_slot_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
+    ship_label_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
     is_noop: bool
 
 
 @dataclass(frozen=True)
 class BatchedSample:
-    planet_feats: torch.Tensor  # (B, MAX_PLANETS, PLANET_FEAT_DIM)
-    global_feats: torch.Tensor  # (B, GLOBAL_FEAT_DIM)
-    planet_mask: torch.Tensor  # (B, MAX_PLANETS)
-    my_planet_mask: torch.Tensor  # (B, MAX_PLANETS)
-    target_mask: torch.Tensor  # (B, MAX_PLANETS)
-    template_ctx: torch.Tensor  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM)
-    from_multihot: torch.Tensor  # (B, MAX_PLANETS) bool
-    target_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
-    ships_per_src: torch.Tensor  # (B, MAX_PLANETS) int64
-    is_noop: torch.Tensor  # (B,) bool
+    planet_feats: torch.Tensor
+    global_feats: torch.Tensor
+    planet_mask: torch.Tensor
+    my_planet_mask: torch.Tensor
+    target_mask: torch.Tensor
+    candidate_feats: torch.Tensor
+    candidate_mask: torch.Tensor
+    candidate_pid: torch.Tensor
+    cand_slot_per_src: torch.Tensor
+    ship_label_per_src: torch.Tensor
+    is_noop: torch.Tensor
 
 
-class CaseThreeDataset(Dataset[Sample]):
-    """In-memory parquet-backed Dataset (rows ≈ 1.6 KB each)."""
+def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
+    """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
+    numpy buffer **without** materialising a Python list.
 
-    def __init__(self, parquet_path: Path | str) -> None:
-        self._df = pl.read_parquet(str(parquet_path))
-        self._planet_feats = np.array(
-            self._df["planet_feats"].to_list(), dtype=np.float32
-        ).reshape(-1, MAX_PLANETS, PLANET_FEAT_DIM)
-        self._global_feats = np.array(
-            self._df["global_feats"].to_list(), dtype=np.float32
-        ).reshape(-1, GLOBAL_FEAT_DIM)
-        self._planet_mask = np.array(
-            self._df["planet_mask"].to_list(), dtype=np.bool_
-        ).reshape(-1, MAX_PLANETS)
-        self._my_planet_mask = np.array(
-            self._df["my_planet_mask"].to_list(), dtype=np.bool_
-        ).reshape(-1, MAX_PLANETS)
-        self._target_mask = np.array(
-            self._df["target_mask"].to_list(), dtype=np.bool_
-        ).reshape(-1, MAX_PLANETS)
-        self._template_ctx = np.array(
-            self._df["template_ctx"].to_list(), dtype=np.float32
-        ).reshape(-1, MAX_PLANETS, TEMPLATE_CTX_DIM)
-        self._from_multihot = np.array(
-            self._df["from_multihot"].to_list(), dtype=np.bool_
-        ).reshape(-1, MAX_PLANETS)
-        self._target_per_src = np.array(
-            self._df["target_per_src"].to_list(), dtype=np.int64
-        ).reshape(-1, MAX_PLANETS)
-        self._ships_per_src = np.array(
-            self._df["ships_per_src"].to_list(), dtype=np.int64
-        ).reshape(-1, MAX_PLANETS)
-        self._is_noop = self._df["is_noop"].to_numpy().astype(np.bool_)
+    `combine_chunks()` consolidates into one ListArray; nested `flatten()`
+    drills past list nesting until we reach a primitive array; that primitive
+    array's `.to_numpy(zero_copy_only=False)` gives a single numpy buffer.
 
-    def sample_weights_from_target(
+    Returns a writable copy so downstream `torch.from_numpy` accepts it and
+    column-masking (mask_planet_cols / mask_global_cols) can mutate.
+    """
+    arr: pa.Array = col.combine_chunks()
+    while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
+        arr = arr.flatten()
+    return np.array(arr.to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
+
+
+def _take(table_box: list[pa.Table], name: str, dtype: np.dtype) -> np.ndarray:
+    """Convert a list-typed column to numpy, then drop it from the table to
+    free its arrow buffer. The table is held in a single-element list so this
+    helper can mutate it in place."""
+    arr = _list_to_numpy(table_box[0][name], dtype)
+    table_box[0] = table_box[0].drop_columns([name])
+    return arr
+
+
+def _take_primitive(
+    table_box: list[pa.Table], name: str, dtype: np.dtype
+) -> np.ndarray:
+    """Like `_take` but for primitive (non-list) columns."""
+    arr = np.array(
+        table_box[0][name].to_numpy(zero_copy_only=False), dtype=dtype, copy=True
+    )
+    table_box[0] = table_box[0].drop_columns([name])
+    return arr
+
+
+class CaseFourDataset(Dataset[Sample]):
+    """In-memory parquet-backed Dataset for case8 (iter13 refactor).
+
+    `__init__` reads the entire parquet once via pyarrow and converts each
+    list-typed column to a single numpy buffer. `__getitem__` is a pure
+    numpy slice, so DataLoader workers can fan out without per-batch I/O.
+    """
+
+    def __init__(
         self,
-        num_classes: int,
-        power: float = 0.5,
-        ignore_index: int = -1,
-        aggregate: str = "mean",
-    ) -> np.ndarray:
-        """Per-sample weight ∝ mean (1 / class_freq)^power across fired target labels.
+        parquet_path: Path | str,
+        mask_planet_cols: list[int] | None = None,
+        mask_global_cols: list[int] | None = None,
+    ) -> None:
+        # Drop columns from the arrow Table one at a time after converting to
+        # numpy: peak RAM is then ~ (largest column copy) + (table - that
+        # column), not (full table + all numpy copies). The largest column
+        # is `candidate_feats` at ~6 GB for 300k rows.
+        tbl: list[pa.Table] = [pq.read_table(str(parquet_path))]
+        n = tbl[0].num_rows
+        has_ship_label = "ship_label_per_src" in tbl[0].schema.names
 
-        A frame may fire multiple sources with different target templates. We
-        aggregate per-source class_weight via `aggregate` (`mean` or `max`).
-        `mean` is the default — it lifts minority frames proportionally to
-        their minority content rather than letting a single rare label in a
-        mostly-majority frame dominate. `power=0.5` is half-strength 1/freq.
-        """
-        flat = self._target_per_src.reshape(-1)
-        valid = flat[flat != ignore_index]
-        counts = np.bincount(valid, minlength=num_classes).astype(np.float64)
-        freq = np.where(counts > 0, counts / counts.sum(), 1.0)
-        class_weight = np.power(1.0 / np.clip(freq, 1e-12, None), power)
-        weights = np.zeros(self._target_per_src.shape[0], dtype=np.float64)
-        for i in range(self._target_per_src.shape[0]):
-            row = self._target_per_src[i]
-            fired = row[row != ignore_index]
-            if fired.size == 0:
-                weights[i] = 1.0
-            elif aggregate == "max":
-                weights[i] = float(class_weight[fired].max())
-            else:
-                weights[i] = float(class_weight[fired].mean())
-        weights *= len(weights) / weights.sum()
-        return weights
+        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32))
+        if n > 0:
+            self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
+        else:
+            self._planet_feat_dim = PLANET_FEAT_DIM
+        self._planet_feats = planet_arr.reshape(n, MAX_PLANETS, self._planet_feat_dim)
+        for col in mask_planet_cols or []:
+            if 0 <= col < self._planet_feat_dim:
+                self._planet_feats[:, :, col] = 0.0
+
+        global_arr = _take(tbl, "global_feats", np.dtype(np.float32))
+        if n > 0:
+            self._global_feat_dim = int(global_arr.size // n)
+        else:
+            self._global_feat_dim = GLOBAL_FEAT_DIM
+        self._global_feats = global_arr.reshape(n, self._global_feat_dim)
+        for col in mask_global_cols or []:
+            if 0 <= col < self._global_feat_dim:
+                self._global_feats[:, col] = 0.0
+
+        self._planet_mask = _take(tbl, "planet_mask", np.dtype(np.bool_)).reshape(
+            n, MAX_PLANETS
+        )
+        self._my_planet_mask = _take(tbl, "my_planet_mask", np.dtype(np.bool_)).reshape(
+            n, MAX_PLANETS
+        )
+        self._target_mask = _take(tbl, "target_mask", np.dtype(np.bool_)).reshape(
+            n, MAX_PLANETS
+        )
+        self._candidate_feats = _take(
+            tbl, "candidate_feats", np.dtype(np.float32)
+        ).reshape(n, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
+        self._candidate_mask = _take(tbl, "candidate_mask", np.dtype(np.bool_)).reshape(
+            n, MAX_PLANETS, CAND_K
+        )
+        self._candidate_pid = _take(tbl, "candidate_pid", np.dtype(np.int64)).reshape(
+            n, MAX_PLANETS, CAND_K
+        )
+        self._cand_slot_per_src = _take(
+            tbl, "cand_slot_per_src", np.dtype(np.int64)
+        ).reshape(n, MAX_PLANETS)
+        if has_ship_label:
+            self._ship_label_per_src = _take(
+                tbl, "ship_label_per_src", np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._ship_label_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+        self._is_noop = _take_primitive(tbl, "is_noop", np.dtype(np.bool_))
+        self._n = n
+
+        del tbl
+
+    def class_weight_on_slots(
+        self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
+    ) -> torch.Tensor:
+        """Inverse-frequency class weights — see iter1-3 for rationale."""
+        del beta
+        flat = self._cand_slot_per_src.reshape(-1)
+        flat = flat[flat != ignore_index]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
+        present_mask = counts > 0
+        if not present_mask.any():
+            return torch.ones(num_classes, dtype=torch.float32)
+        raw = np.zeros(num_classes, dtype=np.float64)
+        raw[present_mask] = 1.0 / counts[present_mask]
+        mean_raw = float(raw[present_mask].mean())
+        weights = raw / max(mean_raw, 1e-12)
+        return torch.tensor(weights, dtype=torch.float32)
 
     def __len__(self) -> int:
-        return int(self._planet_feats.shape[0])
+        return int(self._n)
 
     def __getitem__(self, idx: int) -> Sample:
+        if idx < 0 or idx >= self._n:
+            raise IndexError(idx)
         return Sample(
             planet_feats=torch.from_numpy(self._planet_feats[idx]),
             global_feats=torch.from_numpy(self._global_feats[idx]),
             planet_mask=torch.from_numpy(self._planet_mask[idx]),
             my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
             target_mask=torch.from_numpy(self._target_mask[idx]),
-            template_ctx=torch.from_numpy(self._template_ctx[idx]),
-            from_multihot=torch.from_numpy(self._from_multihot[idx]),
-            target_per_src=torch.from_numpy(self._target_per_src[idx]),
-            ships_per_src=torch.from_numpy(self._ships_per_src[idx]),
+            candidate_feats=torch.from_numpy(self._candidate_feats[idx]),
+            candidate_mask=torch.from_numpy(self._candidate_mask[idx]),
+            candidate_pid=torch.from_numpy(self._candidate_pid[idx]),
+            cand_slot_per_src=torch.from_numpy(self._cand_slot_per_src[idx]),
+            ship_label_per_src=torch.from_numpy(self._ship_label_per_src[idx]),
             is_noop=bool(self._is_noop[idx]),
         )
 
@@ -140,9 +220,10 @@ def collate(samples: list[Sample]) -> BatchedSample:
         planet_mask=torch.stack([s.planet_mask for s in samples]),
         my_planet_mask=torch.stack([s.my_planet_mask for s in samples]),
         target_mask=torch.stack([s.target_mask for s in samples]),
-        template_ctx=torch.stack([s.template_ctx for s in samples]),
-        from_multihot=torch.stack([s.from_multihot for s in samples]),
-        target_per_src=torch.stack([s.target_per_src for s in samples]),
-        ships_per_src=torch.stack([s.ships_per_src for s in samples]),
+        candidate_feats=torch.stack([s.candidate_feats for s in samples]),
+        candidate_mask=torch.stack([s.candidate_mask for s in samples]),
+        candidate_pid=torch.stack([s.candidate_pid for s in samples]),
+        cand_slot_per_src=torch.stack([s.cand_slot_per_src for s in samples]),
+        ship_label_per_src=torch.stack([s.ship_label_per_src for s in samples]),
         is_noop=torch.tensor([s.is_noop for s in samples], dtype=torch.bool),
     )

@@ -1,100 +1,122 @@
-# Imitation Case8 — Feature Engineering (57 × 8)
+# Imitation Case4 — Kaggle tutorial-style candidate head (BC)
 
-case7 系列 (Set Transformer 互換 backbone) を base に、**feature engineering を大幅拡張**した
-imitation case。iter4 で planet 61 / global 12 まで膨らませ、iter6 の K2/K4 ablation で
-causal leak / dead group を削除し **planet 57 / global 8** に確定した版。
+`pipeline/imitation/case3` の Graph U-Net バックボーンと history feature 群を
+そのまま受け継ぎ、出力 head を Kaggle ノートブック
+[`kashiwaba/orbit-wars-reinforcement-learning-tutorial`](https://www.kaggle.com/code/kashiwaba/orbit-wars-reinforcement-learning-tutorial)
+に倣った **per-source × candidate categorical** に差し替えた模倣学習エージェント。
 
-詳細: [`docs/experiment/imitation/20260504_case8_feature_engineering/`](../../../../docs/experiment/imitation/20260504_case8_feature_engineering/)
+## case3 からの差分
 
-## 特徴量次元の変遷
+| カテゴリ | case3 | case8 |
+|---|---|---|
+| Backbone | Graph U-Net (kNN k=8, hidden=128, TopK pool 3 段) | **完全同一** |
+| `PLANET_FEAT_DIM` | 35 | 35 (変更なし) |
+| `GLOBAL_FEAT_DIM` | 20 | 20 (変更なし) |
+| Per-source context | `template_ctx` (40 dim) | **`candidate_feats` (K=8 × 14 dim)** |
+| `from_head` | per-planet sigmoid (P,) | **削除** (slot 0 で no-op 表現) |
+| `target_head` | per-planet × NUM_TEMPLATES=8 | **削除** |
+| `ships_head` | per-planet × 4 buckets | **削除** (rule-based) |
+| `candidate_head` | — | **新設**: per-source K=8 categorical |
+| Ships rule | learned (4 buckets) | `max(target.ships+1, 20)` (notebook 流) |
 
-| Iter | PLANET_FEAT_DIM | GLOBAL_FEAT_DIM | 概要 |
-|------|----------------:|----------------:|------|
-| iter4 | 61 | 12 | feature 集合フル拡張 |
-| iter5 | 61 | 12 | permutation importance で K2/K4 を検出 |
-| iter6 (現状) | **57** | **8** | K2 削除 (4 列) + K4 削除 (4 列) |
+## Action / observation 設計
 
-### iter6 で削除した dim group
+ノートブックの per-source × K candidate 構造を BC で再現:
 
-| Group | 削除元 | 削除理由 |
-|-------|--------|---------|
-| K2 outgoing_fleet_trajectory (planet 53–56, 4 列) | planet | **Causal leak**: `obs.fleets` は action_N 適用後の値。自軍 fleet の `from_pid` / `ships` が `ships_per_src` ラベルと完全一致し、policy が逆算可能になる。iter5 permutation で `sum|Δ|=1.70` |
-| K4 aux_multi_horizon_global (global 8–11, 4 列) | global | iter5 permutation で `sum|Δ|=0.001`、H2 と相関で意義なし dead group |
+- `target_index = 0` → no-op (この惑星は撃たない)
+- `target_index = 1..K-1` → 候補スロット (距離順 enemy / neutral / friendly bucket)
 
-K3 frontline_distance は slot shift で planet 57→53 へ移動。
+候補ビルダーは `policy/candidates.py` 参照: enemy_quota = neutral_quota = ⌊(K-1)/3⌋,
+残りは friendly。足りなければ近距離順 fallback。
 
-## case7 からの差分
+per-candidate 14 次元 (notebook と同形):
 
-| カテゴリ | case7 | case8 |
-|----------|------:|------:|
-| `PLANET_FEAT_DIM` | 17 | **57** |
-| `GLOBAL_FEAT_DIM` | 6 | **8** |
-| バックボーン | Set Transformer | Graph U-Net (DeepSetsPolicy alias) |
-| history 取扱い | obs_N | **obs_{N-2}, obs_{N-3}** のみ (causal leak 対策) |
-| launch event | obs.fleets 直参照 | `prev_fleet_snapshot` 差分 (`prev_fleets_{N-2..N-5}` の N−1 と N−2 比較) |
+| idx | 名前 | 概要 |
+|---|---|---|
+| 0 | `is_valid` | スロットが populated か |
+| 1..3 | `is_neutral / is_mine / is_enemy` | 候補の所有者 1-hot |
+| 4..5 | `tgt.x, tgt.y` | (board_size 正規化) |
+| 6..7 | `dx, dy` | src→target 相対座標 |
+| 8 | `dist` | src→target 距離 (board_size 正規化) |
+| 9 | `tgt.ships` | (max_ships=400 正規化) |
+| 10 | `tgt.production` | (max=5 正規化) |
+| 11 | `tgt_is_rotating` | 軌道惑星か |
+| 12 | **`crosses_sun`** | src→target 直線が sun に被るか (case3 にない新シグナル) |
+| 13 | `src.ships` | reference signal |
+
+slot 0 (no-op) は `is_valid=1.0` 以外 0.0。
+
+`candidate_mask`: slot 0 = 常に True。slot 1..K-1 は
+`ships_needed > 0 AND not crosses_sun AND src.ships >= ships_needed` で True。
+無効 slot は logit を `-inf` でマスクする。
 
 ## ディレクトリ構成
 
 ```
 pipeline/imitation/case8/
-├── main.py                  # Kaggle entry (Path.cwd() ベース)
-├── policy/                  # 提出物
-│   ├── agent.py             # agent(obs) エントリ + HistoryState ring buffer
-│   ├── featurizer.py        # obs → torch.Tensor (57 × 8)
-│   ├── timeline.py          # ship-prediction + multi-horizon summary
-│   ├── model.py             # Graph U-Net policy (DeepSetsPolicy alias)
-│   ├── decoder.py           # PolicyOutput → action list
-│   ├── geometry.py          # aim_with_prediction (独立コピー)
-│   ├── templates.py         # target template 定義
+├── main.py                  # Kaggle entry (sys.path.insert(0, str(Path.cwd())))
+├── policy/
+│   ├── agent.py             # agent(obs) — HistoryState を per-match 保持
+│   ├── candidates.py        # build_candidates / candidate_features (notebook 流)
+│   ├── featurizer.py        # planet 35 / global 20 / candidate 8x14
+│   ├── geometry.py          # aim_with_prediction (case3 から独立コピー)
+│   ├── decoder.py           # candidate_logits → action list (rule-based ships)
+│   ├── model.py             # Graph U-Net + per-source candidate head
 │   ├── types.py             # BatchFeatures / PolicyOutput / WorldSnapshot
-│   └── weights.pt           # canonical (DVC 管理、git untracked)
-├── configs/
-│   └── il_case8.yaml        # 本番設定
+│   └── weights.pt           # 学習済み重み (training 後生成)
 ├── training/                # 開発用 (.submitignore)
-└── evaluation/              # 開発用 (.submitignore)
+│   ├── preprocess.py
+│   ├── dataset.py
+│   ├── losses.py
+│   └── train.py
+├── evaluation/              # 開発用 (.submitignore)
+│   └── eval_vs_baseline.py
+└── configs/                 # 開発用 (.submitignore)
+    └── il_case8.yaml
 ```
 
 ## 手順
 
 ```bash
-cd bot
-
-# 1) 前処理 (case8 専用 parquet を data/mart/imitation/case8/ に生成)
-uv run python -m pipeline.imitation.case8.training.preprocess \
+# 1) データ前処理 (replay → parquet)
+uv run --directory backend python -m pipeline.imitation.case8.training.preprocess \
     --config pipeline/imitation/case8/configs/il_case8.yaml
 
-# 2) 学習 (BC) — weights.pt を上書き
-uv run python -m pipeline.imitation.case8.training.train \
+# 2) 学習 (BC, ローカル)
+uv run --directory backend python -m pipeline.imitation.case8.training.train \
     --config pipeline/imitation/case8/configs/il_case8.yaml
 
-# 3) ローカル評価 (vs rulebase/case1 baseline_v1, 100 戦)
-uv run python -m pipeline.imitation.case8.evaluation.eval_vs_baseline --episodes 100 --seed 0
+# 2') GPU 学習 (Vast.ai)
+git push origin <branch>
+dev/vast train <commit-sha> --case case8 --stage train_imitation_case8
+
+# 3) ローカル評価 (vs rulebase/case1 baseline_v1)
+uv run --directory backend python -m pipeline.imitation.case8.evaluation.eval_vs_baseline \
+    --episodes 30 --seed 0
 ```
-
-## DVC 経由
-
-```bash
-uv run --directory bot dvc repro preprocess_imitation_case8
-uv run --directory bot dvc repro train_imitation_case8
-uv run --directory bot dvc repro eval_imitation_case8
-```
-
-## 設計原則
-
-- **case 間独立**: case7 と featurizer 構造は近いが、history / leak 対策の差が大きいため独立コピー。
-- **Causal leak 対策**: action_N 適用後の `obs.fleets` を直接見ず、obs_{N-2}/obs_{N-3} と
-  `prev_fleet_snapshot` 差分のみを参照する。HistoryState は per-match ring buffer。
-- **Action 表現**: `(from_planet 多選択, target_template 分類, ships_bucket 分類)` の 3 ヘッド。
 
 ## レジストリ
+
+`src/dataset/selfplay/agents.py` に `il_v8` として登録:
 
 ```python
 "il_v8": "pipeline.imitation.case8.policy.agent:agent",
 ```
+
+## 設計原則
+
+- **case 間独立**: case8 は case1/case2/case3 / rulebase/* に依存しない独立コピー。
+  shared なヘルパー (`geometry.py` 等) は **直接コピー** している。
+- **Backbone 不変**: Graph U-Net (kNN k=8, hidden=128, TopK pool 3 段) は case3 と
+  完全一致させる (user 指示)。head 部のみ再設計。
+- **Action 表現**: `(per-source candidate slot)` の 1 head。slot 0 は no-op、
+  slot 1..7 は notebook 流の候補リストへ写像。`ships` は `max(tgt.ships+1, 20)` 固定。
+- **Evaluation**: Kaggle publicScore は使わない。ローカル `eval_vs_baseline` の勝率のみ。
+  300 戦未満の結果は noise として扱う (`project_imitation_case1_phase3` の知見)。
 
 ## モデルバージョン
 
 | ファイル | 説明 |
 |---------|------|
 | `policy/weights.pt` | canonical。`dev/{vast,runpod} promote` で上書き |
-| `policy/weights_iter<N>.pt` | iteration 履歴 (生成された場合のみ。命名規則は imitation/README.md 参照) |
+| `policy/weights_iter<N>.pt` | iteration 履歴 (生成された場合のみ。命名規則は `imitation/README.md` 参照) |
