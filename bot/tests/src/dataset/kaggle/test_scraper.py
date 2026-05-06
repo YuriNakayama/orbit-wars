@@ -261,3 +261,81 @@ def test_run_rejects_empty_modes(tmp_path: Path) -> None:
     spec = _make_spec(tmp_path, modes=())
     with pytest.raises(ValueError, match="modes"):
         scraper.run(spec)
+
+
+def test_run_reports_episodes_planned(tmp_path: Path) -> None:
+    """Phase1 で確定した取得予定数が ScrapeResult.episodes_planned に出る。"""
+
+    spec = _make_spec(tmp_path)
+    episodes = [_episode(1), _episode(2, state="ERRORED"), _episode(3)]
+    result = scraper.run(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing(episodes),
+        replay_fetcher=lambda _s, eid: _replay_response(eid),
+    )
+    assert result.episodes_planned == 2
+    assert result.episodes_fetched == 2
+    assert result.episodes_skipped_failed == 1
+
+
+def test_run_logs_phase_progress(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """plan/fetch phase の進捗ログが INFO で出る。"""
+
+    spec = _make_spec(tmp_path)
+    episodes = [_episode(eid) for eid in range(1, 4)]
+    with caplog.at_level("INFO", logger="dataset.kaggle.scraper"):
+        scraper.run(
+            spec,
+            session=MagicMock(),
+            rate_limit=_fast_bucket(),
+            leaderboard_fetcher=lambda _top: [_team(10)],
+            team_fetcher=lambda _s, _t: _team_response(),
+            episodes_lister=lambda _s, _sid: _listing(episodes),
+            replay_fetcher=lambda _s, eid: _replay_response(eid),
+            progress_every=1,
+        )
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("phase=plan" in m and "planned=" in m for m in msgs)
+    assert any("phase=fetch total=3" in m for m in msgs)
+    assert any("phase=fetch [3/3]" in m for m in msgs)
+
+
+def test_run_no_plan_no_fetch(tmp_path: Path) -> None:
+    """既取得 episode のみの場合 fetch が走らずも fetched=0。"""
+
+    spec = _make_spec(tmp_path)
+    fetcher_calls: list[int] = []
+
+    def _replay_fetcher(_s: Any, eid: int) -> dict[str, Any]:
+        fetcher_calls.append(eid)
+        return _replay_response(eid)
+
+    scraper.run(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(1)]),
+        replay_fetcher=_replay_fetcher,
+    )
+    fetcher_calls.clear()
+
+    result = scraper.run(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing([_episode(1)]),
+        replay_fetcher=_replay_fetcher,
+    )
+    assert result.episodes_planned == 0
+    assert result.episodes_fetched == 0
+    assert fetcher_calls == []

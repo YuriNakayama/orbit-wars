@@ -3,6 +3,17 @@
 leaderboard → team → publicLeaderboardSubmissionId → ListEpisodes → GetEpisodeReplay
 → records/replay 永続化の全体フロー。`ScrapeSpec` に設定を集約し、
 `run(...)` が `ScrapeResult` を返す。`dry_run=True` では FS 書き込みを skip する。
+
+実行は 2 phase 構成:
+
+1. Phase 1 (plan): leaderboard / team / list_episodes を走査し、既取得 / mode 不一致 /
+   失敗 episode を除外したうえで「実際に replay 取得すべき episode リスト」を確定する。
+   replay は呼ばずレートも軽い (top×2 calls)。
+2. Phase 2 (fetch): plan で確定した episode に対してのみ replay 取得 + 永続化。
+   `[i/total]` 形式で進捗ログを出力。
+
+差分ダウンロードは `state.existing_episode_ids` で読み込んだ `seen_ids` に含まれる
+episode_id を Phase 1 段階で除外することで実現している。
 """
 
 from __future__ import annotations
@@ -40,11 +51,19 @@ class ScrapeResult:
     episodes_skipped_existing: int
     episodes_skipped_failed: int
     episodes_skipped_mode: int
+    episodes_planned: int
     episodes_fetched: int
     episodes_failed: int
     records_written: int
     replays_written: int
     dry_run: bool
+
+
+@dataclass(frozen=True)
+class _PlannedEpisode:
+    episode_id: int
+    raw: dict[str, Any]
+    team_id_by_submission: dict[int, int]
 
 
 @dataclass
@@ -84,45 +103,66 @@ def _flush(acc: _Accumulator, spec: ScrapeSpec) -> tuple[int, int]:
     return written_records, written_replays
 
 
-def _process_episode(
+def _filter_episode(
     *,
-    session: requests.Session,
     raw: dict[str, Any],
     spec: ScrapeSpec,
     seen_ids: set[int],
     acc: _Accumulator,
-    run_id: str,
-    rate_limit: TokenBucket,
-    replay_fetcher: ReplayFetcher,
-    team_id_by_submission: dict[int, int],
-) -> None:
+) -> int | None:
+    """Phase 1 用フィルタ。replay 取得対象なら episode_id を返し、skip なら None。"""
+
     acc.episodes_considered += 1
     episode_id = int(raw.get("id") or 0)
     if episode_id <= 0:
         acc.episodes_failed += 1
-        return
+        return None
     if episode_id in seen_ids:
         acc.episodes_skipped_existing += 1
-        return
+        return None
 
     agents = raw.get("agents") or []
     if not isinstance(agents, list):
         acc.episodes_failed += 1
-        return
+        return None
 
     if not spec.include_failed and records.is_failed_episode(raw):
         acc.episodes_skipped_failed += 1
-        return
+        return None
 
     try:
         meta = records.parse_episode_meta(raw)
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("parse_episode_meta failed for %s: %s", episode_id, exc)
         acc.episodes_failed += 1
-        return
+        return None
 
     if meta.mode not in spec.modes:
         acc.episodes_skipped_mode += 1
+        return None
+
+    return episode_id
+
+
+def _fetch_planned_episode(
+    *,
+    session: requests.Session,
+    planned: _PlannedEpisode,
+    spec: ScrapeSpec,
+    acc: _Accumulator,
+    run_id: str,
+    rate_limit: TokenBucket,
+    replay_fetcher: ReplayFetcher,
+    seen_ids: set[int],
+) -> None:
+    """Phase 2: filter 済み episode の replay を取得して buffer に積む。"""
+
+    episode_id = planned.episode_id
+    try:
+        meta = records.parse_episode_meta(planned.raw)
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.warning("parse_episode_meta failed for %s: %s", episode_id, exc)
+        acc.episodes_failed += 1
         return
 
     with rate_limit.acquire():
@@ -137,7 +177,7 @@ def _process_episode(
         meta,
         run_id=run_id,
         scraped_at=_utc_now_iso(),
-        team_id_by_submission=team_id_by_submission,
+        team_id_by_submission=planned.team_id_by_submission,
     )
     seen_ids.add(episode_id)
     acc.episodes_fetched += 1
@@ -166,6 +206,139 @@ def _lookup_submission_id(
         return None
 
 
+def _plan(
+    *,
+    session: requests.Session,
+    spec: ScrapeSpec,
+    seen_ids: set[int],
+    acc: _Accumulator,
+    rate_limit: TokenBucket,
+    leaderboard_fetcher: LeaderboardFetcher,
+    team_fetcher: TeamFetcher,
+    episodes_lister: EpisodesLister,
+) -> list[_PlannedEpisode]:
+    """Phase 1: 取得予定 episode を確定する (replay 取得は行わない)。"""
+
+    teams = leaderboard_fetcher(spec.top)
+    total_teams = len(teams)
+    logger.info(
+        "scrape phase=plan top=%d modes=%s limit_per_team=%s seen_existing=%d",
+        spec.top,
+        ",".join(spec.modes),
+        spec.limit_per_team if spec.limit_per_team is not None else "all",
+        len(seen_ids),
+    )
+    plan: list[_PlannedEpisode] = []
+
+    for team_idx, team in enumerate(teams, start=1):
+        acc.teams_scanned += 1
+        with rate_limit.acquire():
+            submission_id = _lookup_submission_id(session, team.team_id, team_fetcher)
+        if submission_id is None:
+            acc.teams_without_submission += 1
+            logger.info(
+                "scrape phase=plan team=[%d/%d] team_id=%d no_submission",
+                team_idx,
+                total_teams,
+                team.team_id,
+            )
+            continue
+        with rate_limit.acquire():
+            try:
+                listing = episodes_lister(session, submission_id)
+            except client.KaggleEpisodeError as exc:
+                logger.warning(
+                    "list_episodes_for_submission failed for %s: %s",
+                    submission_id,
+                    exc,
+                )
+                continue
+        raw_episodes = listing.get("episodes") if isinstance(listing, dict) else None
+        episodes: list[Any] = raw_episodes if isinstance(raw_episodes, list) else []
+        team_id_by_submission = records.extract_submission_team_map(listing)
+
+        planned_for_team = 0
+        for raw in episodes:
+            if not isinstance(raw, dict):
+                continue
+            if (
+                spec.limit_per_team is not None
+                and planned_for_team >= spec.limit_per_team
+            ):
+                break
+            episode_id = _filter_episode(raw=raw, spec=spec, seen_ids=seen_ids, acc=acc)
+            if episode_id is None:
+                continue
+            plan.append(
+                _PlannedEpisode(
+                    episode_id=episode_id,
+                    raw=raw,
+                    team_id_by_submission=team_id_by_submission,
+                )
+            )
+            planned_for_team += 1
+
+        logger.info(
+            "scrape phase=plan team=[%d/%d] team_id=%d "
+            "listed=%d planned=%d cumulative=%d",
+            team_idx,
+            total_teams,
+            team.team_id,
+            len(episodes),
+            planned_for_team,
+            len(plan),
+        )
+
+    logger.info(
+        "scrape phase=plan done teams_scanned=%d planned=%d "
+        "skipped_existing=%d skipped_failed=%d skipped_mode=%d",
+        acc.teams_scanned,
+        len(plan),
+        acc.episodes_skipped_existing,
+        acc.episodes_skipped_failed,
+        acc.episodes_skipped_mode,
+    )
+    return plan
+
+
+def _fetch_all(
+    *,
+    session: requests.Session,
+    spec: ScrapeSpec,
+    plan: list[_PlannedEpisode],
+    seen_ids: set[int],
+    acc: _Accumulator,
+    run_id: str,
+    rate_limit: TokenBucket,
+    replay_fetcher: ReplayFetcher,
+    progress_every: int,
+) -> None:
+    total = len(plan)
+    if total == 0:
+        logger.info("scrape phase=fetch nothing to download")
+        return
+    logger.info("scrape phase=fetch total=%d", total)
+    for idx, planned in enumerate(plan, start=1):
+        _fetch_planned_episode(
+            session=session,
+            planned=planned,
+            spec=spec,
+            acc=acc,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+            seen_ids=seen_ids,
+        )
+        if idx == total or idx % progress_every == 0:
+            logger.info(
+                "scrape phase=fetch [%d/%d] fetched=%d failed=%d",
+                idx,
+                total,
+                acc.episodes_fetched,
+                acc.episodes_failed,
+            )
+
+
 def run(
     spec: ScrapeSpec,
     *,
@@ -176,6 +349,7 @@ def run(
     episodes_lister: EpisodesLister | None = None,
     replay_fetcher: ReplayFetcher | None = None,
     run_id: str | None = None,
+    progress_every: int = 10,
 ) -> ScrapeResult:
     """Scrape Kaggle episodes according to `spec` and persist records."""
 
@@ -183,6 +357,8 @@ def run(
         raise ValueError(f"spec.top must be positive, got {spec.top}")
     if not spec.modes:
         raise ValueError("spec.modes must be non-empty")
+    if progress_every <= 0:
+        raise ValueError(f"progress_every must be positive, got {progress_every}")
 
     owns_session = session is None
     session = session or client.build_session()
@@ -195,56 +371,30 @@ def run(
 
     seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
     acc = _Accumulator()
-    teams = leaderboard_fetcher(spec.top)
+    plan: list[_PlannedEpisode] = []
 
     try:
-        for team in teams:
-            acc.teams_scanned += 1
-            with rate_limit.acquire():
-                submission_id = _lookup_submission_id(
-                    session, team.team_id, team_fetcher
-                )
-            if submission_id is None:
-                acc.teams_without_submission += 1
-                continue
-            with rate_limit.acquire():
-                try:
-                    listing = episodes_lister(session, submission_id)
-                except client.KaggleEpisodeError as exc:
-                    logger.warning(
-                        "list_episodes_for_submission failed for %s: %s",
-                        submission_id,
-                        exc,
-                    )
-                    continue
-            raw_episodes = (
-                listing.get("episodes") if isinstance(listing, dict) else None
-            )
-            episodes: list[Any] = raw_episodes if isinstance(raw_episodes, list) else []
-            team_id_by_submission = records.extract_submission_team_map(listing)
-            fetched_for_team = 0
-            for raw in episodes:
-                if not isinstance(raw, dict):
-                    continue
-                if (
-                    spec.limit_per_team is not None
-                    and fetched_for_team >= spec.limit_per_team
-                ):
-                    break
-                before_fetched = acc.episodes_fetched
-                _process_episode(
-                    session=session,
-                    raw=raw,
-                    spec=spec,
-                    seen_ids=seen_ids,
-                    acc=acc,
-                    run_id=run_id,
-                    rate_limit=rate_limit,
-                    replay_fetcher=replay_fetcher,
-                    team_id_by_submission=team_id_by_submission,
-                )
-                if acc.episodes_fetched > before_fetched:
-                    fetched_for_team += 1
+        plan = _plan(
+            session=session,
+            spec=spec,
+            seen_ids=seen_ids,
+            acc=acc,
+            rate_limit=rate_limit,
+            leaderboard_fetcher=leaderboard_fetcher,
+            team_fetcher=team_fetcher,
+            episodes_lister=episodes_lister,
+        )
+        _fetch_all(
+            session=session,
+            spec=spec,
+            plan=plan,
+            seen_ids=seen_ids,
+            acc=acc,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+            progress_every=progress_every,
+        )
         records_written, replays_written = _flush(acc, spec)
     except KeyboardInterrupt:
         records_written, replays_written = _flush(acc, spec)
@@ -261,6 +411,7 @@ def run(
         episodes_skipped_existing=acc.episodes_skipped_existing,
         episodes_skipped_failed=acc.episodes_skipped_failed,
         episodes_skipped_mode=acc.episodes_skipped_mode,
+        episodes_planned=len(plan),
         episodes_fetched=acc.episodes_fetched,
         episodes_failed=acc.episodes_failed,
         records_written=records_written,

@@ -182,6 +182,7 @@ def _render_scrape_summary(result: scraper.ScrapeResult) -> None:
     table.add_row("skipped_existing", str(result.episodes_skipped_existing))
     table.add_row("skipped_failed", str(result.episodes_skipped_failed))
     table.add_row("skipped_mode", str(result.episodes_skipped_mode))
+    table.add_row("planned", str(result.episodes_planned))
     table.add_row("fetched", str(result.episodes_fetched))
     table.add_row("failed", str(result.episodes_failed))
     table.add_row("records_written", str(result.records_written))
