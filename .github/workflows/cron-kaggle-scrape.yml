@@ -9,17 +9,17 @@ on:
         description: "Leaderboard top N teams"
         required: false
         type: number
-        default: 20
+        default: 120
       modes:
         description: "Comma-separated modes (1v1,ffa4)"
         required: false
         type: string
         default: "1v1,ffa4"
       limit_per_team:
-        description: "Max episodes per team"
+        description: "Max episodes per team (0 = all)"
         required: false
         type: number
-        default: 30
+        default: 0
 
 permissions:
   contents: write
@@ -32,16 +32,16 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 350
     env:
       KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
       AWS_ACCESS_KEY_ID: ${{ secrets.DVC_AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ap-northeast-1
-      SCRAPE_TOP: ${{ inputs.top || 20 }}
+      SCRAPE_TOP: ${{ inputs.top || 120 }}
       SCRAPE_MODES: ${{ inputs.modes || '1v1,ffa4' }}
-      SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 30 }}
+      SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 0 }}
 
     steps:
       - uses: actions/checkout@v5
@@ -63,10 +63,15 @@ jobs:
 
       - name: Scrape kaggle episodes
         run: |
+          # SCRAPE_LIMIT_PER_TEAM=0 → omit the flag so the CLI default (None=all) applies.
+          limit_args=()
+          if [ "${SCRAPE_LIMIT_PER_TEAM}" -gt 0 ]; then
+            limit_args=(--limit-per-team "${SCRAPE_LIMIT_PER_TEAM}")
+          fi
           uv run --project bot python -m dataset kaggle scrape \
             --top "${SCRAPE_TOP}" \
             --modes "${SCRAPE_MODES}" \
-            --limit-per-team "${SCRAPE_LIMIT_PER_TEAM}" \
+            "${limit_args[@]}" \
             --dvc-add \
             2>&1 | tee /tmp/scrape.log
 
@@ -99,7 +104,7 @@ jobs:
             Automated refresh of `data/lake/kaggle_episodes/matches.dvc`.
 
             - Trigger: `${{ github.event_name }}`
-            - Top: `${{ env.SCRAPE_TOP }}` / Modes: `${{ env.SCRAPE_MODES }}` / Limit per team: `${{ env.SCRAPE_LIMIT_PER_TEAM }}`
+            - Top: `${{ env.SCRAPE_TOP }}` / Modes: `${{ env.SCRAPE_MODES }}` / Limit per team: `${{ env.SCRAPE_LIMIT_PER_TEAM == '0' && 'all' || env.SCRAPE_LIMIT_PER_TEAM }}`
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           labels: data-refresh
 
