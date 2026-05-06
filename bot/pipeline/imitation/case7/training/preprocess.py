@@ -210,6 +210,27 @@ def _iter_episode_frames(
     with gzip.open(replay_path, "rt") as f:
         data = json.load(f)
     steps = data.get("steps", [])
+    # 2026-05 kaggle data refresh で planet 数 > MAX_PLANETS=36 の episodes が
+    # 混入したことが判明 (case7 iter2 epoch=50 run でゲーム reshape error 発生)。
+    # episode 内のいずれかの frame で planet 数が MAX_PLANETS を超えるなら、
+    # その episode 全体を skip して shape 不整合の発生源を断つ。
+    max_planets_seen = 0
+    for step in steps:
+        for slot in player_slots:
+            if slot >= len(step):
+                continue
+            obs = step[slot].get("observation") or {}
+            planets = obs.get("planets") or []
+            if len(planets) > max_planets_seen:
+                max_planets_seen = len(planets)
+    if max_planets_seen > MAX_PLANETS:
+        logger.warning(
+            "episode %s skipped: planet count %d > MAX_PLANETS=%d",
+            replay_path.name,
+            max_planets_seen,
+            MAX_PLANETS,
+        )
+        return []
     out: list[dict[str, Any]] = []
     for step_idx, step in enumerate(steps):
         for slot in player_slots:

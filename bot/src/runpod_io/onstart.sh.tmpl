@@ -392,7 +392,15 @@ if [ -n "<PREPROCESS_CMD>" ]; then
       find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
         \( -type l -xtype l \) -print -delete 2>&1 || true
     fi
-    uv run --directory bot python -m <PREPROCESS_CMD>
+    # preprocess の exit code を check して、 失敗時は train に進まず onstart fail。
+    # case7 iter2 (epoch=50) で sanity check が val parquet の reshape 失敗を
+    # 検出して RuntimeError を raise したが、 onstart は exit code を見ずに
+    # train に進んで再度同じエラーで死亡 ($1.10 損失) のため。
+    if ! uv run --directory bot python -m <PREPROCESS_CMD>; then
+      echo "[onstart] step=preprocess FAILED (exit code != 0)" >&2
+      mark "55_preprocess_failed"
+      exit 1
+    fi
     PREPROCESS_RAN=1
   fi
 fi
