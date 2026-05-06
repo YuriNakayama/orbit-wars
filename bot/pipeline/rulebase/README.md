@@ -11,9 +11,11 @@ Pure-Python rule-based agents. Each case is an independent submission package
 | case1 | active (legacy) | baseline_v1 (sniper + reinforcement) | LB 897 | 2026-03 | `strategy.py` を `planner/` に分割 (2026-04) |
 | case2 | active | baseline_v2 (OM, lookahead, harass) | n/a | n/a | OM ablation 結果あり |
 | case3 | active | baseline_v3 (rollout) | n/a | n/a | case2 + rollout |
-| case4 | **production** | baseline_v4 (fleet consolidation) | 745 | 2026-04 | 現役チャンピオン (mission resolver 抽出済) |
+| case4 | active | baseline_v4 (fleet consolidation) | 745 | 2026-04 | mission resolver 抽出済 |
 | case5 | active (verification) | baseline_v5 (LB1224 port) | 600 | 2026-04 | `agent_full.py` は notebook verbatim port、refactor しない |
 | case6 | active (experiment) | baseline_v6 (case4 + STAY judge) | n/a | n/a | defense hold + burst hold、`docs/experiment/rulebase/20260502_case6_stay_mission/` |
+| case7 | active (experiment) | baseline_v7 (case6 + ACCUMULATE) | n/a | n/a | 多ターン蓄積 → 遠距離 1 発、`docs/experiment/rulebase/20260504_case7_accumulate_burst/` |
+| case9 | rejected (anti-ping-pong) | baseline_v9 (case4 + cooldown bypass + plan_shot cache) | n/a | n/a | 9 iter 探索で +5pp 不可確定 (真値 ~50%)。iter6 plan_shot cache のみ採用、`docs/experiment/rulebase/20260504_case9_anti_ping_pong/` |
 
 ## Conventions
 
