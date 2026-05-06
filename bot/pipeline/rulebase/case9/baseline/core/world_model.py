@@ -438,9 +438,7 @@ class WorldModel:
         }
         self.reaction_cache: dict[int, tuple[int, int]] = {}
         self.base_need_cache: dict[tuple[int, int], int] = {}
-        # iter5: ported from case7 for stay.py / ACCUMULATE mission usage.
-        self.travel_time_cache: dict[tuple[int, int, int], int] = {}
-        # iter6: plan_shot is invoked many times per turn for the same
+        # plan_shot is invoked many times per turn for the same
         # (src, target, ships) tuple during mission scoring. Memoizing
         # avoids re-running aim_with_prediction + safety chain.
         self.plan_shot_cache: dict[
@@ -645,24 +643,6 @@ class WorldModel:
         ):
             return None
         return aim
-
-    def cached_travel_time(self, src_id: int, target_id: int, ships: int) -> int:
-        """Memoized ``travel_time`` keyed by (src, target, ships).
-
-        Ported from case7 for stay.py / ACCUMULATE mission. Cache scope is
-        one ``WorldModel`` instance (= one turn).
-        """
-        key = (src_id, target_id, max(1, int(ships)))
-        cached = self.travel_time_cache.get(key)
-        if cached is not None:
-            return cached
-        src = self.planet_by_id[src_id]
-        target = self.planet_by_id[target_id]
-        result = travel_time(
-            src.x, src.y, src.radius, target.x, target.y, target.radius, key[2]
-        )
-        self.travel_time_cache[key] = result
-        return result
 
     def reaction_times(self, target_id: int) -> tuple[int, int]:
         cached = self.reaction_cache.get(target_id)

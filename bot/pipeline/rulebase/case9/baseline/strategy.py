@@ -15,22 +15,17 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from .core.config import (
-    ACCUMULATE_ENABLED,
-    LOW_PLANET_BYPASS_THRESHOLD,
-    REINFORCE_SAFETY_MARGIN,
-)
+from .core.config import REINFORCE_SAFETY_MARGIN
 from .core.types import Mission, Planet
 from .core.world_model import WorldModel
 from .missions import collect_missions
-from .missions.stay import build_accumulate
 from .movements.evacuation import emit_evacuation_moves
 from .movements.followup import emit_followup_moves
 from .movements.rear_guard import emit_rear_guard_moves
 from .strategy_helpers import build_modes, preferred_send
 
 SINGLE_SOURCE_MISSION_KINDS: frozenset[str] = frozenset(
-    {"single", "snipe", "reinforce", "crash_exploit", "harass", "accumulate_fire"}
+    {"single", "snipe", "reinforce", "crash_exploit", "harass"}
 )
 
 
@@ -74,8 +69,6 @@ def _process_single_source_mission(
 
     if mission.kind in ("snipe", "crash_exploit", "harass"):
         send = missing
-    elif mission.kind == "accumulate_fire":
-        send = min(send_limit, max(missing, option.send_cap))
     elif mission.kind == "reinforce":
         send = min(send_limit, missing + REINFORCE_SAFETY_MARGIN)
     else:
@@ -175,25 +168,11 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
     moves: list[list[int | float]] = []
     spent_total: dict[int, int] = defaultdict(int)
 
-    accumulate_holds: dict[int, int] = {}
-    accumulate_fire_missions: list[Mission] = []
-    # iter5 fix: 自惑星数が threshold 以下では ACCUMULATE を全 skip。
-    # 早期 (1-3 惑星帯) では唯一の src を hold して出撃不能になる事故を防ぐ。
-    if (
-        ACCUMULATE_ENABLED
-        and len(world.my_planets) > LOW_PLANET_BYPASS_THRESHOLD
-    ):
-        accumulate_holds, accumulate_fire_missions, _, _ = build_accumulate(
-            world, planned_commitments, None
-        )
-
     def source_inventory_left(source_id: int) -> int:
         return world.source_inventory_left(source_id, spent_total)
 
     def source_attack_left(source_id: int) -> int:
-        raw = world.source_attack_left(source_id, spent_total)
-        held = accumulate_holds.get(source_id, 0)
-        return max(0, raw - held)
+        return world.source_attack_left(source_id, spent_total)
 
     def append_move(src_id: int, angle: float, ships: int) -> int:
         send = min(int(ships), source_inventory_left(src_id))
@@ -210,7 +189,6 @@ def plan_moves(world: WorldModel) -> list[list[int | float]]:
         source_inventory_left,
         source_attack_left,
     )
-    missions.extend(accumulate_fire_missions)
     missions.sort(key=lambda item: -item.score)
 
     for mission in missions:
