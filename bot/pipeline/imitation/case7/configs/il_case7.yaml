@@ -32,7 +32,7 @@ model:
 
 train:
   batch_size: 256
-  epochs: 30  # 最適 iter 数推定実験 (iter1 で best_epoch=14 = 最終 epoch、 under-trained 疑い)
+  epochs: 50  # iter2: 真の plateau 確定 (iter1 epoch=30 で best_epoch=28 = 終盤、 plateau 未確定)
   lr: 1.0e-3
   weight_decay: 1.0e-4
   num_workers: 0
