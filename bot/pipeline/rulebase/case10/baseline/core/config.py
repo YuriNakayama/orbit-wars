@@ -45,19 +45,19 @@ INDIRECT_FRIENDLY_WEIGHT: float = 0.35
 INDIRECT_NEUTRAL_WEIGHT: float = 0.9
 INDIRECT_ENEMY_WEIGHT: float = 1.25
 
-# case10 iter1: capture 強化 (1.4 → 1.6) で production 高い neutral を優先
-STATIC_NEUTRAL_VALUE_MULT: float = 1.6
+# case10 iter2: capture 弱化 (1.4 → 1.2) で defense 寄りを試す
+STATIC_NEUTRAL_VALUE_MULT: float = 1.2
 STATIC_HOSTILE_VALUE_MULT: float = 1.55
 ROTATING_OPENING_VALUE_MULT: float = 0.95
 HOSTILE_TARGET_VALUE_MULT: float = 1.85
 OPENING_HOSTILE_TARGET_VALUE_MULT: float = 1.45
 SAFE_NEUTRAL_VALUE_MULT: float = 1.2
 CONTESTED_NEUTRAL_VALUE_MULT: float = 0.7
-# case10 iter1: 序盤 capture 強化 (1.2 → 1.4)
-EARLY_NEUTRAL_VALUE_MULT: float = 1.4
+# case10 iter2: default 復元 (iter1 の 1.4 を撤回)
+EARLY_NEUTRAL_VALUE_MULT: float = 1.2
 COMET_VALUE_MULT: float = 0.65
-# case10 iter1: SNIPE 多用 (1.12 → 1.30)
-SNIPE_VALUE_MULT: float = 1.30
+# case10 iter2: default 復元 (iter1 の 1.30 を撤回)
+SNIPE_VALUE_MULT: float = 1.12
 SWARM_VALUE_MULT: float = 1.05
 FINISHING_HOSTILE_VALUE_MULT: float = 1.15
 BEHIND_ROTATING_NEUTRAL_VALUE_MULT: float = 0.92
@@ -169,12 +169,12 @@ HARASS_ENABLED: bool = True
 HARASS_MIN_TARGET_PRODUCTION: int = 2
 HARASS_MIN_TARGET_SHIPS: int = 1
 HARASS_MAX_TRAVEL_TURNS: int = 20
-# case10 iter1: src reserve 緩和 (10 → 6) で kamikaze 多用
-HARASS_MIN_SRC_RESERVE: int = 6
+# case10 iter2: kamikaze 抑制 (default 10 より高く 14)、defense 重視
+HARASS_MIN_SRC_RESERVE: int = 14
 HARASS_COST_TURN_WEIGHT: float = 0.5
 HARASS_VALUE_MULT: float = 1.0
-# case10 iter1: STEAL_TURNS 引き上げ (5 → 8) で harass score 上昇
-HARASS_PRODUCTION_STEAL_TURNS: int = 8
+# case10 iter2: default 復元 (iter1 の 8 を撤回)
+HARASS_PRODUCTION_STEAL_TURNS: int = 5
 
 OPPONENT_MODEL_ENABLED: bool = False
 OM_HISTORY_WINDOW: int = 5
