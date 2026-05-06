@@ -52,7 +52,7 @@ train:
     use_ships_class_weights: false
     ships_class_weight_beta: 0.9999
     ships_ordinal_smoothing: 0.0
-  weights_out: pipeline/imitation/case2/policy/weights_phase1.pt
+  weights_out: pipeline/imitation/case2/policy/weights_iter1.pt
 
 inference:
   from_threshold: 0.31

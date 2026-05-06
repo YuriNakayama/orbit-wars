@@ -22,7 +22,7 @@ from .featurizer_phase2 import (
 )
 from .model import DeepSetsPolicy, ModelConfig
 
-_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights_phase2.pt"
+_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights.pt"
 
 _TARGET_TEMPERATURE = 0.8
 _SHIPS_TEMPERATURE = 1.1

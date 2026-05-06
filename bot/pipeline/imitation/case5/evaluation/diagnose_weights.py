@@ -1,13 +1,13 @@
 """Compute F1 / PR-AUC / ROC-AUC for imitation/case5 saved weights on val set.
 
 Runs inference once over val.parquet with the current weights.pt and emits a
-rich metric report alongside the training-time accuracies. case1-specific
-diagnostic: pulls in case1's DeepSetsPolicy + CaseThreeDataset directly.
+rich metric report alongside the training-time accuracies. case5-specific
+diagnostic: pulls in case5's DeepSetsPolicy + CaseThreeDataset directly.
 
 Usage:
     uv run python -m pipeline.imitation.case5.evaluation.diagnose_weights \\
         --weights pipeline/imitation/case5/policy/weights.pt \\
-        --report data/output/experiment/imitation_case1_val_metrics.json
+        --report data/output/experiment/imitation_case5_val_metrics.json
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ from pipeline.imitation.case5.training.dataset import (
     collate,
 )
 
-DEFAULT_CONFIG = Path("pipeline/imitation/case5/configs/il_baseline.yaml")
+DEFAULT_CONFIG = Path("pipeline/imitation/case5/configs/il_case5.yaml")
 DEFAULT_WEIGHTS = Path("pipeline/imitation/case5/policy/weights.pt")
-DEFAULT_REPORT = Path("data/output/experiment/imitation_case1_val_metrics.json")
+DEFAULT_REPORT = Path("data/output/experiment/imitation_case5_val_metrics.json")
 SHIPS_BUCKETS = 4
 
 

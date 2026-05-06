@@ -4,7 +4,7 @@ Loads the current canonical weights, runs the model on val data, and searches
 threshold values for sigmoid(from_logits) to find the value that maximizes
 positive-class F1 (over my_planet_mask valid slots only).
 
-Result is saved to data/output/experiment/imitation_case1_threshold_sweep.json.
+Result is saved to data/output/experiment/imitation_case8_threshold_sweep.json.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ from pipeline.imitation.case8.training.dataset import (
     collate,
 )
 
-CONFIG_PATH = Path("pipeline/imitation/case8/configs/il_baseline.yaml")
+CONFIG_PATH = Path("pipeline/imitation/case8/configs/il_case8.yaml")
 WEIGHTS_PATH = Path("pipeline/imitation/case8/policy/weights.pt")
-REPORT_PATH = Path("data/output/experiment/imitation_case1_threshold_sweep.json")
+REPORT_PATH = Path("data/output/experiment/imitation_case8_threshold_sweep.json")
 
 
 def _to_batch_features(sample: BatchedSample) -> BatchFeatures:

@@ -83,7 +83,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "pipeline.imitation.case3.training.preprocess "
             "--config pipeline/imitation/case3/configs/il_phase2.yaml"
         ),
-        "canonical_weights": ("bot/pipeline/imitation/case3/policy/weights_phase2.pt"),
+        "canonical_weights": ("bot/pipeline/imitation/case3/policy/weights.pt"),
     },
     "case4": {
         "stage": "train_imitation_case4",
