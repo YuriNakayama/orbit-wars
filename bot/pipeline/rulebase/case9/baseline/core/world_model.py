@@ -563,10 +563,7 @@ class WorldModel:
                                 int(math.ceil(ships_at.get(turn, 0))) + 1,
                             )
                             break
-                    if (
-                        ANTI_PING_PONG_ENABLED
-                        and deficit_hint < REINFORCE_MIN_DEFICIT
-                    ):
+                    if ANTI_PING_PONG_ENABLED and deficit_hint < REINFORCE_MIN_DEFICIT:
                         continue
                     threatened_candidates[planet.id] = {
                         "fall_turn": fall_turn,

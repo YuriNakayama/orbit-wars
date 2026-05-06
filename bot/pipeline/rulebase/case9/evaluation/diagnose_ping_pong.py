@@ -57,9 +57,7 @@ def _run_one(
     env = kaggle_environments.make(
         "orbit_wars", configuration={"agents": 2, "seed": seed}
     )
-    agents = (
-        (agent_v9, agent_v4) if v9_seat == 0 else (agent_v4, agent_v9)
-    )
+    agents = (agent_v9, agent_v4) if v9_seat == 0 else (agent_v4, agent_v9)
     seat_history: list[list[tuple[int, int, int]]] = [[], []]
     seat_stats: list[EpisodeStats] = [EpisodeStats(), EpisodeStats()]
 
@@ -97,9 +95,7 @@ def _run_one(
                         break
                     if past_src == dst_id and past_dst == src_id:
                         a, b = min(src_id, dst_id), max(src_id, dst_id)
-                        stats.incidents.append(
-                            (turn, seat, a, b, past_turn)
-                        )
+                        stats.incidents.append((turn, seat, a, b, past_turn))
                         break
             history.extend((turn, s, d) for (s, d) in decoded)
             stats.total_turns = turn
@@ -154,9 +150,7 @@ def run(
     ),
 ) -> None:
     """Run baseline_v9 vs baseline_v4 episodes and report ping-pong incidents."""
-    typer.echo(
-        f"ANTI_PING_PONG_ENABLED={not no_anti}  parallel={parallel}"
-    )
+    typer.echo(f"ANTI_PING_PONG_ENABLED={not no_anti}  parallel={parallel}")
 
     run_id = time.strftime("%Y%m%d_%H%M%S")
     target_dir = out_dir / run_id
@@ -165,9 +159,7 @@ def run(
     jobs: list[tuple[int, int, bool]] = []
     for v9_seat in (0, 1):
         for ep_idx in range(episodes_per_side):
-            jobs.append(
-                (v9_seat, seed + ep_idx + v9_seat * 10_000, no_anti)
-            )
+            jobs.append((v9_seat, seed + ep_idx + v9_seat * 10_000, no_anti))
 
     v9_stats: list[EpisodeStats] = []
     v4_stats: list[EpisodeStats] = []

@@ -69,9 +69,7 @@ def run(
     jobs: list[tuple[int, int, bool]] = []
     for v9_seat in (0, 1):
         for ep_idx in range(episodes_per_side):
-            jobs.append(
-                (v9_seat, seed + ep_idx + v9_seat * 10_000, no_anti)
-            )
+            jobs.append((v9_seat, seed + ep_idx + v9_seat * 10_000, no_anti))
 
     v9_wins = 0
     v4_wins = 0
@@ -100,8 +98,7 @@ def run(
             total_eps += 1
             if (idx + 1) % 20 == 0:
                 typer.echo(
-                    f"  {idx + 1}/{len(jobs)} v9={v9_wins} v4={v4_wins} "
-                    f"draws={draws}"
+                    f"  {idx + 1}/{len(jobs)} v9={v9_wins} v4={v4_wins} draws={draws}"
                 )
 
     n = v9_wins + v4_wins + draws
