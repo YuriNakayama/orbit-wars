@@ -1,12 +1,13 @@
-"""onstart の S3 marker (`runpod_progress/<RUN_ID>/`) を読んで進捗を返す。
+"""onstart の S3 marker (`runpod_progress/<RUN_ID>/`) を読み書きする。
 
 `onstart.sh.tmpl` 側 (`mark()` 関数) が
 `s3://orbit-wars-dvc-286854171013/runpod_progress/<RUN_ID>/<TIMESTAMP>_<STEP>`
 形式の空オブジェクトを各ステップで書き出している。本モジュールはそれを
 `boto3 s3.list_objects_v2` で列挙し、`ProgressMarker` のリストに整形する。
 
-Pod 内の Python (case5/case6 の preprocess.py / train.py) からは `mark_progress`
-を呼ぶことで、同じ S3 prefix に JSON payload 付きの marker を書ける。
+加えて Pod 内の Python (case5/case6/case8 の preprocess.py / train.py) からも
+`mark_progress(run_id, step, payload?)` を呼ぶことで、同じ S3 prefix に
+JSON payload 付きの marker を書ける (例: epoch 単位の `train.epoch` ログ)。
 """
 
 from __future__ import annotations

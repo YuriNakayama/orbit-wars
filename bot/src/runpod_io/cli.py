@@ -140,6 +140,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case7/policy/weights.pt",
     },
+    "case8": {
+        "stage": "train_imitation_case8",
+        "train_module": "pipeline.imitation.case8.training.train",
+        "config_arg": "--config pipeline/imitation/case8/configs/il_case8.yaml",
+        "preprocess_cmd": (
+            "pipeline.imitation.case8.training.preprocess "
+            "--config pipeline/imitation/case8/configs/il_case8.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case8/policy/weights.pt",
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
