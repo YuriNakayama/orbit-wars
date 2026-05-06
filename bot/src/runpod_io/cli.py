@@ -150,6 +150,39 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "bot/pipeline/imitation/case8/policy/weights.pt",
     },
+    "case9_three_head": {
+        "stage": "train_imitation_case9_three_head",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_three_head.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case9/policy/weights_three_head.pt"
+        ),
+    },
+    "case9_candidate": {
+        "stage": "train_imitation_case9_candidate",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_candidate.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case9/policy/weights_candidate.pt"
+        ),
+    },
+    "case9_candidate_ships": {
+        "stage": "train_imitation_case9_candidate_ships",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case9/policy/weights_candidate_ships.pt"
+        ),
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
@@ -165,8 +198,21 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent / "onstart.sh.tmpl"
 
 
+def _case_subdir(case: str) -> str:
+    """Map a registry key to the on-disk case subdirectory.
+
+    case9 has 3 head variants registered as separate keys (case9_three_head /
+    case9_candidate / case9_candidate_ships) but they all share the same
+    `data/output/models/imitation/case9/` tree on disk (same training
+    pipeline, different head_mode). Strip the `_<variant>` suffix.
+    """
+    if case.startswith("case9_"):
+        return "case9"
+    return case
+
+
 def _runs_root_for(case: str) -> Path:
-    return Path(f"data/output/models/imitation/{case}/runs")
+    return Path(f"data/output/models/imitation/{_case_subdir(case)}/runs")
 
 
 def _case_defaults(case: str) -> dict[str, str]:
@@ -1278,7 +1324,9 @@ def tail_cmd(
         console.print(f"[red]ssh unavailable:[/] {exc}")
         raise typer.Exit(code=1) from exc
 
-    remote_cmd = TAIL_SOURCES[source].format(case=case, run_id=run_id)
+    remote_cmd = TAIL_SOURCES[source].format(
+        case=_case_subdir(case), run_id=run_id
+    )
     if not follow:
         # `tail -F` を `tail -n 200` に置き換える
         remote_cmd = remote_cmd.replace("tail -F", "tail -n 200")
