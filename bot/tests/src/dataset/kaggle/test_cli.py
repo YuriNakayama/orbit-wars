@@ -24,6 +24,7 @@ def _fake_result(**overrides: object) -> scraper.ScrapeResult:
         "episodes_skipped_existing": 0,
         "episodes_skipped_failed": 0,
         "episodes_skipped_mode": 0,
+        "episodes_planned": 0,
         "episodes_fetched": 0,
         "episodes_failed": 0,
         "records_written": 0,
