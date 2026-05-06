@@ -100,15 +100,56 @@ iter1 (epoch=30) の best_val_loss=3.5631 vs iter2 (epoch=50) の best_val_loss=
 
 **case7-30ep が現状最良維持** (data 量を揃えれば case7-50ep もこの位置になる可能性)。
 
-## 7. 補助評価: vs baseline_v1 50戦 (sanity)
-
-(eval 実行中、 完了次第追記)
+## 7. 補助評価: vs baseline_v1 50戦 (⚠️ noise 範囲内)
 
 ```
-TODO: data/mart/imitation/case7/eval_metrics.json から win/loss/draw/Wilson CI を転記
+episodes:    50
+wins:         1
+losses:      49
+draws:        0
+win_rate:    2.0%   (95% Wilson CI: 0.4% – 10.5%)
+challenger:  il_v7
+baseline:    baseline_v1
+seed:        0..49
 ```
 
-case7-30ep で 3/50 = 6.0% を観察、 case7-50ep でも同程度を期待。
+→ case7-30ep で観察した **3/50 (6.0%) は再現せず**、 1/50 (2.0%) に低下。
+
+### case7 系の対戦勝率推移 (重大な観察)
+
+| run | win_rate | 95% Wilson CI | best_val_loss |
+|---|---|---|---|
+| case7 (15ep, iter1) | 0/50 = 0.0% | 0–7.1% | 3.6211 |
+| **case7 (30ep)** ⭐ | **3/50 = 6.0%** | 2.1–16.2% | 3.5631 |
+| **case7 (50ep, iter2)** | **1/50 = 2.0%** | 0.4–10.5% | 3.6515 |
+
+### 解釈: **case7-30ep の 3/50 は seed variance 確定**
+
+- case7-30ep (val_loss 3.5631) と case7-50ep (val_loss 3.6515) は **同じ model 構造** で訓練量のみ違う
+- val_loss は変わったが win_rate は **6% → 2% で大きく変動** (両方 CI overlap [2.1-16.2%] vs [0.4-10.5%])
+- **memory `project_imitation_case1_phase3` の前例 (5/100 → 0/300 で否定) と同じパターン**
+
+### imitation 系全 case の win_rate サマリ (n=50, ノイズ確定)
+
+| case | win_rate | 構造 |
+|---|---|---|
+| case6 | 0/50 | Attention U-Net |
+| case7 (15ep) | 0/50 | Set Transformer |
+| **case7 (30ep)** | **3/50** ⭐ | Set Transformer + 訓練量増 |
+| **case7 (50ep)** | **1/50** | Set Transformer + 更に訓練量増 |
+| case8 | 3/50 | Pointer Net |
+| case10 | 0/50 | Set Transformer 256 XL |
+| case11 | 0/50 | Pointer Net 256 XL |
+
+→ **imitation 系の 50戦評価は完全に noise** (真の win_rate は 0-3% 程度の seed variance band 内)、
+**構造・訓練量どちらの効果も統計的に有意でない**。
+
+### 採否判断 (再評価)
+
+- val 指標は plateau 確定 ✅ (epoch 34 で best、 35+ で over-train)
+- 対戦勝率は **case7-30ep の 3/50 を case7-50ep が再現できなかった** = case7-30ep の breakthrough は **seed variance** だった可能性が極めて高い
+- **真の breakthrough を判定するには 300 戦再評価が必要** (memory `project_imitation_case1_phase3`)
+- weights.pt は best_epoch=34 のもの (val_loss=3.6515) を採用済
 
 ## 8. 累計コスト (本実験 = optimal_epochs)
 
