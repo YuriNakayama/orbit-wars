@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/experiment",
+      "expected_output": "Phase 0 で AskUserQuestion 1 ラウンド 3 問: (1) 仮説リスト (テンプレート 1-2 件 + Other 自由記述、family/case + 一文 hypothesis を 1 行 1 件), (2) 最大 iteration 数 (1/3/⭐5/10/リスト消化まで/上限なし⚠️/Other), (3) ループ周期 (loop 60s / loop 5m / schedule */15min / schedule hourly / schedule daily / ⭐逐次 / Other)。'上限なし' 選択時は RunPod GPU コスト累積の警告を 1 行 surface。`schedule` 選択時は周期 ≥ 想定 tick 所要時間 (imitation 学習 + 評価で 30 分〜数時間) を user に擦り合わせる。Phase 1 で docs/experiment/queue/{yyyymmdd}_{topic}.md に hypothesis queue (- [ ] 形式 + Iteration log table) を書き出し。Phase 2 で選んだ周期に応じて schedule (cron 登録) / loop (loop skill 起動) / 逐次 (main session 内 while ループ) を設定。Phase 3 tick driver 起動で 1 仮説ずつ experiment-plan → experiment-execution → experiment-analysis を 1 巡し、queue を - [x] に更新 + Iteration log にレコード追記。dev/runpod train の [y/N] プロンプトは tick driver でも bypass しない。各 tick 完了で 3 行以内の Japanese 報告 (win-rate vs. opponent、採否、次ティック予定)。停止時 (max iter 到達 / queue 空 / user 停止指示) は cron / loop を解除し queue を completed/stopped に更新。tick が失敗しても auto-pause せず、失敗 tick は Iteration log に '失敗' として記録して次仮説へ進む。5-10 行の集計レポート (採否別カウント + 最高 win-rate iter + queue path + 推奨次アクション; dev/runpod promote / Kaggle submit は user 個別承認が必須) を Japanese で報告。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "imitation/case1 で 5 個の仮説を試したい、夜中に回しておきたい",
+      "expected_output": "Phase 0 hearing で hypothesis = user の 5 件を採用、max iteration = 5 (リスト消化まで)、周期 = schedule hourly or daily を user に確認 (imitation 学習 tick が 30-90 分のため hourly でも衝突する可能性 — daily 推奨か逐次 + dev/runpod watch で離席運用を提案)。Phase 1 で queue file を 5 件で作成。Phase 2 で schedule skill を呼んで cron 登録 (ジョブの中身は /experiment tick driver 1 回起動)。Phase 3 で各 tick が experiment-plan → experiment-execution (RunPod 学習込み、[y/N] は bypass しない) → experiment-analysis (replay 分析) を 1 巡し queue 更新。User がセッション離脱中も cron が継続。朝に user が再開すると過去 tick 完了レコードが queue / Iteration log に残っており、未完了分は cron が継続中。max iter (=5) 到達 or 全消化で Phase 4 で cron 解除 (dev/runpod watch も整理) + 集計レポート。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "今 /experiment で走らせてるループ止めて",
+      "expected_output": "Phase 4 起動: 現在登録中の schedule cron job (or loop) を解除 (schedule list → 該当 job 特定 → schedule delete)。dev/runpod watch を起動していたらそれも整理 (stale watch は RunPod 状態通知を続けるだけだが念のため)。docs/experiment/queue/{yyyymmdd}_{topic}.md の状態ヘッダを 'stopped' に書き換え、Iteration log 末尾に停止理由 (user 指示) と停止時刻を 1 行追記。完了済 iter / 残 iter のカウント、採否別サマリ、最高 win-rate iter (family/case + run_id + win-rate)、queue file path、各 iter の result.md / analysis.md path index、推奨次アクション (採用候補があれば dev/runpod promote の user 確認、Kaggle submit は別途) を 5-10 行の Japanese で報告。残仮説は queue に - [ ] のまま残し、user が手動で /experiment 再開する余地を残す。",
+      "files": []
+    }
+  ]
+}

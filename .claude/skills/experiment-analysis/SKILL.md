@@ -1,106 +1,162 @@
 ---
 name: experiment-analysis
 description: >
-  Replay-driven post-mortem skill for finished Orbit Wars experiments. Picks
-  two match replays (典型的には win + loss / loss × 2 / win × 2)、Python
-  スクリプトで 1 ターンごとのイベントと統計量を Markdown 表に変換 (result_1.md /
-  result_2.md)、それを Claude が読み込んで「なぜ負けたか / どこは良くできていたか /
-  次にどの turn に着目すべきか」を分析、サマリと NEXT ACTION を提案する。Read-only
-  on code: does NOT re-train, NOT launch RunPod, NOT edit `bot/pipeline/`.
-  Use whenever the user types `/experiment-analysis`, or asks to interpret /
-  dig into / discuss / explain a finished experiment result with replay-level
-  evidence — phrases like "対戦ログを分析して", "リプレイから敗因を読み取って",
+  Replay-driven post-mortem skill for finished Orbit Wars experiments. Selects
+  the analysis target by priority (most recent iter only / last N iters /
+  inconclusive only / specific iter), honors the case's `hypotheses.md` skip
+  list (e.g. `replay 分析を行わない`, `300 対戦 skip`), and typically converts
+  two match replays via a Python script into Markdown (result_1.md /
+  result_2.md). Claude reads those files and produces three views — why we
+  lost / what worked / which turns to focus on next — plus a summary and
+  NEXT ACTION. Updates `hypotheses.md` only with the **adoption write-back**
+  (matching hypothesis checkbox flipped to `- [x]`, verdict note appended,
+  Iteration log row updated). The next-iteration decision (deepen / broaden
+  / list-consume) is **not** made here — that belongs to `experiment-plan`.
+  Read-only on code: does NOT re-train, NOT launch RunPod, NOT edit
+  `backend/pipeline/`. Use whenever the user types `/experiment-analysis`,
+  or asks to interpret / dig into / discuss / explain a finished experiment
+  result — phrases like "対戦ログを分析して", "リプレイから敗因を読み取って",
   "勝った試合と負けた試合を比較して", "iter9 の負け試合のターン推移を整理して",
-  "loss seed の replay 見て分析まとめて", "case2 の敗因を replay から深掘りしたい"
-  all count. Don't trigger this skill for designing a NEW experiment from
-  scratch (use `experiment-plan`), full-pipeline execution / re-training
-  (use `experiment-execution`), read-only code review, or plain bug fixes.
+  "loss seed の replay 見て分析まとめて", "case2 の敗因を replay から深掘りしたい",
+  "直近の inconclusive iter まとめて分析して" all count. Don't trigger this
+  skill for designing a NEW experiment from scratch (use `experiment-plan` /
+  `experiment-hypothesize`), full-pipeline execution / re-training (use
+  `experiment-execution`), read-only code review, or plain bug fixes.
 ---
 
 # Experiment Analysis Skill (Orbit Wars)
 
-Replay-driven post-mortem. Two matches → Python script で Markdown 化 → Claude が読んで分析 → サマリ + NEXT ACTION。Markdown 化は必ず外部 script で行い、Claude のコンテキストに生 replay JSON を流さない。
+Replay-driven post-mortem. Honors the `hypotheses.md` skip list, selects the analysis target by priority, converts replays to Markdown via a Python script, has Claude analyze, summarizes + suggests NEXT ACTION, and finally writes back the **verdict** for the analyzed iter to `hypotheses.md`. Raw replay JSON never enters Claude's context (the script does the Markdown conversion).
+
+**Out of scope**: deciding what the next iteration should be (deepen / broaden / list-consume). That decision lives in `experiment-plan` Step 0.5, which reads this skill's verdict + the recent Iteration log to choose. The NEXT ACTION report from this skill is informational guidance, not a state mutation.
 
 ## Skill flow
 
-5 phase 構成。Phase 2 のスクリプト経由 Markdown 化が context bloat を防ぐ要。
+6 phases. Phase 1.5 (target prioritization) and Phase 4.5 (`hypotheses.md` write-back) are new. A skip-mode bypass for replay analysis is included.
 
-### Phase 1 — 対戦ログ 2 件選定
+### Phase 1 — Identify the target case and `hypotheses.md`
 
-`AskUserQuestion` で以下を順に確認:
+`AskUserQuestion`, 1 question to confirm the target case (`imitation/case1` / `rulebase/case4` / `Other` free-text). Skip when obvious from recent conversation.
+
+After confirmation:
+
+- Search and read `docs/experiment/<family>/{yyyymmdd}_case{N}_{topic}/hypotheses.md`.
+- Cache the skip list / primary metric / Iteration log in memory.
+- If `replay 分析を行わない` is in the skip list, run Phase 2 in **skip mode** (no replay-Markdown conversion; analysis uses `iter*_result.md` and training logs only).
+
+If `hypotheses.md` does not exist (legacy directories), fall back to the original mode (no skip-list awareness).
+
+### Phase 1.5 — Prioritize the analysis target (new)
+
+`AskUserQuestion`, 1 question:
 
 | Q | options |
 |---|---|
-| 選定戦略 | `長戦 (拮抗・終局直前) + 最速敗北 (構造的弱点) (推薦・両極から学べる)` / `win 1 + loss 1 (勝敗対比で why が明確)` / `loss × 2 (敗因深掘り)` / `win × 2 (勝ちパターン抽出)` / `seed 直接指定` / `Other` |
-| 母集団 | `直近 selfplay run (index.parquet 最新 N 件)` / `特定 run_id` / `特定 opponent` / `Other` |
-| 対戦 pick | (前段で絞った候補 5 件から選択。seed/対戦相手/勝敗/turn 数を表示) |
+| 分析対象の選び方 | `直前 iter のみ` ⭐推薦 / `直近 3 iter 全部 (横断比較)` / `直近 5 iter 全部` / `採否 inconclusive の iter のみ` / `特定 iter を指定` (Other で iter 番号) / `Other` |
 
-最初の質問の説明文に「各質問で『Other』を選ぶと自由記述も可能です。」と明記。
+Read the `iterN_result.md` (or `result.md`) of the selected iter group. They serve as **input to replay selection** (which iter's matches we pick).
 
-「長戦 + 最速敗北」を**デフォルト推薦**にする理由:
-- **長戦** = 双方が中盤まで拮抗していた試合 = `total_turns` が母集団の上位四分位 (≥ p75)。中盤戦術 / 終盤詰め / 攻防バランスを観察できる。勝敗どちらでも可だが、自軍視点での挙動が長く取れる方が望ましい。
-- **最速敗北** = 自軍が短い turn で完敗した試合 = `total_turns` が母集団の下位四分位 (≤ p25) かつ自軍 reward = -1。序盤の構造的弱点 (初手 neutral 確保失敗 / 早期 home 喪失 / 開幕 ship 散開ミスなど) が露骨に出る。
-- 2 件の turn 長を意図的に対極に置くことで、「長く戦えた局面と崩壊した局面の差分」が見える。`win + loss` 比較より診断シグナルが強いことが多い。
+When multiple iters are involved, do not run Phases 2–3 once per iter. Instead, pick two representative replays (e.g. one win + one loss from the most recent inconclusive iter) and do a single Markdown conversion. Markdown conversion is the dominant context cost, so **never exceed n = 2**.
 
-選定実装:
-- `data/lake/selfplay/matches/index.parquet` を polars で読み、winner / agents / total_turns で filter。
-- 「長戦」: `total_turns >= quantile(0.75)` の中から最新 1 件 (または先頭)。
-- 「最速敗北」: `total_turns <= quantile(0.25) AND self_reward == -1` の中から最新 1 件。
-- index.parquet が無い場合、または `total_turns` カラムが無い場合は補助スクリプト `pick_match_pair.py` (下記 Python script セクション参照) で replay 中身を軽く読んで `total_turns` を集計し、上記分位で pick。
-- worktree 配下の `data/` は symlink、実 replay は `/Users/user/project/orbit-wars/data/...` 側にあるので、絶対パスで script に渡すこと。
+### Phase 2 — Pick two replays (skippable)
 
-### Phase 2 — Python script で Markdown 化
+If `replay 分析を行わない` is set, **skip Phase 2** and go to Phase 3 (analyze `iter*_result.md` / training logs only).
 
-選定した 2 replay を `replay_to_markdown.py` に渡し、`result_1.md` / `result_2.md` を出力。stdout は `wrote ... (N lines)` の 2 行だけ。**生 JSON / per-turn 表を Claude のチャットに貼らない**。
+Otherwise:
 
-出力先は `.claude/rules/docs.md` に従い、対象 case の experiment ディレクトリ配下:
+`AskUserQuestion`, 1 question (population = the iter group from Phase 1.5):
+
+| Q | options |
+|---|---|
+| 選定戦略 | `長戦 (拮抗・終局直前) + 最速敗北 (構造的弱点) (推薦・両極から学べる)` / `win 1 + loss 1` / `loss × 2` / `win × 2` / `seed 直接指定` / `Other` |
+
+Why "long match + fastest loss" is the default:
+- **Long match** = `total_turns` ≥ p75 of the population. Useful for studying mid-game tactics and end-game closure.
+- **Fastest loss** = `total_turns` ≤ p25 of the population AND self_reward = -1. Reveals structural early-game weaknesses (failed initial neutral capture, early home loss, opening ship-spread mistakes).
+- Picking two extreme turn-lengths often gives a stronger diagnostic signal than `win + loss`.
+
+Selection implementation:
+- Read `data/lake/selfplay/matches/index.parquet` with polars; filter by winner / agents / total_turns.
+- "Long" = latest match where `total_turns >= quantile(0.75)`.
+- "Fastest loss" = latest match where `total_turns <= quantile(0.25) AND self_reward == -1`.
+- If `index.parquet` is missing or has no `total_turns` column, run `pick_match_pair.py` (see scripts section) to compute it from raw replays.
+- Worktree `data/` is a symlink; the actual replays live under `/Users/user/project/orbit-wars/data/...`. **Pass absolute paths to the script.**
+
+### Phase 3 — Markdown conversion via Python script
+
+Run `replay_to_markdown.py` against the two selected replays to produce `result_1.md` / `result_2.md`. stdout is exactly two lines (`wrote ... (N lines)`). **Do not paste raw JSON or per-turn tables into Claude's chat.**
+
+Output directory:
 
 ```
 data/output/experiment/{family}/case{N}/replay_analysis/{yyyymmdd_HHMM}/result_{1,2}.md
 ```
 
-(機械生成物なので `docs/experiment/` ではなく `data/output/` 配下。`analysis.md` から相対 / 絶対パスでリンク。)
+(Under `data/output/`, not `docs/experiment/`. Reference paths from `hypotheses.md` / `iterN_analysis.md`.)
 
-### Phase 3 — Markdown 読み込みと分析
+### Phase 4 — Read the Markdown and analyze
 
-Claude が `result_1.md` / `result_2.md` を `Read` で取り込み、以下 3 観点を必ずカバーする:
+Claude `Read`s `result_1.md` / `result_2.md` (in skip mode, only `iter*_result.md`) and must cover three views:
 
-1. **なぜ負けたか (why_lost)** — loss 試合の Turning points / Key events から決定打となった turn・イベントを特定。`ship_loss_burst` や連続する `planet_loss` の集中 turn が候補。仮説は最大 3 件、各々を支持 / 反証となる turn の事実で裏付ける。
-2. **どこは良くできていたか (what_worked)** — win 試合 (または loss 試合の前半) で機能していた挙動。早期 neutral 確保速度、`enemy_planet_attack` のタイミング、production 立ち上がりカーブ、production / ship 比など。再現すべきパターンとして残す。
-3. **次にどの turn / 局面に着目すべきか (where_to_focus_next)** — 仮説検証のために replay viewer や次回 script ランで深掘りすべき具体 turn 範囲・着眼メトリクス。例: `turn 50–80 の comet 出現直後の対応`、`turn 150 の総力戦時の in-flight 比`。
+1. **why_lost** — pinpoint decisive turns / events from Turning points / Key events of the loss match. Up to 3 candidate hypotheses, each backed by supporting/refuting turn-level facts.
+2. **what_worked** — behaviors that functioned in the win match (or in the early phase of the loss match). Patterns worth reproducing.
+3. **where_to_focus_next** — turn ranges and metrics to drill into next. e.g. "turn 50–80 around the comet appearance" or "turn 150 in-flight ratio during the all-out battle".
 
-n=2 は仮説生成用であり結論は出さない。`project_imitation_case1_phase3` (n<300 不信頼) を踏まえ、断定ではなく「次に何戦見ればこの仮説が検証できるか」を必ず添える。
+n = 2 is for hypothesis generation, not conclusion. If `n<300 で結論を出さない` is in the skip list, always frame findings as "what would it take to confirm this in N more matches?" rather than declarative claims.
 
-### Phase 4 — サマリ報告
+### Phase 4.5 — Adoption write-back to `hypotheses.md`
 
-ユーザに日本語で構造化提示 (本文に `result_1.md` / `result_2.md` のパスを必ず含む):
+Run only when `hypotheses.md` exists. Read → edit → write back. **Only the verdict for the analyzed iter is written.** The next-iteration decision (deepen / broaden / list-consume) is made by `experiment-plan` Step 0.5 when it reads this file later — do not touch `状態:` or append new hypothesis rows here.
 
-- **2 試合 headline 比較**: planets / ships / production / total_turns の差分表
-- **why_lost**: 決定打 turn + 主要イベント 3-5 件 + 候補仮説 (最大 3、各々支持/反証)
-- **what_worked**: 機能していた挙動 2-3 件 (turn 番号付き)
-- **where_to_focus_next**: 着目すべき turn 範囲 + 見るべきメトリクス
+**What to write back**:
 
-### Phase 5 — NEXT ACTION 提案
+1. **Hypothesis checkbox update** — change the `- [ ]` of the hypothesis tied to the analyzed iter (e.g. H3) to `- [x]` and append an adoption note inline:
+   ```markdown
+   - [x] (P1) H3: focal α 0.25→0.75 — adopted (iter9: 5/100 vs baseline_v5, inconclusive @300)
+   ```
+2. **Update / replace the iter's row in the Iteration log table** — iter / start time / hypothesis# / plan path / run_id / primary metric / verdict / result path / analysis path. (`experiment-execution` Phase 8 already added a provisional row marked `(analysis 未実施)`; replace that row with the final verdict + analysis path.)
+3. Update **last-updated date** (`最終更新`) to session `currentDate`.
 
-具体的な follow-up を 2-3 件提示。例:
+**Out of scope for this skill** (handled by `experiment-plan` Step 0.5 instead):
 
-- `seed×10 で同一傾向か再評価` (n を増やすか同 case 再ラン)
-- `turn N–M の action 分布を抽出して passive gating 検証`
-- `次 iter で <仮説に基づく修正> を実装` (→ `/experiment-plan` で plan.md を起こす)
-- `replay-viewer で seed=X を目視確認` (→ `/replay-viewer`)
+- ❌ Do **not** rewrite `状態:` (no auto `paused` here).
+- ❌ Do **not** append `- [ ] (auto, deep) ...` follow-up hypotheses.
+- ❌ Do **not** count consecutive rejections to trigger broaden.
 
-他 skill は自動起動しない。提案文に skill 名を書くまで。
+The replay-derived `where_to_focus_next` and follow-up-suggestion content goes into the `iter*_analysis.md` write-up and Phase 6's NEXT ACTION report — `experiment-plan` reads those when deciding the next iter's mode.
 
-## Python script: 使用方法と仕様
+When `hypotheses.md` does not exist, skip Phase 4.5 entirely.
 
-### 配置
+### Phase 5 — Summary report
 
-- `.claude/skills/experiment-analysis/scripts/replay_to_markdown.py` — 2 件の replay を Markdown 化 (Phase 2)
-- `.claude/skills/experiment-analysis/scripts/pick_match_pair.py` — 「長戦 + 最速敗北」を母集団から自動 pick (Phase 1 デフォルト戦略)
+Structured Japanese report to the user (always include the paths to `result_1.md` / `result_2.md`):
 
-### Phase 1 補助: `pick_match_pair.py`
+- **2-match headline comparison** (omit in skip mode): planets / ships / production / total_turns delta table
+- **why_lost**: decisive turn + 3–5 key events + up to 3 candidate hypotheses with supporting/refuting evidence
+- **what_worked**: 2–3 behaviors that worked, with turn numbers
+- **where_to_focus_next**: turn ranges + metrics to watch
+- **`hypotheses.md` updates**: verdict written for the analyzed iter (checkbox + Iteration log row), in 1 line. Next-iter decision is left to `experiment-plan`.
 
-`AskUserQuestion` で「長戦 + 最速敗北」を選んだ場合の自動 pick:
+### Phase 6 — NEXT ACTION suggestions
+
+Suggest 2–3 concrete follow-ups, e.g.:
+
+- "seed×10 で同一傾向か再評価" (increase n or re-run the same case)
+- "turn N–M の action 分布を抽出して passive gating 検証"
+- "次 iter で <仮説に基づく修正> を実装" (→ `/experiment-plan` will pick the mode and may auto-append a deepen hypothesis)
+- "replay-viewer で seed=X を目視確認" (→ `/replay-viewer`)
+- "ジャンル全体の筋を見直したい" (→ `/experiment-plan` will detect broaden and recommend `/experiment-hypothesize`)
+
+Do not auto-spawn other skills. Suggest by name only.
+
+## Python scripts: usage and spec
+
+### Layout
+
+- `.claude/skills/experiment-analysis/scripts/replay_to_markdown.py` — converts two replays to Markdown (Phase 3)
+- `.claude/skills/experiment-analysis/scripts/pick_match_pair.py` — auto-picks "long match + fastest loss" from the population (default Phase 2 strategy)
+
+### Phase 2 helper: `pick_match_pair.py`
 
 ```bash
 python3 .claude/skills/experiment-analysis/scripts/pick_match_pair.py \
@@ -109,19 +165,17 @@ python3 .claude/skills/experiment-analysis/scripts/pick_match_pair.py \
   --limit 200
 ```
 
-stdout 2 行 (`long\t<abs_path>` / `fastest_loss\t<abs_path>`) のみを Claude が parse して、そのまま `replay_to_markdown.py --replay ... --replay ... --label long --label fastest_loss` に流す。stderr に診断（候補母集団件数、long/fast 閾値）。
+stdout is exactly two lines (`long\t<abs_path>` / `fastest_loss\t<abs_path>`). Claude parses these and feeds them into `replay_to_markdown.py`.
 
-| 引数 | デフォルト | 説明 |
+| arg | default | description |
 |---|---|---|
-| `--replays-dir` | (必須) | `*.json.gz` を持つディレクトリ。symlink 経由 OK |
-| `--self-player-id` | `1` | 自軍 player ID。selfplay の場合 case 設定に従う |
-| `--limit` | `200` | 直近 N 件のみスキャン (大量 replay 時の負荷抑制) |
-| `--long-quantile` | `0.75` | total_turns の上位四分位を「長戦」とみなす閾値 |
-| `--fast-quantile` | `0.25` | total_turns の下位四分位を「最速敗北」候補閾値 |
+| `--replays-dir` | (required) | directory containing `*.json.gz`; symlinks OK |
+| `--self-player-id` | `1` | own player ID |
+| `--limit` | `200` | scan only the latest N files |
+| `--long-quantile` | `0.75` | upper quartile threshold for `total_turns` |
+| `--fast-quantile` | `0.25` | lower quartile threshold for `total_turns` |
 
-### Phase 2 メイン: `replay_to_markdown.py`
-
-### 起動コマンド
+### Phase 3 main: `replay_to_markdown.py`
 
 ```bash
 python3 .claude/skills/experiment-analysis/scripts/replay_to_markdown.py \
@@ -130,21 +184,19 @@ python3 .claude/skills/experiment-analysis/scripts/replay_to_markdown.py \
   --out-dir data/output/experiment/{family}/case{N}/replay_analysis/<id>/
 ```
 
-`uv` 不要 (標準ライブラリ + 必要なら polars のみ)。worktree から走らせる場合は replay パスを **絶対パス**で渡す (worktree 直下の `data/lake/selfplay/matches/replays/` は dvc pointer 経由で実体不在のことがある)。
+No `uv` needed (stdlib only). Always pass **absolute paths** when running from a worktree.
 
-### CLI 引数
-
-| 引数 | 必須 | デフォルト | 説明 |
+| arg | required | default | description |
 |---|---|---|---|
-| `--replay PATH` | ○ (2 回) | — | 対象 `.json.gz` の絶対パス。順序が `--label` と対応 |
-| `--label LABEL` | ○ (2 回) | — | `win` / `loss` / `seed42` 等。出力ファイル冒頭に表示 |
-| `--out-dir DIR` | ○ | — | `result_1.md` / `result_2.md` の出力先 |
-| `--player-id INT` | — | label に応じて自動推定 (loss 系 label なら敗者、それ以外は勝者) | 視点プレイヤ ID。明示すれば override 可能 |
-| `--ship-loss-abs INT` | — | `20` | ship 大量損失検出の絶対閾値 |
-| `--ship-loss-rel FLOAT` | — | `0.30` | ship 大量損失検出の相対閾値 (前 turn 比) |
-| `--full-stats` | — | OFF | 全 turn 統計表を含めるか |
+| `--replay PATH` | yes (×2) | — | absolute path to `.json.gz` |
+| `--label LABEL` | yes (×2) | — | `win` / `loss` / `seed42` etc. |
+| `--out-dir DIR` | yes | — | output directory |
+| `--player-id INT` | no | inferred from label | viewpoint player ID |
+| `--ship-loss-abs INT` | no | `20` | absolute threshold for ship-loss-burst detection |
+| `--ship-loss-rel FLOAT` | no | `0.30` | relative threshold for ship-loss-burst detection |
+| `--full-stats` | no | OFF | include full per-turn stats table |
 
-### 出力 Markdown レイアウト (1 ファイル ~200-400 行)
+Output Markdown layout:
 
 ```markdown
 # Replay seed={N} — {label}
@@ -154,46 +206,51 @@ python3 .claude/skills/experiment-analysis/scripts/replay_to_markdown.py \
 
 ## Headline stats (final)
 | metric | self | opponent |
-| planets / ships / production / in-flight |
 
 ## Turning points (top 5 by ship-margin delta)
 | turn | delta | side | note |
 
 ## Key events
 | turn | side | type | detail |
-（type: planet_gain / planet_loss / ship_loss_burst / enemy_planet_attack）
 
 <details><summary>Full per-turn stats</summary>  ※ --full-stats 指定時のみ
 | turn | mp | op | ms | os | mpr | opr | mif | oif |
 </details>
 ```
 
-### イベント検出ロジック
+Size guard: ~600 lines / ~40KB asserted in the script. On overflow, trim events to 30 turns and force `--full-stats` OFF. 1v1 is the primary support; FFA is allowed with a WARN.
 
-| type | 条件 |
-|---|---|
-| `planet_gain` | `planets[id].owner` が前 turn と異なり、自軍 (または敵が他敵から奪取) に変化 |
-| `planet_loss` | 自軍が所有していた planet が他 owner に変化 |
-| `ship_loss_burst` | ship 総数の前 turn 差分が `-ship-loss-abs` 以上 **かつ** `ship-loss-rel × prev` 以上 |
-| `enemy_planet_attack` | `actions[t]` の発射先 angle が敵所有 planet 方向 (最近接マッチ) で、ship 合計を集約 |
+## Risk gates this skill enforces
 
-### サイズガード
-
-上限 ~600 行 / ~40KB を script 内で assert。超過時は events を turn 順 30 件にトリム + `--full-stats` 強制 OFF。
-
-### 想定環境
-
-- 1v1 リプレイ初期サポート。FFA (4-player) は WARN 表示で続行 (他 3 名を集約 opponent 扱い)
-- 依存: 標準 `gzip` `json` `math` `argparse` `dataclasses` `pathlib` のみ。polars は Phase 1 の index.parquet 読みでのみ使用 (script 自体は依存ゼロ)
+- **Honor the `hypotheses.md` skip list.** When `replay 分析を行わない` is set, Phase 2 is skipped.
+- **Adoption write-back only.** Update the hypothesis-row checkbox + Iteration log row + `最終更新`. Do **not** touch `状態:`, do **not** append new hypothesis rows. State transitions belong to `experiment-plan` Step 0.5.
+- **Don't conclude from n = 2.** Only generate hypotheses. When `n<300 で結論を出さない` is set, always include a confirmation plan.
+- **Never paste raw replay JSON / per-turn tables into Claude's chat.** Always go via the script.
+- **No code edits / commits / RunPod / Kaggle submission.** Read-only on code; only the limited `hypotheses.md` write-back is permitted.
+- **Never use Kaggle publicScore in the verdict** (project rule).
+- **NEXT ACTION suggestions are advisory only.** Never auto-spawn other skills.
 
 ## Common shapes
 
 | User says… | Skill behavior |
 |---|---|
-| "勝った試合と負けた試合を比較して" | Phase 1 で win+loss 1 件ずつ pick → Phase 2-5 を素直に実行 |
-| "case2 の敗因を replay から深掘り" | Phase 1 で loss × 2 を pick → Phase 3 の why_lost セクションに重み |
-| "iter9 で何が機能してた?" | Phase 1 で win × 2 を pick → Phase 3 の what_worked セクションに重み |
-| "seed=42 と seed=99 比較して" | Phase 1 「seed 直接指定」分岐 → 該当 2 件を直接 script へ |
+| `/experiment-analysis` | Phase 1 confirms the case → Phase 1.5 picks "直前 iter のみ" ⭐ → Phases 2–6. |
+| "勝った試合と負けた試合を比較して" | Phase 1.5 = "直前 iter"; Phase 2 picks `win + loss`. |
+| "case2 の敗因を replay から深掘り" | Phase 2 picks `loss × 2`; weight Phase 4 toward why_lost. |
+| "iter9 で何が機能してた?" | Phase 1.5 = iter9; Phase 2 picks `win × 2`. |
+| "直近 inconclusive iter まとめて" | Phase 1.5 = "inconclusive のみ"; pick a representative pair. |
+| "seed=42 と seed=99 比較して" | Phase 2 = "seed 直接指定"; feed the two files directly to the script. |
+| "replay は要らない、result.md だけで分析して" | hypotheses.md skip list contains `replay 分析を行わない` (or session-level flag) → skip mode (Phase 4 only). |
+
+## Things to avoid
+
+- Pasting raw replay JSON into Claude's chat. Use the script.
+- Forgetting Phase 4.5 when `hypotheses.md` exists.
+- Touching `状態:` or appending new hypothesis rows. Those are `experiment-plan` Step 0.5's domain.
+- Treating n = 2 as conclusive. Stay at hypothesis generation.
+- Citing Kaggle publicScore as evidence.
+- Auto-spawning `/experiment-hypothesize` or `/experiment-plan`.
+- Putting machine-generated artifacts (JSON / tables) under `docs/experiment/`. They go under `data/output/experiment/`.
 
 ## Language
 

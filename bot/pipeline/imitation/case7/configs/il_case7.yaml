@@ -1,0 +1,65 @@
+# case7: Set Transformer + cross-attention target head (case6 と同 featurizer)
+# 参考: docs/experiment/imitation/20260505_case7_model_structure_roadmap/plan.md (iter1)
+# 構成: case6 の il_case6.yaml を踏襲、 model セクションに inducing_points/encoder_layers
+#        を追加 (Set Transformer ISAB 数 + inducing 点)。
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  # case 独立性原則 (.claude/rules/bot/pipeline.md) に従い case7 専用パスを持つ。
+  out_train: data/mart/imitation/case7/train.parquet
+  out_val: data/mart/imitation/case7/val.parquet
+  rating_quantile: 0.50
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: null
+
+model:
+  # case7 は 1 case 1 仮説原則に従い、 model 構造を model_type で切替可能。
+  # サポート値:
+  #   "set_transformer": SetTransformerPolicy (現状最良、 iter1 で実証)
+  #   "pointer":         HierarchicalPointerPolicy (autoregressive、 旧 case8 由来)
+  # 規模拡大は hidden/encoder_layers/attn_heads で表現。
+  planet_in_dim: 17
+  global_in_dim: 6
+  hidden: 128
+  ships_buckets: 4
+  attn_heads: 4
+  inducing_points: 16
+  encoder_layers: 3
+  model_type: "set_transformer"
+
+train:
+  batch_size: 256
+  epochs: 50  # iter2: 真の plateau 確定 (iter1 epoch=30 で best_epoch=28 = 終盤、 plateau 未確定)
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  num_workers: 0
+  loss_weights:
+    from: 1.0
+    target: 2.0
+    ships: 0.5
+    from_pos_weight: 8.5
+    from_focal_gamma: 3.0
+    from_focal_alpha: 0.75
+    target_label_smoothing: 0.15
+    target_entropy_bonus: 0.05
+    use_target_class_weights: true
+    target_class_weight_beta: 0.9999
+    use_ships_class_weights: false
+    ships_class_weight_beta: 0.9999
+    ships_ordinal_smoothing: 0.0
+  weights_out: bot/pipeline/imitation/case7/policy/weights.pt
+
+inference:
+  from_threshold: 0.31
+  min_fire_topk: 1
+  max_fire_count: null
+  target_temperature: 0.8
+  ships_temperature: 1.1
+
+evaluation:
+  metrics_out: data/mart/imitation/case7/eval_metrics.json
+  episodes: 50
+  seed: 0
