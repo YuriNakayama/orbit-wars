@@ -25,6 +25,7 @@ from .config import (
     INDIRECT_FRIENDLY_WEIGHT,
     INDIRECT_NEUTRAL_WEIGHT,
     LATE_REMAINING_TURNS,
+    LAUNCH_CLEARANCE,
     MULTI_ENEMY_PROACTIVE_HORIZON,
     MULTI_ENEMY_PROACTIVE_RATIO,
     MULTI_ENEMY_STACK_WINDOW,
@@ -45,6 +46,12 @@ from .physics import (
     fleet_speed,
     is_static_planet,
     travel_time,
+)
+from .safety import (
+    fleet_crosses_other_comet,
+    intercept_holds_within_tolerance,
+    is_trajectory_sun_safe,
+    target_reachable_before_comet_expiry,
 )
 from .types import Fleet, Planet
 
@@ -578,7 +585,7 @@ class WorldModel:
     ) -> tuple[float, int, float, float] | None:
         src = self.planet_by_id[src_id]
         target = self.planet_by_id[target_id]
-        return aim_with_prediction(
+        aim = aim_with_prediction(
             src,
             target,
             ships,
@@ -587,6 +594,38 @@ class WorldModel:
             self.comets,
             self.comet_ids,
         )
+        if aim is None:
+            return None
+        angle, turns, ix, iy = aim
+        clearance = src.radius + LAUNCH_CLEARANCE
+        launch_x = src.x + math.cos(angle) * clearance
+        launch_y = src.y + math.sin(angle) * clearance
+        if not is_trajectory_sun_safe(launch_x, launch_y, angle, turns, ships):
+            return None
+        if not intercept_holds_within_tolerance(
+            target=target,
+            predicted_turns=turns,
+            predicted_pos=(ix, iy),
+            initial_by_id=self.initial_by_id,
+            ang_vel=self.ang_vel,
+            comets=self.comets,
+            comet_ids=self.comet_ids,
+        ):
+            return None
+        if not target_reachable_before_comet_expiry(target_id, turns, self.comets):
+            return None
+        if fleet_crosses_other_comet(
+            launch_x=launch_x,
+            launch_y=launch_y,
+            angle=angle,
+            turns=turns,
+            ships=ships,
+            current_step=self.step,
+            comets=self.comets,
+            exclude_planet_id=target_id,
+        ):
+            return None
+        return aim
 
     def reaction_times(self, target_id: int) -> tuple[int, int]:
         cached = self.reaction_cache.get(target_id)

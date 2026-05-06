@@ -1,212 +1,258 @@
 ---
 name: experiment-analysis
 description: >
-  Interactive post-mortem skill for finished Orbit Wars experiments. Reads an
-  existing `result.md` (or freshly-pulled RunPod run artifacts) under
-  `docs/experiment/{family}/`, walks the user through hypothesis-vs-outcome
-  comparison, statistical significance checks, replay/seed drill-downs, and
-  failure-mode pattern extraction via `AskUserQuestion`, then writes
-  `analysis.md` (or `iterN_analysis.md`) capturing conclusions and proposing
-  next-experiment hooks. Read-only on code: does NOT re-train, NOT launch RunPod,
-  NOT edit `backend/pipeline/`. Use whenever the user types
-  `/experiment-analysis`, or asks to interpret / dig into / discuss / explain
-  a finished experiment result — phrases like "iter9 の結果なんで負けてるか
-  分析したい", "この result.md の数字どう解釈すべき?", "case2 の ablation
-  の敗因を深掘りしたい", "300戦の結果踏まえて次どうする?",
-  "loss seed の replay 見て分析まとめて" all count. Don't trigger this skill
-  for designing a NEW experiment from scratch (use `experiment-plan`),
-  full-pipeline execution / re-training (use `experiment-execution`),
-  read-only code review, or plain bug fixes.
+  Replay-driven post-mortem skill for finished Orbit Wars experiments. Selects
+  the analysis target by priority (most recent iter only / last N iters /
+  inconclusive only / specific iter), honors the case's `hypotheses.md` skip
+  list (e.g. `replay 分析を行わない`, `300 対戦 skip`), and typically converts
+  two match replays via a Python script into Markdown (result_1.md /
+  result_2.md). Claude reads those files and produces three views — why we
+  lost / what worked / which turns to focus on next — plus a summary and
+  NEXT ACTION. Updates `hypotheses.md` only with the **adoption write-back**
+  (matching hypothesis checkbox flipped to `- [x]`, verdict note appended,
+  Iteration log row updated). The next-iteration decision (deepen / broaden
+  / list-consume) is **not** made here — that belongs to `experiment-plan`.
+  Read-only on code: does NOT re-train, NOT launch RunPod, NOT edit
+  `backend/pipeline/`. Use whenever the user types `/experiment-analysis`,
+  or asks to interpret / dig into / discuss / explain a finished experiment
+  result — phrases like "対戦ログを分析して", "リプレイから敗因を読み取って",
+  "勝った試合と負けた試合を比較して", "iter9 の負け試合のターン推移を整理して",
+  "loss seed の replay 見て分析まとめて", "case2 の敗因を replay から深掘りしたい",
+  "直近の inconclusive iter まとめて分析して" all count. Don't trigger this
+  skill for designing a NEW experiment from scratch (use `experiment-plan` /
+  `experiment-hypothesize`), full-pipeline execution / re-training (use
+  `experiment-execution`), read-only code review, or plain bug fixes.
 ---
 
 # Experiment Analysis Skill (Orbit Wars)
 
-Interactive post-mortem for an experiment whose `result.md` already exists (or whose RunPod run just finished and the user wants to think through the numbers). The skill is the dialog layer between the user and a pile of metrics / replays / artifacts. It produces an `analysis.md` that captures interpretation and points at the next experiment.
+Replay-driven post-mortem. Honors the `hypotheses.md` skip list, selects the analysis target by priority, converts replays to Markdown via a Python script, has Claude analyze, summarizes + suggests NEXT ACTION, and finally writes back the **verdict** for the analyzed iter to `hypotheses.md`. Raw replay JSON never enters Claude's context (the script does the Markdown conversion).
 
-## When this skill is in charge
-
-- The user typed `/experiment-analysis` (explicit trigger), **or**
-- The user asked, in plain language, for any of:
-  - interpretation of an existing `result.md` (`iter9 の結果どう読むべき?`, `この 300戦の win-rate 50.7% は採用していい?`)
-  - drill-down into a specific seed / replay / failure mode (`loss seed=0 の replay 見て敗因分析したい`, `この負け試合のターン推移を整理して`)
-  - significance / variance discussion (`100戦と300戦で結果違うのはなぜ?`, `Wilson CI 計算して`)
-  - "what's next?" pivots from a finished run (`この結果踏まえて次の iter どうする?`)
-  - converting raw artifacts (just-pulled `data/output/models/<family>/case<N>/runs/<run_id>/`) into a written `analysis.md`
-- The user did **not** ask to re-run the experiment or design a brand-new hypothesis. If they did, redirect to `experiment-execution` or `experiment-plan`.
-
-If the user wants a **new experiment from scratch** → `experiment-plan`. **Re-train the same case** → `experiment-execution`. **Read papers / external survey** → `research-*`. **Code review** → `code-review` / `python-review`.
-
-## Scope boundaries (what this skill does NOT do)
-
-- Does not run `dev/test-backend`, `dev/runpod train`, `dev/runpod promote`, or any submission command.
-- Does not edit code under `backend/pipeline/<family>/case<N>/`. May read it for context, never write.
-- Does not commit or push.
-- Read-only `dev/runpod pull <run_id>` is allowed (it's how artifacts get to the local tree). `dvc pull` for missing artifacts is also allowed. Anything mutating beyond that needs explicit user confirmation per `.claude/rules/command.md`.
-- Does not auto-spawn `experiment-execution`. The skill ends with a written `analysis.md` and an offer of next steps.
+**Out of scope**: deciding what the next iteration should be (deepen / broaden / list-consume). That decision lives in `experiment-plan` Step 0.5, which reads this skill's verdict + the recent Iteration log to choose. The NEXT ACTION report from this skill is informational guidance, not a state mutation.
 
 ## Skill flow
 
-The skill runs five phases. Phases 1–2 establish what's being analyzed; Phase 3 is the interactive interpretation; Phase 4 writes the file; Phase 5 offers next steps.
+6 phases. Phase 1.5 (target prioritization) and Phase 4.5 (`hypotheses.md` write-back) are new. A skip-mode bypass for replay analysis is included.
 
-### Phase 1 — Locate the artifact
+### Phase 1 — Identify the target case and `hypotheses.md`
 
-Resolve which experiment is being analyzed. Two starting points:
+`AskUserQuestion`, 1 question to confirm the target case (`imitation/case1` / `rulebase/case4` / `Other` free-text). Skip when obvious from recent conversation.
 
-**A. The user named a result.md path or experiment directory.** Read `result.md` (or `iterN_result.md`) directly. If it doesn't exist yet but the directory does, ask whether to write an analysis on the **most recent** existing result file in that directory.
+After confirmation:
 
-**B. The user named a RunPod run_id but no result.md exists yet.** Run `dev/runpod pull <run_id>` (read-only) to fetch artifacts to `data/output/models/<family>/case<N>/runs/<run_id>/`. If `result.md` should exist but doesn't, redirect: `experiment-execution` is the right path for the first write of `result.md`. Analysis comes after.
+- Search and read `docs/experiment/<family>/{yyyymmdd}_case{N}_{topic}/hypotheses.md`.
+- Cache the skip list / primary metric / Iteration log in memory.
+- If `replay 分析を行わない` is in the skip list, run Phase 2 in **skip mode** (no replay-Markdown conversion; analysis uses `iter*_result.md` and training logs only).
 
-If neither is given, do a quick `ls docs/experiment/{imitation,rulebase,reinforce}/` and surface the 5 most recent directories via `AskUserQuestion` for the user to pick.
+If `hypotheses.md` does not exist (legacy directories), fall back to the original mode (no skip-list awareness).
 
-Do **not** pull data the user didn't ask for. Pulling is a side effect, even if read-only — confirm before `dev/runpod pull` if it's not already implied by the user's request.
+### Phase 1.5 — Prioritize the analysis target (new)
 
-### Phase 2 — Read context
+`AskUserQuestion`, 1 question:
 
-Once the target is locked, read:
+| Q | options |
+|---|---|
+| 分析対象の選び方 | `直前 iter のみ` ⭐推薦 / `直近 3 iter 全部 (横断比較)` / `直近 5 iter 全部` / `採否 inconclusive の iter のみ` / `特定 iter を指定` (Other で iter 番号) / `Other` |
 
-- The relevant `result.md` (or `iterN_result.md`) — start to finish.
-- The matching `plan.md` / `iterN_plan.md` in the same directory — what was the hypothesis the user was testing?
-- Prior `iterN_*.md` in the same directory if they exist — analysis usually fits in a chain of iterations.
-- (Optional, if mentioned in `result.md`) referenced artifacts under `data/output/experiment/...` or `data/output/models/.../runs/<run_id>/metrics.json`. Keep reads narrow; don't preload everything.
+Read the `iterN_result.md` (or `result.md`) of the selected iter group. They serve as **input to replay selection** (which iter's matches we pick).
 
-Surface a 3-line summary back to the user (in Japanese): hypothesis from plan.md, headline numbers from result.md, the gap (did the hypothesis hold?). This is the orientation step before drilling in.
+When multiple iters are involved, do not run Phases 2–3 once per iter. Instead, pick two representative replays (e.g. one win + one loss from the most recent inconclusive iter) and do a single Markdown conversion. Markdown conversion is the dominant context cost, so **never exceed n = 2**.
 
-### Phase 3 — Interactive interpretation
+### Phase 2 — Pick two replays (skippable)
 
-Run **2 rounds** of `AskUserQuestion` (each up to 4 questions). Use the comparison-style options (`⭐推薦: option — ✅ pro / ⚠️ con` + `💡 推薦理由`) only when there are real trade-offs; plain options for diagnostic questions. The first question of the first round mentions: `各質問で「Other」を選ぶと自由記述も可能です。`
+If `replay 分析を行わない` is set, **skip Phase 2** and go to Phase 3 (analyze `iter*_result.md` / training logs only).
 
-**Round 1: Verdict & evidence quality**
+Otherwise:
 
-Pick 3–4 of these (skip what's already clear from `result.md`):
+`AskUserQuestion`, 1 question (population = the iter group from Phase 1.5):
 
-- **Verdict on the hypothesis**: `clearly held / clearly rejected / inconclusive (variance) / partially held (some opponents only)`. Pre-fill `⭐推薦` based on what the numbers actually say — be honest, not generous.
-- **Statistical reliability**: `n ≥ 300 with Wilson CI separating from baseline / n ≥ 300 but CI overlaps / n < 300 (treat as noise per project memory)`. Recall memory `project_imitation_case1_phase3` — n<300 is not trustworthy on this project; flag it explicitly when the result is from a 100-game run.
-- **Opponent-pool coverage**: did the experiment beat all named opponents, or only some? If mixed, which opponents matter most for the original hypothesis?
-- **Signal vs. seed variance**: any sign that the headline number is dominated by one or two outlier seeds? (Memory `project_case2_ablation` documents seed-variance traps — surface this as a candidate diagnosis when n=100.)
-- **Compute cost vs. value**: was the GPU spend justified by the information gained? (Useful for deciding whether to re-run at higher episode count or pivot.)
+| Q | options |
+|---|---|
+| 選定戦略 | `長戦 (拮抗・終局直前) + 最速敗北 (構造的弱点) (推薦・両極から学べる)` / `win 1 + loss 1` / `loss × 2` / `win × 2` / `seed 直接指定` / `Other` |
 
-**Round 2: Failure-mode / mechanism drill-down**
+Why "long match + fastest loss" is the default:
+- **Long match** = `total_turns` ≥ p75 of the population. Useful for studying mid-game tactics and end-game closure.
+- **Fastest loss** = `total_turns` ≤ p25 of the population AND self_reward = -1. Reveals structural early-game weaknesses (failed initial neutral capture, early home loss, opening ship-spread mistakes).
+- Picking two extreme turn-lengths often gives a stronger diagnostic signal than `win + loss`.
 
-Now the *why*. Pick 3–4:
+Selection implementation:
+- Read `data/lake/selfplay/matches/index.parquet` with polars; filter by winner / agents / total_turns.
+- "Long" = latest match where `total_turns >= quantile(0.75)`.
+- "Fastest loss" = latest match where `total_turns <= quantile(0.25) AND self_reward == -1`.
+- If `index.parquet` is missing or has no `total_turns` column, run `pick_match_pair.py` (see scripts section) to compute it from raw replays.
+- Worktree `data/` is a symlink; the actual replays live under `/Users/user/project/orbit-wars/data/...`. **Pass absolute paths to the script.**
 
-- **Where to look next**: `specific seed replay drill-down (which seed?) / action distribution (NO_OP %, fire timing) / turn-by-turn trace of one game / training curve (loss / val metric over epochs) / class imbalance in dataset / weights diff vs. prior iter`. Each option points at a real artifact path under `data/output/...` or a script under `backend/pipeline/<family>/case<N>/scripts/`.
-- **Candidate root cause**: 3–4 hypotheses for why the result is what it is. For losses, draw from project memory patterns: `target diversity 不足` (imitation), `passive gating (NO_OP 過多)` (imitation), `seed variance` (any), `submitignore 漏れ` (any), `from focal α 不適切` (imitation case1 specifically — memory `project_imitation_case1_phase2_breakthrough`).
-- **Comparison with prior iters**: which earlier iteration's result is the closest analogue? What did *that* one's `result.md` conclude?
-- **Cross-check / falsifiable claim**: what would we expect to see if the candidate root cause is correct? (e.g., "if it's seed variance, re-running with seed 100–200 should give a different mean.") Surface as `multiSelect: true` so the user can mark several diagnostic checks worth running.
+### Phase 3 — Markdown conversion via Python script
 
-**Optional drill-down step (no extra round)**: if the user picked "specific seed replay drill-down" in Round 2, *and* the relevant replay file exists under `data/lake/selfplay/matches/` or `data/output/...`, read it (or its decoded form) and fold the findings into the analysis. Cite turn numbers and concrete state changes (`turn 80: ships 200→123 で戦線崩壊`). Skip if the file isn't local — note it as a follow-up artifact to pull.
+Run `replay_to_markdown.py` against the two selected replays to produce `result_1.md` / `result_2.md`. stdout is exactly two lines (`wrote ... (N lines)`). **Do not paste raw JSON or per-turn tables into Claude's chat.**
 
-### Phase 4 — Write `analysis.md`
-
-Resolve the target path, mirroring `.claude/rules/docs.md`:
+Output directory:
 
 ```
-docs/experiment/{family}/{yyyymmdd}_case{N}_{topic}/{analysis.md | iterN_analysis.md}
+data/output/experiment/{family}/case{N}/replay_analysis/{yyyymmdd_HHMM}/result_{1,2}.md
 ```
 
-- Same directory as the `result.md` being analyzed (do NOT create a new directory).
-- File name: `analysis.md` for the directory's first analysis pass, `iterN_analysis.md` if a prior `analysis.md` already exists or if the directory uses the `iterN_*.md` scheme. Surface the choice to the user before writing if ambiguous.
-- Iteration migration: if the directory has plain `result.md` + plain `plan.md` and you're introducing the iterN scheme via `iter2_analysis.md`, rename the originals to `iter1_*.md` first per the docs.md rule. Confirm with the user before the rename.
+(Under `data/output/`, not `docs/experiment/`. Reference paths from `hypotheses.md` / `iterN_analysis.md`.)
 
-Write the file with these sections — **keep it ≤ one screen unless the user explicitly asked for a long-form report**. Verbose analyses rot:
+### Phase 4 — Read the Markdown and analyze
+
+Claude `Read`s `result_1.md` / `result_2.md` (in skip mode, only `iter*_result.md`) and must cover three views:
+
+1. **why_lost** — pinpoint decisive turns / events from Turning points / Key events of the loss match. Up to 3 candidate hypotheses, each backed by supporting/refuting turn-level facts.
+2. **what_worked** — behaviors that functioned in the win match (or in the early phase of the loss match). Patterns worth reproducing.
+3. **where_to_focus_next** — turn ranges and metrics to drill into next. e.g. "turn 50–80 around the comet appearance" or "turn 150 in-flight ratio during the all-out battle".
+
+n = 2 is for hypothesis generation, not conclusion. If `n<300 で結論を出さない` is in the skip list, always frame findings as "what would it take to confirm this in N more matches?" rather than declarative claims.
+
+### Phase 4.5 — Adoption write-back to `hypotheses.md`
+
+Run only when `hypotheses.md` exists. Read → edit → write back. **Only the verdict for the analyzed iter is written.** The next-iteration decision (deepen / broaden / list-consume) is made by `experiment-plan` Step 0.5 when it reads this file later — do not touch `状態:` or append new hypothesis rows here.
+
+**What to write back**:
+
+1. **Hypothesis checkbox update** — change the `- [ ]` of the hypothesis tied to the analyzed iter (e.g. H3) to `- [x]` and append an adoption note inline:
+   ```markdown
+   - [x] (P1) H3: focal α 0.25→0.75 — adopted (iter9: 5/100 vs baseline_v5, inconclusive @300)
+   ```
+2. **Update / replace the iter's row in the Iteration log table** — iter / start time / hypothesis# / plan path / run_id / primary metric / verdict / result path / analysis path. (`experiment-execution` Phase 8 already added a provisional row marked `(analysis 未実施)`; replace that row with the final verdict + analysis path.)
+3. Update **last-updated date** (`最終更新`) to session `currentDate`.
+
+**Out of scope for this skill** (handled by `experiment-plan` Step 0.5 instead):
+
+- ❌ Do **not** rewrite `状態:` (no auto `paused` here).
+- ❌ Do **not** append `- [ ] (auto, deep) ...` follow-up hypotheses.
+- ❌ Do **not** count consecutive rejections to trigger broaden.
+
+The replay-derived `where_to_focus_next` and follow-up-suggestion content goes into the `iter*_analysis.md` write-up and Phase 6's NEXT ACTION report — `experiment-plan` reads those when deciding the next iter's mode.
+
+When `hypotheses.md` does not exist, skip Phase 4.5 entirely.
+
+### Phase 5 — Summary report
+
+Structured Japanese report to the user (always include the paths to `result_1.md` / `result_2.md`):
+
+- **2-match headline comparison** (omit in skip mode): planets / ships / production / total_turns delta table
+- **why_lost**: decisive turn + 3–5 key events + up to 3 candidate hypotheses with supporting/refuting evidence
+- **what_worked**: 2–3 behaviors that worked, with turn numbers
+- **where_to_focus_next**: turn ranges + metrics to watch
+- **`hypotheses.md` updates**: verdict written for the analyzed iter (checkbox + Iteration log row), in 1 line. Next-iter decision is left to `experiment-plan`.
+
+### Phase 6 — NEXT ACTION suggestions
+
+Suggest 2–3 concrete follow-ups, e.g.:
+
+- "seed×10 で同一傾向か再評価" (increase n or re-run the same case)
+- "turn N–M の action 分布を抽出して passive gating 検証"
+- "次 iter で <仮説に基づく修正> を実装" (→ `/experiment-plan` will pick the mode and may auto-append a deepen hypothesis)
+- "replay-viewer で seed=X を目視確認" (→ `/replay-viewer`)
+- "ジャンル全体の筋を見直したい" (→ `/experiment-plan` will detect broaden and recommend `/experiment-hypothesize`)
+
+Do not auto-spawn other skills. Suggest by name only.
+
+## Python scripts: usage and spec
+
+### Layout
+
+- `.claude/skills/experiment-analysis/scripts/replay_to_markdown.py` — converts two replays to Markdown (Phase 3)
+- `.claude/skills/experiment-analysis/scripts/pick_match_pair.py` — auto-picks "long match + fastest loss" from the population (default Phase 2 strategy)
+
+### Phase 2 helper: `pick_match_pair.py`
+
+```bash
+python3 .claude/skills/experiment-analysis/scripts/pick_match_pair.py \
+  --replays-dir /Users/user/project/orbit-wars/data/lake/selfplay/matches/replays \
+  --self-player-id 1 \
+  --limit 200
+```
+
+stdout is exactly two lines (`long\t<abs_path>` / `fastest_loss\t<abs_path>`). Claude parses these and feeds them into `replay_to_markdown.py`.
+
+| arg | default | description |
+|---|---|---|
+| `--replays-dir` | (required) | directory containing `*.json.gz`; symlinks OK |
+| `--self-player-id` | `1` | own player ID |
+| `--limit` | `200` | scan only the latest N files |
+| `--long-quantile` | `0.75` | upper quartile threshold for `total_turns` |
+| `--fast-quantile` | `0.25` | lower quartile threshold for `total_turns` |
+
+### Phase 3 main: `replay_to_markdown.py`
+
+```bash
+python3 .claude/skills/experiment-analysis/scripts/replay_to_markdown.py \
+  --replay <ABS_PATH_A.json.gz> --replay <ABS_PATH_B.json.gz> \
+  --label win --label loss \
+  --out-dir data/output/experiment/{family}/case{N}/replay_analysis/<id>/
+```
+
+No `uv` needed (stdlib only). Always pass **absolute paths** when running from a worktree.
+
+| arg | required | default | description |
+|---|---|---|---|
+| `--replay PATH` | yes (×2) | — | absolute path to `.json.gz` |
+| `--label LABEL` | yes (×2) | — | `win` / `loss` / `seed42` etc. |
+| `--out-dir DIR` | yes | — | output directory |
+| `--player-id INT` | no | inferred from label | viewpoint player ID |
+| `--ship-loss-abs INT` | no | `20` | absolute threshold for ship-loss-burst detection |
+| `--ship-loss-rel FLOAT` | no | `0.30` | relative threshold for ship-loss-burst detection |
+| `--full-stats` | no | OFF | include full per-turn stats table |
+
+Output Markdown layout:
 
 ```markdown
-# {Family}/{caseN} — {Topic} 分析
+# Replay seed={N} — {label}
 
-> 作成日: {yyyy-mm-dd}
-> 関連: `plan.md` / `result.md` / 過去 iter 文書のパス
-> 対象: {result.md のヘッドライン番号 1 行}
+## Meta
+- file / viewpoint / winner / rewards / statuses / total_turns
 
-## 仮説と結果のギャップ
-- 仮説: {plan.md の 1 行仮説}
-- 観測: {result.md の主要メトリクス + n}
-- 判定: {clearly held / rejected / inconclusive / partially held}
-- 根拠: {Wilson CI、対戦相手別ブレ、seed variance の有無}
+## Headline stats (final)
+| metric | self | opponent |
 
-## 主要所見 (Findings)
-1. {finding with citation: e.g. `iter9 の 5/100 は再評価 0/600 で否定 (Wilson 95% CI [0.00, 0.63%])`}
-2. ...
+## Turning points (top 5 by ship-margin delta)
+| turn | delta | side | note |
 
-## 失敗モード / 成功モード分析
-- {特定 seed の挙動 / action 分布 / ターン推移 など、Round 2 ドリルダウンで得た情報}
-- 参照アーティファクト: `data/output/...` のパス
+## Key events
+| turn | side | type | detail |
 
-## 候補根本原因
-| 仮説 | 支持する観測 | 反証する観測 | 検証コスト |
-|------|-------------|-------------|-----------|
-| ... | ... | ... | ... |
-
-## 次の実験フック (Next experiment hooks)
-- {具体的な follow-up 仮説 1: e.g. `from focal α=0.75 を保ったまま target oversample 比率を再ablation`}
-- {follow-up 仮説 2}
-
-## 採否判断
-- 本実験の構成: 採用 / 不採用 / さらに iter
-- (採用なら) `dev/runpod promote <run_id>` 実行可否は別途ユーザー確認が必要
+<details><summary>Full per-turn stats</summary>  ※ --full-stats 指定時のみ
+| turn | mp | op | ms | os | mpr | opr | mif | oif |
+</details>
 ```
 
-Write directly with `Write` (or `Edit` for renames) in the main session — the analysis is interactive output and stays where the user can interject.
-
-### Phase 5 — Report and offer next steps
-
-After writing, report to the user (in Japanese):
-
-- Path of the written `analysis.md`
-- 2–3 line summary of the verdict and top finding
-- One-line offer of next steps, specific to what was decided:
-  - If `next experiment hooks` is non-empty: `/experiment-plan` で次の iter の plan を書き起こせます
-  - If verdict was "adopt": 必要なら `dev/runpod promote <run_id>` を実行（要明示確認）
-  - If verdict was "needs more episodes": `/experiment-execution` で同じ commit から n を増やして再評価できます
-  - If the user surfaced a project-level finding: 必要なら memory に記録します（auto-memory プロトコルに従う）
-
-Do **not** auto-spawn the next skill. The user explicitly came in to think; they'll trigger execution/planning themselves.
-
-## Auto-memory hook
-
-If during Phase 3 a clearly **project-level finding** emerges — i.e. something that would change how a future conversation should approach this codebase, not just a fact about this single iter — surface it to the user as a candidate memory and (with confirmation) save it via the auto-memory protocol. Examples that *do* warrant memory:
-
-- "n=100 self-play results are unreliable on this project; ≥300 is the standard." (Already memoryized as `project_imitation_case1_phase3`.)
-- "OM施策はこのプロジェクトでは default OFF が無難。" (Already memoryized as `project_om_finding`.)
-- "Kaggle publicScore は信頼できない。" (Already memoryized via several entries.)
-
-Examples that *don't* warrant memory (these go in `analysis.md` only):
-
-- "iter5 の dropout=0.3 では loss が下がりきらなかった" — too specific.
-- "seed=0 の試合で turn 80 に戦線崩壊した" — too specific.
-
-Bias toward not adding memory unless the finding is durable and load-bearing for future sessions.
+Size guard: ~600 lines / ~40KB asserted in the script. On overflow, trim events to 30 turns and force `--full-stats` OFF. 1v1 is the primary support; FFA is allowed with a WARN.
 
 ## Risk gates this skill enforces
 
-- **Read-only on code**. Never edit `backend/pipeline/`, never re-train, never push, never submit. The only mutating action allowed is writing the `analysis.md` file (and the optional `iter1_*.md` rename).
-- **Confirm before `dev/runpod pull`**. Even though it's read-only on remote state, it changes the local file tree. Confirm if the user didn't already imply it.
-- **n<300 caveat**. When the user is about to declare "the experiment worked" based on a 100-episode result, surface the project memory: 100戦は seed variance に飲まれる可能性が高い。
-- **Kaggle publicScore is not evidence**. If `result.md` cites it, flag the citation as unreliable; do not let it influence the verdict.
-- **Don't propose `dev/runpod promote` autonomously**. If the analysis concludes "adopt", recommend that the user run `dev/runpod promote <run_id>` themselves with explicit confirmation — promotion overwrites canonical weights.
-- **Memory writes need confirmation**. Per the auto-memory protocol, project-level findings get memoryized only when the user confirms.
+- **Honor the `hypotheses.md` skip list.** When `replay 分析を行わない` is set, Phase 2 is skipped.
+- **Adoption write-back only.** Update the hypothesis-row checkbox + Iteration log row + `最終更新`. Do **not** touch `状態:`, do **not** append new hypothesis rows. State transitions belong to `experiment-plan` Step 0.5.
+- **Don't conclude from n = 2.** Only generate hypotheses. When `n<300 で結論を出さない` is set, always include a confirmation plan.
+- **Never paste raw replay JSON / per-turn tables into Claude's chat.** Always go via the script.
+- **No code edits / commits / RunPod / Kaggle submission.** Read-only on code; only the limited `hypotheses.md` write-back is permitted.
+- **Never use Kaggle publicScore in the verdict** (project rule).
+- **NEXT ACTION suggestions are advisory only.** Never auto-spawn other skills.
 
 ## Common shapes
 
 | User says… | Skill behavior |
 |---|---|
-| "iter9 の result.md なんで負けてるのか分析して" | Phase 1 locates `docs/experiment/imitation/<dir>/iter9_result.md`, Phase 2 reads it + `iter9_plan.md`. Round 1 covers verdict + statistical reliability + opponent-pool. Round 2 drills into action distribution / passive gating / target diversity. Writes `iter9_analysis.md` (or `analysis.md` if directory has no iter scheme). |
-| "さっき pull した run_xxx の結果分析して" | Phase 1 confirms `dev/runpod pull` already ran (check artifacts exist locally); if not, asks user to pull first or do it with confirmation. Then Phases 2–5 normally on the matching `result.md`. If `result.md` doesn't exist yet, redirect to `experiment-execution`. |
-| "case2 の ablation 結果、harass+half_step 採用していい?" | Phase 2 reads the ablation `result.md`, surfaces 300戦 50.7% (+1.4pp 非有意) headline. Round 1 verdict → likely "inconclusive (variance)". Round 2 drills into seed variance vs. real signal. Writes `analysis.md` recommending "実装維持、構造改修が次のフック"。 |
-| "loss seed=0 の replay 詳しく見て敗因まとめて" | Phase 1 finds the replay path under `data/lake/selfplay/matches/` or `data/output/...`. Reads it, decodes turn-by-turn state. Round 1 covers the failure pattern; Round 2 generalizes (is it specific to seed=0 or systemic?). Writes a focused `analysis.md` with the trace table + diagnosis. |
-| "結果踏まえて次どうすべき?" (vague) | Phase 1 asks which experiment via AskUserQuestion (list 5 most recent dirs). Then standard flow. |
+| `/experiment-analysis` | Phase 1 confirms the case → Phase 1.5 picks "直前 iter のみ" ⭐ → Phases 2–6. |
+| "勝った試合と負けた試合を比較して" | Phase 1.5 = "直前 iter"; Phase 2 picks `win + loss`. |
+| "case2 の敗因を replay から深掘り" | Phase 2 picks `loss × 2`; weight Phase 4 toward why_lost. |
+| "iter9 で何が機能してた?" | Phase 1.5 = iter9; Phase 2 picks `win × 2`. |
+| "直近 inconclusive iter まとめて" | Phase 1.5 = "inconclusive のみ"; pick a representative pair. |
+| "seed=42 と seed=99 比較して" | Phase 2 = "seed 直接指定"; feed the two files directly to the script. |
+| "replay は要らない、result.md だけで分析して" | hypotheses.md skip list contains `replay 分析を行わない` (or session-level flag) → skip mode (Phase 4 only). |
 
 ## Things to avoid
 
-- Re-running training or evaluation. The skill is interpretation, not generation. If the user wants more data, route to `experiment-execution`.
-- Citing Kaggle publicScore as supporting evidence in the analysis.
-- Declaring a result "significant" without checking n and Wilson CI.
-- Being optimistic about a 100-episode result. Default to "inconclusive" until n≥300 evidence shows up.
-- Writing a long-form report when a one-screen analysis suffices. Brevity > comprehensiveness for these documents.
-- Auto-running `dev/runpod promote` after concluding "adopt". Promotion overwrites canonical weights and needs explicit user confirmation per `.claude/rules/command.md`.
-- Auto-spawning `experiment-plan` or `experiment-execution` after the analysis. Always wait for explicit user follow-up.
-- Creating a new directory for the analysis. It always goes in the same directory as the `result.md` being analyzed.
+- Pasting raw replay JSON into Claude's chat. Use the script.
+- Forgetting Phase 4.5 when `hypotheses.md` exists.
+- Touching `状態:` or appending new hypothesis rows. Those are `experiment-plan` Step 0.5's domain.
+- Treating n = 2 as conclusive. Stay at hypothesis generation.
+- Citing Kaggle publicScore as evidence.
+- Auto-spawning `/experiment-hypothesize` or `/experiment-plan`.
+- Putting machine-generated artifacts (JSON / tables) under `docs/experiment/`. They go under `data/output/experiment/`.
 
 ## Language
 
 - Internal reasoning and thinking should be in English
-- **All user-facing output, AskUserQuestion labels/descriptions, and the written `analysis.md` body must be in Japanese** (per the project-wide policy in `.claude/CLAUDE.md`)
+- **All user-facing output, AskUserQuestion labels/descriptions, and the analysis summary must be in Japanese** (per `.claude/CLAUDE.md`)

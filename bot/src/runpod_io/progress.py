@@ -199,6 +199,45 @@ def list_artifacts(
     return files
 
 
+def write_progress_marker(
+    step: str,
+    *,
+    run_id: str | None = None,
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = PROGRESS_PREFIX,
+    s3_client: Any | None = None,
+    timestamp: str | None = None,
+) -> bool:
+    """Write a single progress marker to S3 from inside a training process.
+
+    `onstart.sh.tmpl` already writes coarse markers (00_container_started,
+    60_before_train, 70_train_done, ...). This helper lets the training
+    process push fine-grained markers (e.g. ``30_train_step_0042``) without
+    shelling out to ``aws s3 cp``.
+
+    `run_id` defaults to the ``ORBIT_WARS_RUN_ID`` env var injected by the
+    onstart template. Returns True on success, False on any failure (this
+    function never raises — logging must not break training).
+    """
+    import os
+    from datetime import UTC, datetime
+
+    rid = run_id or os.environ.get("ORBIT_WARS_RUN_ID")
+    if not rid:
+        return False
+    ts = timestamp or datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = f"{prefix}/{rid}/{ts}_{step}"
+    pod_id = os.environ.get("RUNPOD_POD_ID", "")
+    body = f"ts={ts} step={step} pod={pod_id}".encode()
+    try:
+        client = s3_client if s3_client is not None else _build_s3_client(profile)
+        client.put_object(Bucket=bucket, Key=key, Body=body)
+        return True
+    except Exception:  # noqa: BLE001 — never let logging break training
+        return False
+
+
 def download_artifact(
     run_id: str,
     filename: str,
