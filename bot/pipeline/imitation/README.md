@@ -6,14 +6,14 @@
 
 ## Action 表現
 
-case4 を除き、以下の 3-head 構造を共通化:
+case4 / case8 を除き、以下の 3-head 構造を共通化:
 
 - `from_planet` 多選択 (どの自軍 planet から発射するか、my_planet_mask に限定した multi-hot BCE)
 - `target_template` 分類 (各 source ごとに発射先テンプレートを CE)
 - `ships_bucket` 分類 (25/50/75/100% の 4 段階を CE)
 - `angle` は `aim_with_prediction()` で決定論的に再構成 (学習対象外)
 
-case4 のみ「per-source × CAND_K candidate categorical」 (Kaggle tutorial 由来) に差し替え。
+case4 / case8 は「per-source × CAND_K candidate categorical」 (Kaggle tutorial 由来) head に差し替え。
 
 ## Status table
 
@@ -27,7 +27,7 @@ case4 のみ「per-source × CAND_K candidate categorical」 (Kaggle tutorial �
 | case5 | `il_v5` | 17 × 6 | Graph U-Net | case1 の 11 dim + **rulebase/case6 から portage した ship-prediction timeline 6 列** (loss_3turn, ttf, min_owned, surplus, fall_predicted, keep_needed) |
 | case6 | `il_v6` | 17 × 6 (case5 同一) | **Graph Attention U-Net** (multi-head 4, edge feat) | case5 の GraphConv (uniform mean) を attention に置換。pairwise (dx, dy, dist, ship_log_diff, tgt_is_enemy, tgt_is_neutral) を attention bias に注入 |
 | case7 | `il_v7` | 17 × 6 (case5/6 同一) | **Set Transformer** (ISAB m=16 + PMA) | kNN グラフを廃止。ISAB で O(P²)→O(P·m)、PMA で template ごとに learnable query を持つ cross-attention target head |
-| case8 | `il_v8` | **57 × 8** | Graph U-Net | iter4 で planet 61 / global 12 まで拡張、K2/K4 ablation で 4+4 列削減し 57/8 確定。case7 系列 + predict cache 速度最適化 (turn_p95 -25%) |
+| case8 | `il_v8` | 35 × 20 (case3/4 同一) | Graph U-Net (case3 と同一) | case4 の candidate head 系を引き継ぎ、ship-prediction を取り込んだ feature engineering branch。iter13 時点で in-memory dataset 化 + EMA/dropout/grad_clip/lazy/focal を整理 |
 
 ## 系譜
 
@@ -38,11 +38,11 @@ case1 (canonical baseline)
   └─ case2 (planet/global 特徴拡張) ── il_v2_phase1 で Graph U-Net 移行
        └─ case3 (時系列 + Graph U-Net)
             └─ case4 (head 差し替え: candidate head)
+                 └─ case8 (case4 + ship-prediction / dataset・最適化整理)
 
 case5 (case1 + rulebase/case6 timeline 6 列)
   ├─ case6 (case5 backbone を Graph Attention 化)
-  ├─ case7 (case6 から kNN を捨て Set Transformer 化)
-  └─ case8 (case7 系列 + feature engineering 大幅拡張で 57×8)
+  └─ case7 (case6 から kNN を捨て Set Transformer 化)
 ```
 
 ## Conventions

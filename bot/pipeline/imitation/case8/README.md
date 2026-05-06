@@ -1,4 +1,4 @@
-# Imitation Case4 — Kaggle tutorial-style candidate head (BC)
+# Imitation Case8 — Kaggle tutorial-style candidate head (BC)
 
 `pipeline/imitation/case3` の Graph U-Net バックボーンと history feature 群を
 そのまま受け継ぎ、出力 head を Kaggle ノートブック
