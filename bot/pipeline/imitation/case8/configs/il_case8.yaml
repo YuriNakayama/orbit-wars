@@ -55,12 +55,14 @@ train:
     metric: val_cand_fire_acc
     patience: 5
     mode: max
-  # iter12 (B): iter11 hang 切り分け。iter11 で `60_before_train` 通過後に
-  # epoch=0 開始ログ直後 +58min 完全停滞 = uv race fix (iter11) は効いたが
-  # epoch loop 内の別 hang を踏んだ。候補は (a) EMA AveragedModel CUDA
-  # 同期 deadlock、(b) lazy dataset row group cache thrashing。本 iter で
-  # **EMA だけ OFF** にして他は iter11 維持。完走すれば EMA が真因と確定、
-  # 依然 hang するなら lazy dataset 側が真因。
+  # iter13: iter12-B で EMA OFF でも同じ epoch=0 hang を観測 → EMA 無罪、
+  # lazy dataset (iter5-12) の row group cache thrashing + arrow buffer
+  # overhead が host RAM swap thrash を起こしていた可能性。dataset を
+  # **pyarrow zero-copy in-memory** に refactor (iter1-3 形式の 1-shot
+  # 全 row load、ただし polars + pylist + np.array の三重 alloc を回避)。
+  # iter4-v1..v4 で OOM した polars 経由の 30GB peak → ~6-8GB peak まで
+  # 圧縮、RTX 4090 host (24-32GB) で安全に完走見込み。EMA / grad_clip /
+  # head_dropout は iter11 設定 (EMA だけ OFF) を維持。
   grad_clip_max_norm: 1.0
   ema:
     enabled: false
