@@ -103,9 +103,7 @@ def predict_enemy_fleets(
 
     _LOOKAHEAD_DEPTH += 1
     try:
-        enemy_moves, _enemy_burst_holds, _enemy_accumulate_holds = plan_moves(
-            enemy_world
-        )
+        enemy_moves = plan_moves(enemy_world)
     finally:
         _LOOKAHEAD_DEPTH -= 1
 

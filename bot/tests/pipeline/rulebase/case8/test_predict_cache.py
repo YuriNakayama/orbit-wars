@@ -1,8 +1,8 @@
-"""case13 predict cache 等価性テスト。
+"""case8 predict cache 等価性テスト。
 
-case13 の `predict_planet_position` は cache lookup を優先するが、
+case8 の `predict_planet_position` は cache lookup を優先するが、
 cache miss 時は元実装と同一値を返さなければならない。本 test は reference
-実装 (case4 と同一の式) を inline で持ち、case13 出力と完全一致するかを検証する。
+実装 (case4 と同一の式) を inline で持ち、case8 出力と完全一致するかを検証する。
 case4 module への直接依存はクロスケース独立ルール (`.claude/rules/bot/pipeline.md`)
 に違反するので避ける。
 """
@@ -14,16 +14,16 @@ import random
 
 import pytest
 
-from pipeline.rulebase.case13.baseline.core.config import (
+from pipeline.rulebase.case8.baseline.core.config import (
     CENTER_X,
     CENTER_Y,
     ROTATION_LIMIT,
 )
-from pipeline.rulebase.case13.baseline.core.physics import (
+from pipeline.rulebase.case8.baseline.core.physics import (
     predict_planet_position as cached_predict,
 )
-from pipeline.rulebase.case13.baseline.core.physics import reset_predict_cache
-from pipeline.rulebase.case13.baseline.core.types import Planet
+from pipeline.rulebase.case8.baseline.core.physics import reset_predict_cache
+from pipeline.rulebase.case8.baseline.core.types import Planet
 
 
 def _reference_predict(
@@ -32,7 +32,7 @@ def _reference_predict(
     angular_velocity: float,
     turns: int,
 ) -> tuple[float, float]:
-    """case4 と同一式の参照実装。case13 cache 値との比較に使う。"""
+    """case4 と同一式の参照実装。case8 cache 値との比較に使う。"""
     init = initial_by_id.get(planet.id)
     if init is None:
         return planet.x, planet.y
@@ -107,11 +107,11 @@ def test_reset_cache_drops_entries() -> None:
     p_cur = _make_planet(3, 55.0, 55.0, 2.0)
     initial = {3: p_init}
     cached_predict(p_cur, initial, 0.03, 5)
-    from pipeline.rulebase.case13.baseline.core import physics as case13_physics
+    from pipeline.rulebase.case8.baseline.core import physics as case8_physics
 
-    assert len(case13_physics._PREDICT_PLANET_CACHE) > 0
+    assert len(case8_physics._PREDICT_PLANET_CACHE) > 0
     reset_predict_cache()
-    assert len(case13_physics._PREDICT_PLANET_CACHE) == 0
+    assert len(case8_physics._PREDICT_PLANET_CACHE) == 0
 
 
 def test_missing_initial_returns_current_pos() -> None:

@@ -77,10 +77,6 @@ from .core.config import (
     STATIC_TARGET_SCORE_MULT,
     SWARM_SCORE_MULT,
     SWARM_VALUE_MULT,
-    THRASH_FILTER_ENABLED,
-    THRASH_REPEAT_COMMIT_LIMIT,
-    THRASH_SCORE_MULT,
-    THRASH_WINDOW,
     WEAK_ENEMY_THRESHOLD,
 )
 from .core.types import Planet
@@ -387,16 +383,6 @@ def apply_score_modifiers(
         score *= SNIPE_SCORE_MULT
     elif mission == "swarm":
         score *= SWARM_SCORE_MULT
-    if THRASH_FILTER_ENABLED and mission in ("capture", "snipe", "swarm"):
-        step = world.step
-        lost_at = world.recently_lost.get(target.id)
-        commits = world.mission_commits.get(target.id, ())
-        commit_count = sum(1 for t in commits if step - t <= THRASH_WINDOW)
-        is_thrash = (
-            lost_at is not None and step - lost_at <= THRASH_WINDOW
-        ) or commit_count >= THRASH_REPEAT_COMMIT_LIMIT
-        if is_thrash:
-            score *= THRASH_SCORE_MULT
     return score
 
 

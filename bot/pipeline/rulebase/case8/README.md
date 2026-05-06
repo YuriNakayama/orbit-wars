@@ -1,60 +1,50 @@
-# case8 — baseline_v8 (case7 + multi-turn beam search optimizer)
+# case8 — baseline_v8 (case4 + predict cache 速度最適化、採用版)
 
-case7 (`baseline_v7`, accumulate_burst) のフルコピー上に、greedy mission
-selector を **multi-turn beam search optimizer** に置き換えた派生 case。
+case4 (LB745 production) を base に `physics.predict_planet_position` を
+NumPy → dict cache 化することで挙動完全等価のまま turn_p95 を削減した版。
 
-## 採用戦略
+## 経緯
 
-case7 までの mission 列挙 (`missions/`)・movement emit (`movements/`)・
-opponent model・lookahead 資産はそのまま再利用しつつ、
-`baseline/strategy.py:plan_moves` の「mission を score 降順に 1 個ずつ
-greedy commit」していたループを `baseline/planner/` 配下の
-beam search に置き換える。
+このディレクトリは **複数の multi-step 最適化試行 (beam / PGS / NaïveMCTS / step guard / thrash filter / accumulate burst)** の
+集約点として再構築された。具体的な経緯は `docs/experiment/rulebase/20260504_case8_multistep_optimization/` 配下に
+iter ごとの記録 (iter1-iter11) がある。
 
-### 仮説
+最終的に **採用された改善は「predict cache 化」のみ** (元 case13、20260506 試行) で、
+他の試行 (PGS / NaïveMCTS / beam / 各種フィルタ) は **0-53% で採用基準 +5pp に未達**、
+heuristic 系探索は飽和したと結論。詳細は memory `project_heuristic_search_saturation` 参照。
 
-greedy mission selector は (a) ターン内のミッション間で艦数バジェットを
-取り合った時の joint 最適性、(b) 自軍の発射が次ターン以降の盤面に与える
-影響の 2 軸で局所解に陥っている。これを **multi-turn beam search**
-(横断 N=2-3 ターン、beam_width B=4-8) に置換することで、
-vs `baseline_v4` (production) のローカル 300 戦勝率を
-**+5pp 以上 (≥55%)** 改善できる。
+## 採用戦略 (現在)
 
-case3 result.md (`docs/experiment/rulebase/20260420_case3_rollout_ablation/`)
-が「次の改善には MCTS / beam search が必要」と明記した方向の続編。
-詳細: `docs/experiment/rulebase/20260504_case8_multistep_beam/plan.md`
+`bot/pipeline/rulebase/case8/baseline/core/physics.py:predict_planet_position` で
+module-level dict cache を用いて turn 内の重複計算を排除。
+`bot/pipeline/rulebase/case8/baseline/agent.py` の `agent(obs)` 先頭で
+`reset_predict_cache()` を呼び leak を防止。
 
-## 成績
+### 仮説と検証
 
-- vs baseline_v4 (300戦, seat 入替): TBD (`evaluation/compare_v4.py` で測定)
-- vs baseline_v7 (beam の純粋寄与確認用): TBD
+- **仮説**: pure function なので caching は数値的同一性を保ち、勝率不変・turn_p95 削減
+- **検証 (200戦 vs baseline_v4)**:
+  - 勝率 50.5% (101/200) — 採用条件 ±2pp 以内 ✅
+  - turn_p95 ~0.59s (case4 ~0.79s, -25%) ✅
+  - case4 timeouts 4 件 vs case8 0 件 → margin 効果裏付け
+- **cProfile**: predict_planet_position tottime 39.1s → 5.6s (-86%)
 
 ## 構造
 
-```
-case8/
-├── main.py
-├── baseline/
-│   ├── agent.py                       # case7 と同一
-│   ├── core/                          # case7 と同一 + BEAM_* config 追加
-│   ├── missions/                      # case7 と同一 (mission 列挙ロジック)
-│   ├── movements/                     # case7 と同一
-│   ├── lookahead.py                   # case7 と同一
-│   ├── opponent_model.py              # case7 と同一
-│   ├── strategy.py                    # ★ greedy ループを planner.beam.run へ delegate
-│   ├── strategy_helpers.py            # case7 と同一
-│   └── planner/                       # ★ 新設サブパッケージ
-│       ├── __init__.py
-│       ├── beam.py                    # beam search core
-│       ├── candidate.py               # mission 部分集合 → MovesPlan の生成・列挙
-│       ├── evaluator.py               # plan 評価関数
-│       └── simulator.py               # case3 rollout.py から複製した N ターン展開
-└── evaluation/
-    ├── snapshot_update.py
-    └── compare_v4.py                  # ★ case8 vs baseline_v4 比較
-```
+case4 と同型。差分は:
+- `baseline/core/physics.py` に `_PREDICT_PLANET_CACHE` (module-level dict) と
+  `reset_predict_cache()` を追加
+- `baseline/agent.py` の `agent(obs)` 先頭で `reset_predict_cache()` を呼び出し
 
-## 完全 ablation スイッチ
+## 関連 docs
 
-`baseline/core/config.py` の `BEAM_ENABLED = False` で case8 ≡ case7 に戻る
-(greedy 経路を踏む)。回帰テスト用。
+- `docs/experiment/rulebase/20260504_case8_multistep_optimization/` — 全 iter 記録
+  - iter1-iter11: 不採用試行 (PGS / NaïveMCTS / beam / 各種フィルタ)
+  - **iter12: 採用された predict cache の plan/result** (元 case13、集約時に iter12 として配置)
+
+## 関連 memory
+
+- `project_case8_predict_cache_adopted` — 200戦結果、cProfile、実装ポイント
+- `project_heuristic_search_saturation` — 11 連敗の経緯
+- `project_case4_turn_p95_at_limit` — actTimeout 上限張り付きの初期所見
+- `project_case4_hot_path` — physics.py に CPU 集中の profiling 結果

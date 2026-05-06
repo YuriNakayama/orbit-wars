@@ -162,74 +162,6 @@ SAFE_INTERCEPT_HALF_STEP: bool = True
 
 FINISHING_TIE_GUARD: bool = False
 
-# --- STAY judge (case6 only) -------------------------------------------------
-# When STAY decides to hold ships at a source, the per-source attack-budget is
-# reduced by `held_ships` for the current turn. Holding ships keeps them
-# available for next-turn defense (planet-resolved combat) or for next-turn
-# burst-launch (higher fleet_speed when more ships are sent together).
-STAY_ENABLED: bool = True
-# Disabled per ablation vs baseline_v5 (iter2_result.md): defense-only 52% vs
-# burst-only 59% — defense hold suppresses launches without delivering the
-# expected fleet-peak gain. Burst-only is the production default.
-STAY_DEFENSE_ENABLED: bool = False
-STAY_DEFENSE_HORIZON: int = 12
-# Risk × value weighting threshold. Lower → STAY fires for weaker threats.
-STAY_DEFENSE_THRESHOLD: float = 1.0
-# Sources too far from threatened planets cannot help within the horizon.
-STAY_DEFENSE_MAX_TRAVEL_TURNS: int = 18
-STAY_BURST_ENABLED: bool = True
-# iter3 broad setting (gain>=1, ships>=8, dist<=30): 54.7% vs v5 (300 eps).
-# iter4 tightened (2/12/20) collapsed to 41% — broad accumulation is the actual
-# win driver, not per-hold quality.
-# Required ETA improvement (turns) when comparing send-now vs send-next.
-STAY_BURST_MIN_GAIN: int = 1
-# Below this size the speed curve is too flat to benefit from accumulation.
-STAY_BURST_MIN_SHIPS: int = 8
-# Distant targets dilute the burst benefit; cap reasonable BURST candidates.
-STAY_BURST_MAX_TARGET_TURNS: int = 30
-# Maximum consecutive turns a single source may be held by burst. After this,
-# the source is forced to launch (or whatever strategy.py decides) for at least
-# one turn before it can be held again. iter4 found that broad burst's win
-# contribution comes from cumulative pressure, but the same source holding for
-# many turns lets context shift around it ("stuck holds"). Capping at 3 keeps
-# the cumulative effect alive while preventing context-loss freezes.
-STAY_BURST_MAX_HOLD_TURNS: int = 3
-
-# --- ACCUMULATE mission (case7 only) ----------------------------------------
-# 多ターン蓄積: 敵脅威スコアが低い友軍 source で「目標惑星捕獲必要量
-# + safety + fleet_speed knee」までの ships 数が揃うまで複数ターン保持し、
-# 揃った時点で遠距離 (ETA >= ACCUMULATE_MIN_TARGET_TURNS) の友軍 / 敵
-# 惑星に単発攻撃する mission を発火させる。case6 STAY_BURST が 1 ターン
-# arbitrage であるのに対し、ACCUMULATE は target-aware なしきい値達成
-# まで複数ターン待つことで fleet_speed カーブの knee 以上を確実に踏む。
-ACCUMULATE_ENABLED: bool = True
-# 蓄積を許可する敵脅威スコア上限。reserve > 0 (= short-horizon の駐留
-# 不足が予測される) の source は accumulate に回さず通常の defense /
-# 通常 mission に譲る。
-ACCUMULATE_THREAT_RESERVE_MAX: int = 0
-# capture 必要量への安全上乗せ。target.ships の伸びと fleet 中の損失分。
-ACCUMULATE_SAFETY_SHIPS: int = 4
-# fleet_speed knee 近傍。MAX_SPEED=6 のとき log(60)/log(1000) ≈ 0.59、
-# ratio^1.5 ≈ 0.45、speed ≈ 3.3 (ratio=1 の半分強)。これを下限に
-# 取ることで knee 未満の小規模単発を弾く。
-ACCUMULATE_KNEE_SHIPS: int = 60
-# accumulate phase は近距離は STAY/通常 mission に任せる。ETA がこれ
-# 以上の遠距離 target のみを対象にする。
-ACCUMULATE_MIN_TARGET_TURNS: int = 15
-# accumulate phase の ETA 上限。これより遠い target は orbit/comet で
-# 大きく動くため、待機しても命中率が下がる。
-ACCUMULATE_MAX_TARGET_TURNS: int = 60
-# 同一 source が連続して accumulate hold できるターン数の上限。超過
-# したら強制発火 (lift hold) する。case6 burst の MAX_HOLD_TURNS=3 と
-# は独立に管理。case6 と違い「揃うまで」の蓄積なので長めに許容。
-ACCUMULATE_MAX_HOLD_TURNS: int = 12
-# accumulate score の係数。target の indirect_wealth と production を
-# 重みに使い、他 mission との score 競合に乗せる。
-ACCUMULATE_VALUE_MULT: float = 1.0
-# accumulate fire score の調整: ETA が長いほど価値が薄れるので、
-# turns で割る weight。
-ACCUMULATE_COST_TURN_WEIGHT: float = 0.4
-
 HARASS_ENABLED: bool = True
 HARASS_MIN_TARGET_PRODUCTION: int = 2
 HARASS_MIN_TARGET_SHIPS: int = 1
@@ -259,49 +191,6 @@ LOOKAHEAD_ENABLED: bool = False
 LOOKAHEAD_MAX_DEPTH: int = 1
 LOOKAHEAD_APPLY_AFTER_STEP: int = 20
 LOOKAHEAD_PREDICTION_WEIGHT: float = 0.6
-
-# ----- case8 multi-step beam search optimizer -----
-# iter1 (32.3%) / iter2 (27.0%) ともに vs v4 で大幅未達 → 撤退。
-# default を False にし、case8 は case7 等価な greedy 経路を踏む。
-# 改修して再評価する際は True に戻す。
-BEAM_ENABLED: bool = False
-# 何ターン先まで simulate するか (1=ターン内のみ, 2-3=多ターン展開)。
-BEAM_HORIZON: int = 2
-# 各 depth で残す上位 plan 数。
-BEAM_WIDTH: int = 4
-# 1 plan あたりに展開する分岐数 (top-N 候補ミッションから採用 / drop / no-op)。
-BEAM_BRANCH_LIMIT: int = 8
-# 敵モデル: "static" は予測 arrivals 据え置き、"true2p_light" は
-# 敵 plan_moves(light) 反応を folding。"true2p_sampled" は
-# `step % BEAM_OPPONENT_SAMPLE_STRIDE == 0` の turn だけ folding し、
-# 平均計算負荷を下げる (iter2 default、smoke で turn_p95 ≤ 0.4s 想定)。
-BEAM_OPPONENT_MODE: str = "true2p_sampled"
-# true2p_sampled モードで何 turn ごとに敵反応を folding するか。
-BEAM_OPPONENT_SAMPLE_STRIDE: int = 5
-# 評価関数 mode: "mission_score" は採用 missions の mission.score 合計
-# (iter2 default、greedy と整合)、"legacy_net_ships" は iter1 の
-# horizon-end net_ships 線形和 (劣化確認済み)。
-BEAM_EVALUATOR_MODE: str = "mission_score"
-# 評価関数の重み (自軍純艦数, 自軍 production 合計, 敵 home 脅威スコア)。
-# legacy mode のみ参照。
-BEAM_VALUE_WEIGHTS: tuple[float, float, float] = (1.0, 0.5, 0.3)
-# 1 ターンあたりの beam 探索時間上限 (秒)。超過時は best-so-far で early stop。
-BEAM_TIME_BUDGET_S: float = 0.6
-
-# ----- iter3: planet thrash filter -----
-# 直近 THRASH_WINDOW ターン以内に自軍が奪われた / 自軍が同 planet 宛 mission を
-# THRASH_REPEAT_COMMIT_LIMIT 回以上 commit した planet への
-# capture/snipe/swarm mission の score を THRASH_SCORE_MULT 倍に減衰。
-# replay 分析 (20260505_1410_iter2) で確認した planet thrash 連鎖を構造的に抑制。
-THRASH_FILTER_ENABLED: bool = True
-THRASH_WINDOW: int = 10
-THRASH_SCORE_MULT: float = 0.3
-# iter3 v0 では `_record_mission_commits` が move 種別を区別せず
-# (harass / accumulate / followup 等を含めて) 記録していたため、
-# `mission_commits >= 2` 条件が常に真になり filter が全 planet で誤発火。
-# v1 では mission_commits 経路を無効化 (limit=999)、recently_lost 単独で判定。
-# 改めて mission 種別を絞った record 実装ができたら 2 に戻す。
-THRASH_REPEAT_COMMIT_LIMIT: int = 999
 
 
 def load_config(path: Path) -> dict[str, Any]:

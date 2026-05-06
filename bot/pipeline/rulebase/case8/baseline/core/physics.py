@@ -33,24 +33,43 @@ def is_static_planet(planet: Planet) -> bool:
     return r + planet.radius >= ROTATION_LIMIT
 
 
+_PREDICT_PLANET_CACHE: dict[tuple[int, int, int], tuple[float, float]] = {}
+
+
+def reset_predict_cache() -> None:
+    """Clear the per-turn cache. Called from `agent()` before building a new
+    WorldModel so stale entries from the previous turn don't accumulate."""
+    _PREDICT_PLANET_CACHE.clear()
+
+
 def predict_planet_position(
     planet: Planet,
     initial_by_id: dict[int, Planet],
     angular_velocity: float,
     turns: int,
 ) -> tuple[float, float]:
+    key = (id(initial_by_id), planet.id, turns)
+    cached = _PREDICT_PLANET_CACHE.get(key)
+    if cached is not None:
+        return cached
     init = initial_by_id.get(planet.id)
     if init is None:
-        return planet.x, planet.y
+        result = (planet.x, planet.y)
+        _PREDICT_PLANET_CACHE[key] = result
+        return result
     r = dist(init.x, init.y, CENTER_X, CENTER_Y)
     if r + init.radius >= ROTATION_LIMIT:
-        return planet.x, planet.y
+        result = (planet.x, planet.y)
+        _PREDICT_PLANET_CACHE[key] = result
+        return result
     cur_ang = math.atan2(planet.y - CENTER_Y, planet.x - CENTER_X)
     new_ang = cur_ang + angular_velocity * turns
-    return (
+    result = (
         CENTER_X + r * math.cos(new_ang),
         CENTER_Y + r * math.sin(new_ang),
     )
+    _PREDICT_PLANET_CACHE[key] = result
+    return result
 
 
 def predict_comet_position(

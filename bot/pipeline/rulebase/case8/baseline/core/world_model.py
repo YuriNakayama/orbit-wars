@@ -25,6 +25,7 @@ from .config import (
     INDIRECT_FRIENDLY_WEIGHT,
     INDIRECT_NEUTRAL_WEIGHT,
     LATE_REMAINING_TURNS,
+    LAUNCH_CLEARANCE,
     MULTI_ENEMY_PROACTIVE_HORIZON,
     MULTI_ENEMY_PROACTIVE_RATIO,
     MULTI_ENEMY_STACK_WINDOW,
@@ -44,6 +45,12 @@ from .physics import (
     fleet_speed,
     is_static_planet,
     travel_time,
+)
+from .safety import (
+    fleet_crosses_other_comet,
+    intercept_holds_within_tolerance,
+    is_trajectory_sun_safe,
+    target_reachable_before_comet_expiry,
 )
 from .types import Fleet, Planet
 
@@ -340,8 +347,6 @@ class WorldModel:
         comet_ids: set[int],
         predicted_arrivals: dict[int, list[tuple[int, int, int]]] | None = None,
         opponent_threat_score: dict[int, float] | None = None,
-        recently_lost: dict[int, int] | None = None,
-        mission_commits: dict[int, list[int]] | None = None,
     ) -> None:
         self.player = player
         self.step = step
@@ -355,11 +360,6 @@ class WorldModel:
             predicted_arrivals or {}
         )
         self.opponent_threat_score: dict[int, float] = opponent_threat_score or {}
-        # iter3 thrash filter: planet_id -> step at which self lost ownership
-        self.recently_lost: dict[int, int] = recently_lost or {}
-        # iter3 thrash filter: planet_id -> list of steps at which self
-        # committed a capture/snipe/swarm mission targeting that planet
-        self.mission_commits: dict[int, list[int]] = mission_commits or {}
 
         self.planet_by_id: dict[int, Planet] = {planet.id: planet for planet in planets}
         self.my_planets: list[Planet] = [
@@ -434,11 +434,6 @@ class WorldModel:
         }
         self.reaction_cache: dict[int, tuple[int, int]] = {}
         self.base_need_cache: dict[tuple[int, int], int] = {}
-        # Per-turn cache for travel_time(src_id, target_id, ships).
-        # Planets do not move within a turn, so coordinates are pinned by id;
-        # the only varying input is `ships`. Used by stay.py to avoid the
-        # O(my_planets * planets) recomputation across defense / burst probes.
-        self.travel_time_cache: dict[tuple[int, int, int], int] = {}
 
         (
             self.reserve,
@@ -484,7 +479,15 @@ class WorldModel:
 
         threats: list[tuple[int, int]] = []
         for enemy in self.enemy_planets:
-            eta = self.cached_travel_time(enemy.id, planet.id, max(1, enemy.ships))
+            eta = travel_time(
+                enemy.x,
+                enemy.y,
+                enemy.radius,
+                planet.x,
+                planet.y,
+                planet.radius,
+                max(1, enemy.ships),
+            )
             if eta > stack_horizon:
                 continue
             threats.append((eta, int(enemy.ships)))
@@ -557,25 +560,6 @@ class WorldModel:
 
         return reserve, available, doomed_candidates, threatened_candidates
 
-    def cached_travel_time(self, src_id: int, target_id: int, ships: int) -> int:
-        """Memoized ``travel_time`` keyed by (src, target, ships).
-
-        Planets are immutable within a turn, so coordinates can be looked up
-        from ``planet_by_id``. The ships count is the only continuous input.
-        Cache scope is one ``WorldModel`` instance (= one turn).
-        """
-        key = (src_id, target_id, max(1, int(ships)))
-        cached = self.travel_time_cache.get(key)
-        if cached is not None:
-            return cached
-        src = self.planet_by_id[src_id]
-        target = self.planet_by_id[target_id]
-        result = travel_time(
-            src.x, src.y, src.radius, target.x, target.y, target.radius, key[2]
-        )
-        self.travel_time_cache[key] = result
-        return result
-
     def is_static(self, planet_id: int) -> bool:
         return is_static_planet(self.planet_by_id[planet_id])
 
@@ -593,7 +577,7 @@ class WorldModel:
     ) -> tuple[float, int, float, float] | None:
         src = self.planet_by_id[src_id]
         target = self.planet_by_id[target_id]
-        return aim_with_prediction(
+        aim = aim_with_prediction(
             src,
             target,
             ships,
@@ -602,22 +586,71 @@ class WorldModel:
             self.comets,
             self.comet_ids,
         )
+        if aim is None:
+            return None
+        angle, turns, ix, iy = aim
+        clearance = src.radius + LAUNCH_CLEARANCE
+        launch_x = src.x + math.cos(angle) * clearance
+        launch_y = src.y + math.sin(angle) * clearance
+        if not is_trajectory_sun_safe(launch_x, launch_y, angle, turns, ships):
+            return None
+        if not intercept_holds_within_tolerance(
+            target=target,
+            predicted_turns=turns,
+            predicted_pos=(ix, iy),
+            initial_by_id=self.initial_by_id,
+            ang_vel=self.ang_vel,
+            comets=self.comets,
+            comet_ids=self.comet_ids,
+        ):
+            return None
+        if not target_reachable_before_comet_expiry(target_id, turns, self.comets):
+            return None
+        if fleet_crosses_other_comet(
+            launch_x=launch_x,
+            launch_y=launch_y,
+            angle=angle,
+            turns=turns,
+            ships=ships,
+            current_step=self.step,
+            comets=self.comets,
+            exclude_planet_id=target_id,
+        ):
+            return None
+        return aim
 
     def reaction_times(self, target_id: int) -> tuple[int, int]:
         cached = self.reaction_cache.get(target_id)
         if cached is not None:
             return cached
 
+        target = self.planet_by_id[target_id]
         my_t = min(
             (
-                self.cached_travel_time(planet.id, target_id, max(1, planet.ships))
+                travel_time(
+                    planet.x,
+                    planet.y,
+                    planet.radius,
+                    target.x,
+                    target.y,
+                    target.radius,
+                    max(1, planet.ships),
+                )
                 for planet in self.my_planets
             ),
             default=10**9,
         )
         enemy_t = min(
             (
-                self.cached_travel_time(planet.id, target_id, max(1, planet.ships))
+                travel_time(
+                    planet.x,
+                    planet.y,
+                    planet.radius,
+                    target.x,
+                    target.y,
+                    target.radius,
+                    max(1, planet.ships),
+                )
                 for planet in self.enemy_planets
             ),
             default=10**9,

@@ -5,9 +5,8 @@
 
 The planner is split into a thin orchestrator (`plan_moves`) that drives an
 inner per-mission processor. `_process_single_source_mission` handles
-"single", "snipe", "reinforce", "crash_exploit", "harass", "accumulate_fire"
-missions. `_process_multi_source_mission` handles the multi-source attack
-family.
+"single", "snipe", "reinforce", "crash_exploit", "harass" missions.
+`_process_multi_source_mission` handles the multi-source attack family.
 """
 
 from __future__ import annotations
@@ -16,31 +15,17 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from .core.config import (
-    BEAM_BRANCH_LIMIT,
-    BEAM_ENABLED,
-    BEAM_EVALUATOR_MODE,
-    BEAM_HORIZON,
-    BEAM_OPPONENT_MODE,
-    BEAM_OPPONENT_SAMPLE_STRIDE,
-    BEAM_TIME_BUDGET_S,
-    BEAM_VALUE_WEIGHTS,
-    BEAM_WIDTH,
-    REINFORCE_SAFETY_MARGIN,
-)
+from .core.config import REINFORCE_SAFETY_MARGIN
 from .core.types import Mission, Planet
 from .core.world_model import WorldModel
 from .missions import collect_missions
-from .missions.stay import build_accumulate, build_stay_holds
 from .movements.evacuation import emit_evacuation_moves
 from .movements.followup import emit_followup_moves
 from .movements.rear_guard import emit_rear_guard_moves
-from .planner import run_beam
-from .planner.opponent_reaction import predict_enemy_reaction
 from .strategy_helpers import build_modes, preferred_send
 
 SINGLE_SOURCE_MISSION_KINDS: frozenset[str] = frozenset(
-    {"single", "snipe", "reinforce", "crash_exploit", "harass", "accumulate_fire"}
+    {"single", "snipe", "reinforce", "crash_exploit", "harass"}
 )
 
 
@@ -84,8 +69,6 @@ def _process_single_source_mission(
 
     if mission.kind in ("snipe", "crash_exploit", "harass"):
         send = missing
-    elif mission.kind == "accumulate_fire":
-        send = min(send_limit, max(missing, option.send_cap))
     elif mission.kind == "reinforce":
         send = min(send_limit, missing + REINFORCE_SAFETY_MARGIN)
     else:
@@ -179,13 +162,7 @@ def _enforce_inventory_cap(
     return final_moves
 
 
-def plan_moves_light(world: WorldModel) -> list[list[int | float]]:
-    """Lightweight greedy planning used by `opponent_reaction.py` for 1-ply
-    enemy reaction prediction. Skips STAY/accumulate hold tracking, beam
-    search, and followup/evacuation/rear_guard emit — only the mission-driven
-    mainline actions, which is the granularity needed for predicting where
-    the enemy will launch fleets next turn. Returns a flat moves list.
-    """
+def plan_moves(world: WorldModel) -> list[list[int | float]]:
     modes = build_modes(world)
     planned_commitments: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
     moves: list[list[int | float]] = []
@@ -236,153 +213,6 @@ def plan_moves_light(world: WorldModel) -> list[list[int | float]]:
                 source_attack_left,
                 append_move,
             )
-    return _enforce_inventory_cap(moves, world)
-
-
-def plan_moves(
-    world: WorldModel,
-    consecutive_holds: dict[int, int] | None = None,
-    accumulate_holds_consec: dict[int, int] | None = None,
-) -> tuple[list[list[int | float]], set[int], set[int]]:
-    """Plan one turn of moves.
-
-    Returns (moves, burst_held_src_ids, accumulate_held_src_ids). The second
-    element contains source planet ids that were burst-held (case6 STAY_BURST,
-    1-turn arbitrage) this turn; the third contains source ids that were
-    accumulate-held (case7 multi-turn accumulate). Callers track them in
-    independent counters for STAY_BURST_MAX_HOLD_TURNS / ACCUMULATE_MAX_HOLD_TURNS.
-    """
-    modes = build_modes(world)
-    planned_commitments: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
-    moves: list[list[int | float]] = []
-    spent_total: dict[int, int] = defaultdict(int)
-
-    stay_holds, stay_decisions = build_stay_holds(world, consecutive_holds)
-    burst_held_src_ids: set[int] = {
-        d.src_id for d in stay_decisions if d.kind == "burst"
-    }
-
-    accumulate_holds, accumulate_fire_missions, _, accumulate_held_src_ids = (
-        build_accumulate(world, planned_commitments, accumulate_holds_consec)
-    )
-
-    merged_holds: dict[int, int] = dict(stay_holds)
-    for src_id, ships in accumulate_holds.items():
-        merged_holds[src_id] = max(merged_holds.get(src_id, 0), ships)
-
-    def source_inventory_left(source_id: int) -> int:
-        return world.source_inventory_left(source_id, spent_total)
-
-    def source_attack_left(source_id: int) -> int:
-        raw = world.source_attack_left(source_id, spent_total)
-        held = merged_holds.get(source_id, 0)
-        return max(0, raw - held)
-
-    def append_move(src_id: int, angle: float, ships: int) -> int:
-        send = min(int(ships), source_inventory_left(src_id))
-        if send < 1:
-            return 0
-        moves.append([src_id, float(angle), int(send)])
-        spent_total[src_id] += send
-        return send
-
-    missions = collect_missions(
-        world,
-        planned_commitments,
-        modes,
-        source_inventory_left,
-        source_attack_left,
-    )
-    missions.extend(accumulate_fire_missions)
-    missions.sort(key=lambda item: -item.score)
-
-    if BEAM_ENABLED:
-        beam_world = world
-        # true2p_sampled: only fold enemy reaction every Nth turn to amortize
-        # the cost of plan_moves_light + WorldModel rebuild.
-        opponent_mode_active = BEAM_OPPONENT_MODE == "true2p_light" or (
-            BEAM_OPPONENT_MODE == "true2p_sampled"
-            and world.step % max(1, BEAM_OPPONENT_SAMPLE_STRIDE) == 0
-        )
-        if opponent_mode_active:
-            # Predict enemy 1-ply reaction to a representative committed fleet
-            # (the strongest greedy mission's option) and fold it into the
-            # world's predicted_arrivals. Per-ordering reaction would be more
-            # accurate but costs N× plan_moves_light; we trade fidelity for
-            # latency in v0.
-            top = next(iter(missions), None)
-            our_send_src: Planet | None = None
-            our_send_ships: int = 0
-            if top is not None and top.options:
-                opt = top.options[0]
-                our_send_src = world.planet_by_id.get(opt.src_id)
-                our_send_ships = int(opt.needed)
-            extra = predict_enemy_reaction(world, our_send_src, our_send_ships)
-            if extra:
-                merged_arrivals: dict[int, list[tuple[int, int, int]]] = {
-                    pid: list(arr) for pid, arr in world.predicted_arrivals.items()
-                }
-                for pid, items in extra.items():
-                    merged_arrivals.setdefault(pid, []).extend(items)
-                beam_world = WorldModel(
-                    player=world.player,
-                    step=world.step,
-                    planets=world.planets,
-                    fleets=world.fleets,
-                    initial_by_id=world.initial_by_id,
-                    ang_vel=world.ang_vel,
-                    comets=world.comets,
-                    comet_ids=world.comet_ids,
-                    predicted_arrivals=merged_arrivals,
-                    opponent_threat_score=world.opponent_threat_score,
-                )
-
-        # Beam-search ordering. The beam runs `commit_missions_in_order` for
-        # each candidate ordering with isolated bookkeeping, so we adopt the
-        # winning plan's moves/commitments and continue from there.
-        beam_plan = run_beam(
-            beam_world,
-            missions,
-            modes,
-            merged_holds,
-            _process_single_source_mission,
-            _process_multi_source_mission,
-            SINGLE_SOURCE_MISSION_KINDS,
-            horizon=BEAM_HORIZON,
-            width=BEAM_WIDTH,
-            branch_limit=BEAM_BRANCH_LIMIT,
-            time_budget_s=BEAM_TIME_BUDGET_S,
-            weights=BEAM_VALUE_WEIGHTS,
-            evaluator_mode=BEAM_EVALUATOR_MODE,
-        )
-        moves.extend(beam_plan.moves)
-        for src_id, used in beam_plan.spent_total.items():
-            spent_total[src_id] += used
-        for target_id, items in beam_plan.planned_commitments.items():
-            planned_commitments[target_id].extend(items)
-    else:
-        for mission in missions:
-            target = world.planet_by_id[mission.target_id]
-            if mission.kind in SINGLE_SOURCE_MISSION_KINDS:
-                _process_single_source_mission(
-                    mission,
-                    target,
-                    world,
-                    modes,
-                    planned_commitments,
-                    source_inventory_left,
-                    source_attack_left,
-                    append_move,
-                )
-            else:
-                _process_multi_source_mission(
-                    mission,
-                    target,
-                    world,
-                    planned_commitments,
-                    source_attack_left,
-                    append_move,
-                )
 
     emit_followup_moves(
         world, planned_commitments, modes, source_attack_left, append_move
@@ -392,8 +222,4 @@ def plan_moves(
     )
     emit_rear_guard_moves(world, modes, source_attack_left, append_move)
 
-    return (
-        _enforce_inventory_cap(moves, world),
-        burst_held_src_ids,
-        accumulate_held_src_ids,
-    )
+    return _enforce_inventory_cap(moves, world)
