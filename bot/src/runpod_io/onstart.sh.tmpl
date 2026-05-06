@@ -330,12 +330,27 @@ UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
 echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s"
 
 mark "40_uv_sync_done"
+
+# iter11 fix: `uv run --project bot` / `uv run --directory bot` を以後の
+# step (dvc / python) で**一切**使わない。`uv run` は呼ぶたびに
+# pyproject.toml と uv.lock の整合性を再確認し、必要なら裏で `uv sync` を
+# 走らせる仕様。同じ venv を 2 つの `uv run` がほぼ並行で触ると、片方の
+# sync 中間状態を他方が踏んで `ModuleNotFoundError` (dvc / pathspec /
+# diskcache / rich._emoji_codes / s3fs) が頻発する race condition を
+# iter9 (`Installed 180 packages` retry chain) と iter10
+# (`Uninstalled 25 packages + Installed 5` during dvc pull) で観測。
+# 直接 .venv/bin の bin を呼べば uv は介在せず venv は line 319 の
+# `uv sync --locked --no-dev` 状態のまま固定される。
+PY_BIN="$(pwd)/bot/.venv/bin/python"
+DVC_BIN="$(pwd)/bot/.venv/bin/dvc"
+echo "[onstart] iter11 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
+
 echo "[onstart] step=dvc_pull cwd=$(pwd)"
 # 診断: cwd と repo の dvc-tracked 状態を log に残す
 echo "[onstart] dvc pull diagnostic:"
 ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
 # set -e は外しているので明示的に exit code を確認
-if ! uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc; then
+if ! "${DVC_BIN}" pull data/lake/kaggle_episodes/matches.dvc; then
   echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
   echo "[onstart] dvc pull diagnostic listing:"
   ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
@@ -345,7 +360,7 @@ if ! uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc; then
   mark "45_dvc_pull_kaggle_failed"
   exit 1
 fi
-if ! uv run --project bot dvc pull --allow-missing --force; then
+if ! "${DVC_BIN}" pull --allow-missing --force; then
   echo "[onstart] dvc pull (full) FAILED" >&2
   mark "45_dvc_pull_full_failed"
   exit 1
@@ -395,7 +410,9 @@ if [ -n "<PREPROCESS_CMD>" ]; then
     find "data/mart/imitation/<CASE>" -maxdepth 1 -name '*.parquet' \
       -type f -print -delete 2>&1 || true
   fi
-  uv run --directory bot python -m <PREPROCESS_CMD>
+  # iter11: `uv run` 経由を排除 (race condition 回避)。cwd を bot に揃えて
+  # .venv/bin/python を直接起動すれば uv は介在せず deps は固定。
+  ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> )
   PREPROCESS_RAN=1
 fi
 
@@ -426,7 +443,7 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
   for pq in "${MART_DIR}"/*.parquet; do
     [ -f "${pq}" ] || continue
     echo "[onstart] dvc add ${pq}"
-    if uv run --project bot dvc add "${pq}" 2>&1; then
+    if "${DVC_BIN}" add "${pq}" 2>&1; then
       added_any=1
     else
       echo "[onstart] dvc add ${pq} FATAL" >&2
@@ -453,13 +470,7 @@ if [ "${PREPROCESS_RAN}" -eq 1 ]; then
       mark "55_mart_dvc_push_failed"
       exit 1
     fi
-    # iter10 fix: `uv run --project bot` を retry 中に呼ぶと uv が venv を
-    # rebuild しようとして dvc / s3fs / pathspec / diskcache 等が一時的に
-    # 見えなくなる事象を観測 (case8 iter9 で `dvc push attempt 1 failed`
-    # → attempt 2 で `Installed 180 packages` → `ModuleNotFoundError`)。
-    # 既に session 冒頭で uv sync 済みなので、retry では .venv の dvc を
-    # 直接呼んで race condition を回避する。
-    DVC_BIN="bot/.venv/bin/dvc"
+    # iter11: 冒頭で pin 済みの DVC_BIN を使用。`uv run` 経由排除済み。
     push_ok=0
     for attempt in 1 2 3; do
       echo "[onstart] dvc push ${dvc_files[*]} (attempt ${attempt}/3)"
@@ -546,14 +557,17 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   echo "[onstart] gpu sampler pid=${NVSMI_PID} -> ${GPU_LOG}"
 fi
 
+# iter11: `uv run` 経由排除。cwd=bot に切り替えて .venv/bin/python 直接呼び。
+# train は最長プロセスで、起動時に裏で別の uv コマンドが走ると hang or crash
+# (case8 iter4-9 の `60_before_train` 直後 hang はこれが root cause 候補)。
 ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
   ORBIT_WARS_RUN_ID="<RUN_ID>" \
   ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
   ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
   ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
   ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
-  ORBIT_WARS_COMMAND="uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG>" \
-  uv run --directory bot python -m <TRAIN_MODULE> <CONFIG_ARG> \
+  ORBIT_WARS_COMMAND="cd bot && ${PY_BIN} -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  bash -c "cd bot && '${PY_BIN}' -m <TRAIN_MODULE> <CONFIG_ARG>" \
   2>&1 | tee "${TRAIN_LOG}"
 TRAIN_EXIT=${PIPESTATUS[0]}
 
@@ -620,7 +634,7 @@ if [ -L "${OUTPUT_PARENT}" ]; then
     cp -RL "${OUTPUT_SYMLINK_TARGET}"/. "${OUTPUT_PARENT}/" 2>&1 | tail -3 || true
   fi
 fi
-if ! uv run --project bot dvc add "${RUN_DIR_REL}" 2>&1; then
+if ! "${DVC_BIN}" add "${RUN_DIR_REL}" 2>&1; then
   echo "[onstart] dvc_add_run FATAL" >&2
   mark "75_dvc_add_run_failed"
   exit 1
@@ -644,7 +658,7 @@ fi
 push_runs_ok=0
 for attempt in 1 2 3; do
   echo "[onstart] dvc push ${RUN_DVC_FILE} (attempt ${attempt}/3)"
-  if uv run --project bot dvc push "${RUN_DVC_FILE}" 2>&1; then
+  if "${DVC_BIN}" push "${RUN_DVC_FILE}" 2>&1; then
     push_runs_ok=1
     break
   fi

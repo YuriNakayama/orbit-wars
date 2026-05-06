@@ -55,15 +55,18 @@ train:
     metric: val_cand_fire_acc
     patience: 5
     mode: max
-  # iter9: iter4 fix を全て無効化し、iter3 完走実績ある config + iter5 lazy
-  # dataset で baseline を取り直す。iter4 の grad_clip + EMA + dropout は
-  # 8 連続 `60_before_train` hang した root cause 候補で、ablation のため
-  # 全部 OFF。
-  grad_clip_max_norm: 0.0
+  # iter11: 8 連続 hang の真の root cause は onstart の `uv run --project bot`
+  # による venv race condition (iter9 で `Installed 180 packages` retry chain、
+  # iter10 で dvc pull 中に `Uninstalled 25 packages + ModuleNotFoundError
+  # rich._emoji_codes` を観測) と確定。bot/src/runpod_io/onstart.sh.tmpl で
+  # `.venv/bin/{python,dvc}` 直接呼びに統一して race を排除した上で、本来
+  # iter4 で意図した stabilization knobs (grad_clip + EMA + head_dropout)
+  # を再投入し val_total max/min < 2.0 を計測する。
+  grad_clip_max_norm: 1.0
   ema:
-    enabled: false
+    enabled: true
     decay: 0.999
-  head_dropout: 0.0
+  head_dropout: 0.2
   weights_out: pipeline/imitation/case8/policy/weights.pt
 
 inference:
