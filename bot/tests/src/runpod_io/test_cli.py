@@ -134,7 +134,7 @@ def test_train_happy_path(
     )
     result = runner.invoke(
         app,
-        ["train", "abc1234deadbeef", "--seed", "0"],
+        ["train", "abc1234deadbeef", "--seed", "0", "--skip-smoke"],
     )
     assert result.exit_code == 0, result.output
     assert "Pod launched" in result.output
@@ -151,7 +151,7 @@ def test_train_no_offers_exits(
     monkeypatch.setattr("runpod_io.cli._volume_sdk", lambda: MagicMock())
     monkeypatch.setattr("runpod_io.cli.list_volumes", lambda _sdk: [])
     monkeypatch.setattr("runpod_io.cli.search_offers", lambda _sdk, **_kwargs: [])
-    result = runner.invoke(app, ["train", "abc1234deadbeef"])
+    result = runner.invoke(app, ["train", "abc1234deadbeef", "--skip-smoke"])
     assert result.exit_code == 1
     assert "No offers" in result.output
 
@@ -185,7 +185,7 @@ def test_train_cost_limit_aborts_when_declined(
     )
     result = runner.invoke(
         app,
-        ["train", "abc1234deadbeef", "--cost-limit", "0.5"],
+        ["train", "abc1234deadbeef", "--cost-limit", "0.5", "--skip-smoke"],
         input="n\n",
     )
     assert result.exit_code == 1
@@ -560,7 +560,9 @@ def test_train_writes_launch_json(
     monkeypatch.setattr("runpod_io.cli.create_pod", lambda *_a, **_k: "pod-xyz")
     monkeypatch.setattr("runpod_io.cli._repo_root", lambda: tmp_path)
 
-    result = runner.invoke(app, ["train", "abc1234deadbeef", "--seed", "0"])
+    result = runner.invoke(
+        app, ["train", "abc1234deadbeef", "--seed", "0", "--skip-smoke"]
+    )
     assert result.exit_code == 0, result.output
 
     runs = list((tmp_path / "data/output/models/imitation/case1/runs").iterdir())

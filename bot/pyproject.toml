@@ -22,6 +22,7 @@ dependencies = [
     "vastai>=0.3.0",
     "orbit-wars-vendor",
     "runpod>=1.7.0",
+    "psutil>=6.0.0",
 ]
 
 [tool.uv.sources]
@@ -136,6 +137,8 @@ max-complexity = 5
 "tests/pipeline/rulebase/case6/snapshots/**" = ["ALL"]
 "pipeline/rulebase/case7/evaluation/**/*.py" = ["B008", "E501"]
 "tests/pipeline/rulebase/case7/snapshots/**" = ["ALL"]
+"pipeline/rulebase/case8/evaluation/**/*.py" = ["B008", "E501"]
+"tests/pipeline/rulebase/case8/snapshots/**" = ["ALL"]
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/dataset/cli.py" = ["B008"]  # typer の慣習
 "src/vast/cli.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
@@ -179,6 +182,7 @@ module = [
     "pipeline.rulebase.case5.baseline.core.config",
     "pipeline.rulebase.case5.baseline.core.types",
     "pipeline.rulebase.case5.baseline.core.physics",
+    "pipeline.rulebase.case5.baseline.core.safety",
     "pipeline.rulebase.case5.baseline.core.world_helpers",
 ]
 ignore_errors = true
@@ -190,6 +194,7 @@ module = [
     "tests.pipeline.rulebase.case5.test_baseline_agent",
     "tests.pipeline.rulebase.case5.test_core_physics",
     "tests.pipeline.rulebase.case5.test_core_world_helpers",
+    "tests.pipeline.rulebase.case5.test_plan_shot_safety",
 ]
 disallow_untyped_calls = false
 

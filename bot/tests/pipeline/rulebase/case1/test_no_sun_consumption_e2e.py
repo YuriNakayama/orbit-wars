@@ -11,6 +11,7 @@ Marked @pytest.mark.integration — depends on kaggle_environments runtime.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -30,7 +31,7 @@ def _noop(_obs: object) -> list[list[int | float]]:
     return []
 
 
-def _walk_fleets(env: object) -> list[tuple[int, int, float, float]]:
+def _walk_fleets(env: Any) -> list[tuple[int, int, float, float]]:
     """Return [(step_idx, fleet_id, x, y), ...] across all steps."""
     out: list[tuple[int, int, float, float]] = []
     for step_idx, step in enumerate(env.steps):

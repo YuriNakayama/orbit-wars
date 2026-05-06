@@ -1,0 +1,6 @@
+outs:
+- md5: decd1e75a19247717bc5d24371eba996.dir
+  size: 55
+  nfiles: 1
+  hash: md5
+  path: case0_smoke
