@@ -153,3 +153,60 @@ stages:
       - bot/pipeline/imitation/case8/configs/il_case8.yaml
     outs:
       - bot/pipeline/imitation/case8/policy/weights.pt
+
+  preprocess_imitation_case9:
+    cmd: uv run --directory bot python -m pipeline.imitation.case9.training.preprocess --config pipeline/imitation/case9/configs/il_case9_candidate.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case9/training/preprocess.py
+      - bot/pipeline/imitation/case9/policy/featurizer.py
+      - bot/pipeline/imitation/case9/policy/timeline.py
+      - bot/pipeline/imitation/case9/policy/geometry.py
+      - bot/pipeline/imitation/case9/policy/templates.py
+      - bot/pipeline/imitation/case9/policy/candidates.py
+      - bot/pipeline/imitation/case9/configs/il_case9_candidate.yaml
+    outs:
+      - data/mart/imitation/case9/train.parquet
+      - data/mart/imitation/case9/val.parquet
+
+  train_imitation_case9_candidate:
+    cmd: uv run --directory bot python -m pipeline.imitation.case9.training.train --config pipeline/imitation/case9/configs/il_case9_candidate.yaml
+    deps:
+      - data/mart/imitation/case9/train.parquet
+      - data/mart/imitation/case9/val.parquet
+      - bot/pipeline/imitation/case9/training/train.py
+      - bot/pipeline/imitation/case9/training/losses.py
+      - bot/pipeline/imitation/case9/training/dataset.py
+      - bot/pipeline/imitation/case9/policy/model.py
+      - bot/pipeline/imitation/case9/policy/heads
+      - bot/pipeline/imitation/case9/configs/il_case9_candidate.yaml
+    outs:
+      - bot/pipeline/imitation/case9/policy/weights_candidate.pt
+
+  train_imitation_case9_three_head:
+    cmd: uv run --directory bot python -m pipeline.imitation.case9.training.train --config pipeline/imitation/case9/configs/il_case9_three_head.yaml
+    deps:
+      - data/mart/imitation/case9/train.parquet
+      - data/mart/imitation/case9/val.parquet
+      - bot/pipeline/imitation/case9/training/train.py
+      - bot/pipeline/imitation/case9/training/losses.py
+      - bot/pipeline/imitation/case9/training/dataset.py
+      - bot/pipeline/imitation/case9/policy/model.py
+      - bot/pipeline/imitation/case9/policy/heads
+      - bot/pipeline/imitation/case9/configs/il_case9_three_head.yaml
+    outs:
+      - bot/pipeline/imitation/case9/policy/weights_three_head.pt
+
+  train_imitation_case9_candidate_ships:
+    cmd: uv run --directory bot python -m pipeline.imitation.case9.training.train --config pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml
+    deps:
+      - data/mart/imitation/case9/train.parquet
+      - data/mart/imitation/case9/val.parquet
+      - bot/pipeline/imitation/case9/training/train.py
+      - bot/pipeline/imitation/case9/training/losses.py
+      - bot/pipeline/imitation/case9/training/dataset.py
+      - bot/pipeline/imitation/case9/policy/model.py
+      - bot/pipeline/imitation/case9/policy/heads
+      - bot/pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml
+    outs:
+      - bot/pipeline/imitation/case9/policy/weights_candidate_ships.pt

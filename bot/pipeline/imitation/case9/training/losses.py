@@ -170,3 +170,206 @@ def compute_loss(
         ship_mae=ship_mae,
         ship_count=ship_count,
     )
+
+
+@dataclass(frozen=True)
+class ThreeHeadLossReport:
+    total: torch.Tensor
+    from_loss: torch.Tensor
+    target_loss: torch.Tensor
+    ships_loss: torch.Tensor
+    from_acc: float
+    target_acc: float
+    ships_acc: float
+    fire_count: int
+
+
+def compute_three_head_loss(
+    output: PolicyOutput,
+    from_multihot: torch.Tensor,  # (B, P) bool
+    target_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    ships_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    my_planet_mask: torch.Tensor,  # (B, P) bool
+    from_w: float = 1.0,
+    target_w: float = 1.0,
+    ships_w: float = 0.5,
+    pos_weight: float = 5.0,
+    label_smoothing: float = 0.1,
+) -> ThreeHeadLossReport:
+    """3-head BC loss (case7 流): from BCE + target CE + ships CE."""
+    device = my_planet_mask.device
+    zero = torch.zeros((), device=device)
+
+    assert output.from_logits is not None
+    assert output.target_logits is not None
+    assert output.ships_logits is not None
+
+    # from head: per-source binary fire/no-fire (focal-style with pos_weight).
+    from_logits_sel = output.from_logits[my_planet_mask]
+    from_target_sel = from_multihot[my_planet_mask].to(from_logits_sel.dtype)
+    pw = torch.tensor([pos_weight], device=device, dtype=from_logits_sel.dtype)
+    from_loss = nn.functional.binary_cross_entropy_with_logits(
+        from_logits_sel, from_target_sel, pos_weight=pw
+    )
+    with torch.no_grad():
+        from_pred = (from_logits_sel > 0.0).to(from_target_sel.dtype)
+        from_acc = float((from_pred == from_target_sel).float().mean().item())
+
+    # target head: per-fired-source CE over NUM_TEMPLATES.
+    fire_valid = my_planet_mask & (target_per_src != -1)
+    if fire_valid.any():
+        b_idx, s_idx = fire_valid.nonzero(as_tuple=True)
+        tgt_logits = output.target_logits[b_idx, s_idx]  # (N, NUM_TEMPLATES)
+        tgt_labels = target_per_src[b_idx, s_idx]
+        target_loss = nn.functional.cross_entropy(
+            tgt_logits, tgt_labels, label_smoothing=label_smoothing
+        )
+        with torch.no_grad():
+            target_acc = float(
+                (tgt_logits.argmax(dim=-1) == tgt_labels).float().mean().item()
+            )
+        fire_count = int(fire_valid.sum().item())
+    else:
+        target_loss = zero
+        target_acc = 0.0
+        fire_count = 0
+
+    ships_valid = my_planet_mask & (ships_per_src != -1)
+    if ships_valid.any():
+        b_idx, s_idx = ships_valid.nonzero(as_tuple=True)
+        ships_logits_sel = output.ships_logits[b_idx, s_idx]  # (N, ships_buckets)
+        ships_labels = ships_per_src[b_idx, s_idx]
+        ships_loss = nn.functional.cross_entropy(
+            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+        )
+        with torch.no_grad():
+            ships_acc = float(
+                (ships_logits_sel.argmax(dim=-1) == ships_labels).float().mean().item()
+            )
+    else:
+        ships_loss = zero
+        ships_acc = 0.0
+
+    total = from_w * from_loss + target_w * target_loss + ships_w * ships_loss
+    return ThreeHeadLossReport(
+        total=total,
+        from_loss=from_loss.detach(),
+        target_loss=target_loss.detach()
+        if isinstance(target_loss, torch.Tensor)
+        else zero,
+        ships_loss=ships_loss.detach()
+        if isinstance(ships_loss, torch.Tensor)
+        else zero,
+        from_acc=from_acc,
+        target_acc=target_acc,
+        ships_acc=ships_acc,
+        fire_count=fire_count,
+    )
+
+
+@dataclass(frozen=True)
+class CandidateShipsLossReport:
+    total: torch.Tensor
+    cand_loss: torch.Tensor
+    ships_loss: torch.Tensor
+    cand_acc: float
+    cand_noop_acc: float
+    cand_fire_acc: float
+    ships_acc: float
+    fire_count: int
+
+
+def compute_candidate_ships_loss(
+    output: PolicyOutput,
+    cand_slot_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
+    ships_bucket_per_src: torch.Tensor,  # (B, P) int64; -1 = unused (fired only)
+    my_planet_mask: torch.Tensor,  # (B, P) bool
+    weights: LossWeights,
+    ships_w: float = 0.5,
+    label_smoothing: float = 0.1,
+) -> CandidateShipsLossReport:
+    """candidate categorical (cand_logits) + ships 4-bucket categorical."""
+    device = my_planet_mask.device
+    zero = torch.zeros((), device=device)
+
+    valid = my_planet_mask & (cand_slot_per_src != -1)
+    if not valid.any():
+        return CandidateShipsLossReport(
+            total=zero,
+            cand_loss=zero,
+            ships_loss=zero,
+            cand_acc=0.0,
+            cand_noop_acc=0.0,
+            cand_fire_acc=0.0,
+            ships_acc=0.0,
+            fire_count=0,
+        )
+
+    b_idx, src_idx = valid.nonzero(as_tuple=True)
+    assert output.candidate_logits is not None
+    sel_logits = output.candidate_logits[b_idx, src_idx]
+    sel_labels = cand_slot_per_src[b_idx, src_idx]
+
+    cand_cw = (
+        weights.cand_class_weights.to(sel_logits.device)
+        if weights.cand_class_weights is not None
+        else None
+    )
+    if weights.cand_loss_type.lower() == "focal":
+        cand_loss = _focal_cross_entropy(
+            sel_logits,
+            sel_labels,
+            alpha=weights.focal_alpha,
+            gamma=weights.focal_gamma,
+            weight=cand_cw,
+        )
+    else:
+        cand_loss = nn.functional.cross_entropy(
+            sel_logits,
+            sel_labels,
+            weight=cand_cw,
+            label_smoothing=weights.label_smoothing,
+        )
+
+    with torch.no_grad():
+        pred = sel_logits.argmax(dim=-1)
+        match = (pred == sel_labels).float()
+        cand_acc = float(match.mean().item())
+        is_noop = sel_labels == 0
+        is_fire = ~is_noop
+        n_noop = int(is_noop.sum().item())
+        n_fire = int(is_fire.sum().item())
+        cand_noop_acc = float(match[is_noop].mean().item()) if n_noop > 0 else 0.0
+        cand_fire_acc = float(match[is_fire].mean().item()) if n_fire > 0 else 0.0
+
+    ships_valid = my_planet_mask & (ships_bucket_per_src != -1)
+    fire_count = 0
+    if ships_valid.any():
+        assert output.ships_logits is not None
+        sb_idx, ss_idx = ships_valid.nonzero(as_tuple=True)
+        ships_logits_sel = output.ships_logits[sb_idx, ss_idx]
+        ships_labels = ships_bucket_per_src[sb_idx, ss_idx]
+        ships_loss = nn.functional.cross_entropy(
+            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+        )
+        with torch.no_grad():
+            ships_acc = float(
+                (ships_logits_sel.argmax(dim=-1) == ships_labels).float().mean().item()
+            )
+            fire_count = int(ships_valid.sum().item())
+    else:
+        ships_loss = zero
+        ships_acc = 0.0
+
+    total = weights.cand_w * cand_loss + ships_w * ships_loss
+    ships_loss_detached = ships_loss.detach()
+    return CandidateShipsLossReport(
+        total=total,
+        cand_loss=cand_loss.detach(),
+        ships_loss=ships_loss_detached,
+        cand_acc=cand_acc,
+        cand_noop_acc=cand_noop_acc,
+        cand_fire_acc=cand_fire_acc,
+        ships_acc=ships_acc,
+        fire_count=fire_count,
+    )

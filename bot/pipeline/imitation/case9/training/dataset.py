@@ -32,6 +32,7 @@ from pipeline.imitation.case9.policy.featurizer import (
     MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
+from pipeline.imitation.case9.policy.templates import TEMPLATE_CTX_DIM
 
 
 @dataclass(frozen=True)
@@ -41,11 +42,16 @@ class Sample:
     planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     my_planet_mask: torch.Tensor  # (MAX_PLANETS,) bool
     target_mask: torch.Tensor  # (MAX_PLANETS,) bool
+    template_ctx: torch.Tensor  # (MAX_PLANETS, TEMPLATE_CTX_DIM)
     candidate_feats: torch.Tensor  # (MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
     candidate_mask: torch.Tensor  # (MAX_PLANETS, CAND_K) bool
     candidate_pid: torch.Tensor  # (MAX_PLANETS, CAND_K) int64
     cand_slot_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
     ship_label_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
+    ships_bucket_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
+    from_multihot: torch.Tensor  # (MAX_PLANETS,) bool — three_head fire label
+    target_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
+    ships_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
     is_noop: bool
 
 
@@ -56,11 +62,16 @@ class BatchedSample:
     planet_mask: torch.Tensor
     my_planet_mask: torch.Tensor
     target_mask: torch.Tensor
+    template_ctx: torch.Tensor
     candidate_feats: torch.Tensor
     candidate_mask: torch.Tensor
     candidate_pid: torch.Tensor
     cand_slot_per_src: torch.Tensor
     ship_label_per_src: torch.Tensor
+    ships_bucket_per_src: torch.Tensor
+    from_multihot: torch.Tensor
+    target_per_src: torch.Tensor
+    ships_per_src: torch.Tensor
     is_noop: torch.Tensor
 
 
@@ -152,6 +163,14 @@ class CaseFourDataset(Dataset[Sample]):
         self._target_mask = _take(tbl, "target_mask", np.dtype(np.bool_)).reshape(
             n, MAX_PLANETS
         )
+        if "template_ctx" in tbl[0].schema.names:
+            self._template_ctx = _take(
+                tbl, "template_ctx", np.dtype(np.float32)
+            ).reshape(n, MAX_PLANETS, TEMPLATE_CTX_DIM)
+        else:
+            self._template_ctx = np.zeros(
+                (n, MAX_PLANETS, TEMPLATE_CTX_DIM), dtype=np.float32
+            )
         self._candidate_feats = _take(
             tbl, "candidate_feats", np.dtype(np.float32)
         ).reshape(n, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
@@ -170,6 +189,30 @@ class CaseFourDataset(Dataset[Sample]):
             ).reshape(n, MAX_PLANETS)
         else:
             self._ship_label_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+        if "ships_bucket_per_src" in tbl[0].schema.names:
+            self._ships_bucket_per_src = _take(
+                tbl, "ships_bucket_per_src", np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._ships_bucket_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+        if "from_multihot" in tbl[0].schema.names:
+            self._from_multihot = _take(
+                tbl, "from_multihot", np.dtype(np.bool_)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._from_multihot = np.zeros((n, MAX_PLANETS), dtype=np.bool_)
+        if "target_per_src" in tbl[0].schema.names:
+            self._target_per_src = _take(
+                tbl, "target_per_src", np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._target_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+        if "ships_per_src" in tbl[0].schema.names:
+            self._ships_per_src = _take(
+                tbl, "ships_per_src", np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._ships_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
         self._is_noop = _take_primitive(tbl, "is_noop", np.dtype(np.bool_))
         self._n = n
 
@@ -204,11 +247,16 @@ class CaseFourDataset(Dataset[Sample]):
             planet_mask=torch.from_numpy(self._planet_mask[idx]),
             my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
             target_mask=torch.from_numpy(self._target_mask[idx]),
+            template_ctx=torch.from_numpy(self._template_ctx[idx]),
             candidate_feats=torch.from_numpy(self._candidate_feats[idx]),
             candidate_mask=torch.from_numpy(self._candidate_mask[idx]),
             candidate_pid=torch.from_numpy(self._candidate_pid[idx]),
             cand_slot_per_src=torch.from_numpy(self._cand_slot_per_src[idx]),
             ship_label_per_src=torch.from_numpy(self._ship_label_per_src[idx]),
+            ships_bucket_per_src=torch.from_numpy(self._ships_bucket_per_src[idx]),
+            from_multihot=torch.from_numpy(self._from_multihot[idx]),
+            target_per_src=torch.from_numpy(self._target_per_src[idx]),
+            ships_per_src=torch.from_numpy(self._ships_per_src[idx]),
             is_noop=bool(self._is_noop[idx]),
         )
 
@@ -220,10 +268,15 @@ def collate(samples: list[Sample]) -> BatchedSample:
         planet_mask=torch.stack([s.planet_mask for s in samples]),
         my_planet_mask=torch.stack([s.my_planet_mask for s in samples]),
         target_mask=torch.stack([s.target_mask for s in samples]),
+        template_ctx=torch.stack([s.template_ctx for s in samples]),
         candidate_feats=torch.stack([s.candidate_feats for s in samples]),
         candidate_mask=torch.stack([s.candidate_mask for s in samples]),
         candidate_pid=torch.stack([s.candidate_pid for s in samples]),
         cand_slot_per_src=torch.stack([s.cand_slot_per_src for s in samples]),
         ship_label_per_src=torch.stack([s.ship_label_per_src for s in samples]),
+        ships_bucket_per_src=torch.stack([s.ships_bucket_per_src for s in samples]),
+        from_multihot=torch.stack([s.from_multihot for s in samples]),
+        target_per_src=torch.stack([s.target_per_src for s in samples]),
+        ships_per_src=torch.stack([s.ships_per_src for s in samples]),
         is_noop=torch.tensor([s.is_noop for s in samples], dtype=torch.bool),
     )

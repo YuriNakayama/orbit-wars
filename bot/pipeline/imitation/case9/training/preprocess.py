@@ -51,6 +51,10 @@ from pipeline.imitation.case9.policy.featurizer import (
     HistoryState,
 )
 from pipeline.imitation.case9.policy.geometry import Planet, aim_with_prediction
+from pipeline.imitation.case9.policy.templates import (
+    T_NO_OP,
+    classify_actual_target,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,15 @@ UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
 FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
+SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100% (case7 流)
+
+
+def _ships_bucket(ships: int, src_ships: int) -> int:
+    if src_ships <= 0:
+        return 0
+    ratio = max(0.0, min(1.0, ships / max(1, src_ships)))
+    bucket = int(round(ratio * (SHIPS_BUCKETS - 1) - 0.001))
+    return max(0, min(SHIPS_BUCKETS - 1, bucket))
 
 
 @dataclass(frozen=True)
@@ -160,6 +173,8 @@ def _build_frame(
     cand_feats = batch.candidate_feats[0].numpy().astype(np.float32)
     cand_mask = batch.candidate_mask[0].numpy().astype(np.bool_)
     cand_pid = batch.candidate_pid[0].numpy().astype(np.int32)
+    template_ctx = batch.template_ctx[0].numpy().astype(np.float32)
+    player = int(obs.get("player", 0) or 0)
 
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
     planets = [_build_planet(row) for row in raw_planets]
@@ -172,11 +187,19 @@ def _build_frame(
 
     cand_slot_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
     ship_label_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    # 3-head labels (case7 流): from_multihot / target_per_src (template id) /
+    # ships_per_src (4-bucket).
+    from_multihot = np.zeros(MAX_PLANETS, dtype=np.bool_)
+    target_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    # candidate_ships variant 用: ships を 4-bucket 化 (cand_slot fired のみ)。
+    ships_bucket_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
 
     # Default: my_planets that did not fire → label = 0 (no-op slot)
     for slot in range(MAX_PLANETS):
         if my_planet_mask[slot]:
             cand_slot_per_src[slot] = 0
+            target_per_src[slot] = T_NO_OP
 
     fired_total = 0
     outside = 0
@@ -196,25 +219,40 @@ def _build_frame(
             src, angle, ships, planets, initial_by_id, ang_vel, comets, comet_ids
         )
         fired_total += 1
+        # 3-head label: from は fired を multihot、target は template 分類、
+        # ships は src.ships に対する比率の bucket。
+        from_multihot[slot] = True
+        ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
         if target_pid is None:
-            # Could not recover target; treat as label-unknown
-            cand_slot_per_src[slot] = UNUSED_LABEL
-            outside += 1
-            continue
-        # Look up target_pid in this src's candidate list (slots 1..K-1)
-        slot_idx = -1
-        for k in range(1, CAND_K):
-            if int(cand_pid[slot, k]) == int(target_pid):
-                slot_idx = k
-                break
-        if slot_idx == -1:
-            # Actual fired target is outside K=8 candidate set — drop this src's
-            # label so we don't push the model toward no-op when it should fire.
+            target_template = T_NO_OP
             cand_slot_per_src[slot] = UNUSED_LABEL
             outside += 1
         else:
-            cand_slot_per_src[slot] = slot_idx
-            ship_label_per_src[slot] = ships
+            tgt_row = next(
+                (row for row in raw_planets if int(row[0]) == int(target_pid)), None
+            )
+            if tgt_row is None:
+                target_template = T_NO_OP
+            else:
+                target_template = int(
+                    classify_actual_target(
+                        list(raw_planets[slot]), tgt_row, raw_planets, player
+                    )
+                )
+            # candidate label: K=8 内に target_pid があれば slot_idx、なければ UNUSED。
+            slot_idx = -1
+            for k in range(1, CAND_K):
+                if int(cand_pid[slot, k]) == int(target_pid):
+                    slot_idx = k
+                    break
+            if slot_idx == -1:
+                cand_slot_per_src[slot] = UNUSED_LABEL
+                outside += 1
+            else:
+                cand_slot_per_src[slot] = slot_idx
+                ship_label_per_src[slot] = ships
+                ships_bucket_per_src[slot] = int(_ships_bucket(ships, src.ships))
+        target_per_src[slot] = int(target_template)
 
     is_noop = bool(np.all(cand_slot_per_src[my_planet_mask] == 0))
 
@@ -224,11 +262,16 @@ def _build_frame(
         "planet_mask": planet_mask.tolist(),
         "my_planet_mask": my_planet_mask.tolist(),
         "target_mask": target_mask.tolist(),
+        "template_ctx": template_ctx.reshape(-1).tolist(),
         "candidate_feats": cand_feats.reshape(-1).tolist(),
         "candidate_mask": cand_mask.reshape(-1).tolist(),
         "candidate_pid": cand_pid.reshape(-1).tolist(),
         "cand_slot_per_src": cand_slot_per_src.tolist(),
         "ship_label_per_src": ship_label_per_src.tolist(),
+        "ships_bucket_per_src": ships_bucket_per_src.tolist(),
+        "from_multihot": from_multihot.tolist(),
+        "target_per_src": target_per_src.tolist(),
+        "ships_per_src": ships_per_src.tolist(),
         "is_noop": is_noop,
     }
     return row, fired_total, outside
@@ -344,11 +387,16 @@ def _arrow_schema() -> pa.Schema:
             pa.field("planet_mask", pa.list_(pa.bool_())),
             pa.field("my_planet_mask", pa.list_(pa.bool_())),
             pa.field("target_mask", pa.list_(pa.bool_())),
+            pa.field("template_ctx", pa.list_(pa.float32())),
             pa.field("candidate_feats", pa.list_(pa.float32())),
             pa.field("candidate_mask", pa.list_(pa.bool_())),
             pa.field("candidate_pid", pa.list_(pa.int32())),
             pa.field("cand_slot_per_src", pa.list_(pa.int32())),
             pa.field("ship_label_per_src", pa.list_(pa.int32())),
+            pa.field("ships_bucket_per_src", pa.list_(pa.int32())),
+            pa.field("from_multihot", pa.list_(pa.bool_())),
+            pa.field("target_per_src", pa.list_(pa.int32())),
+            pa.field("ships_per_src", pa.list_(pa.int32())),
             pa.field("is_noop", pa.bool_()),
         ]
     )

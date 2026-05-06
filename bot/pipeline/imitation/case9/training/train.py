@@ -35,7 +35,12 @@ from pipeline.imitation.case9.training.dataset import (
     CaseFourDataset,
     collate,
 )
-from pipeline.imitation.case9.training.losses import LossWeights, compute_loss
+from pipeline.imitation.case9.training.losses import (
+    LossWeights,
+    compute_candidate_ships_loss,
+    compute_loss,
+    compute_three_head_loss,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,7 @@ def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeat
         my_planet_mask=sample.my_planet_mask.to(device, non_blocking=True),
         target_mask=sample.target_mask.to(device, non_blocking=True),
         global_feats=sample.global_feats.to(device, non_blocking=True),
+        template_ctx=sample.template_ctx.to(device, non_blocking=True),
         candidate_feats=sample.candidate_feats.to(device, non_blocking=True),
         candidate_mask=sample.candidate_mask.to(device, non_blocking=True),
         candidate_pid=sample.candidate_pid.to(device, non_blocking=True),
@@ -144,6 +150,13 @@ _METRIC_KEY_MAP: dict[str, str] = {
     "val_cand_fire_acc": "cand_fire_acc",
     "val_ship_loss": "ship",
     "val_ship_mae": "ship_mae",
+    # three_head metrics (head_mode=three_head)
+    "val_from_loss": "from_loss",
+    "val_target_loss": "target_loss",
+    "val_ships_loss": "ships_loss",
+    "val_from_acc": "from_acc",
+    "val_target_acc": "target_acc",
+    "val_ships_acc": "ships_acc",
 }
 
 
@@ -208,6 +221,69 @@ def _make_ema_step(
     return step
 
 
+def _compute_loss_dispatch(
+    head_mode: str,
+    output: object,
+    batch: BatchedSample,
+    loss_weights: LossWeights,
+    device: torch.device,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Run the appropriate loss for head_mode and return (total, metrics_dict)."""
+    if head_mode == "three_head":
+        rep3 = compute_three_head_loss(
+            output,  # type: ignore[arg-type]
+            from_multihot=batch.from_multihot.to(device, non_blocking=True),
+            target_per_src=batch.target_per_src.to(device, non_blocking=True),
+            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
+            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+        )
+        return rep3.total, {
+            "total": float(rep3.total.detach().item()),
+            "from_loss": float(rep3.from_loss.item()),
+            "target_loss": float(rep3.target_loss.item()),
+            "ships_loss": float(rep3.ships_loss.item()),
+            "from_acc": rep3.from_acc,
+            "target_acc": rep3.target_acc,
+            "ships_acc": rep3.ships_acc,
+        }
+    if head_mode == "candidate_ships":
+        rep_cs = compute_candidate_ships_loss(
+            output,  # type: ignore[arg-type]
+            cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
+            ships_bucket_per_src=batch.ships_bucket_per_src.to(
+                device, non_blocking=True
+            ),
+            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+            weights=loss_weights,
+        )
+        return rep_cs.total, {
+            "total": float(rep_cs.total.detach().item()),
+            "cand": float(rep_cs.cand_loss.item()),
+            "cand_acc": rep_cs.cand_acc,
+            "cand_noop_acc": rep_cs.cand_noop_acc,
+            "cand_fire_acc": rep_cs.cand_fire_acc,
+            "ships_loss": float(rep_cs.ships_loss.item()),
+            "ships_acc": rep_cs.ships_acc,
+        }
+    # default: candidate (case8 style)
+    rep_c = compute_loss(
+        output,  # type: ignore[arg-type]
+        cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
+        my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+        weights=loss_weights,
+        ship_label_per_src=batch.ship_label_per_src.to(device, non_blocking=True),
+    )
+    return rep_c.total, {
+        "total": float(rep_c.total.detach().item()),
+        "cand": float(rep_c.cand_loss.item()),
+        "cand_acc": rep_c.cand_acc,
+        "cand_noop_acc": rep_c.cand_noop_acc,
+        "cand_fire_acc": rep_c.cand_fire_acc,
+        "ship": float(rep_c.ship_loss.item()),
+        "ship_mae": rep_c.ship_mae,
+    }
+
+
 def _run_epoch(
     model: nn.Module,
     loader: DataLoader,  # type: ignore[type-arg]
@@ -219,18 +295,11 @@ def _run_epoch(
     phase: str = "epoch",
     grad_clip_max_norm: float = 0.0,
     on_step: Callable[[], None] | None = None,
+    head_mode: str = "candidate",
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
-    totals: dict[str, float] = {
-        "total": 0.0,
-        "cand": 0.0,
-        "cand_acc": 0.0,
-        "cand_noop_acc": 0.0,
-        "cand_fire_acc": 0.0,
-        "ship": 0.0,
-        "ship_mae": 0.0,
-    }
+    totals: dict[str, float] = {}
     n_batches = 0
     started = time.monotonic()
     n_total = len(loader)
@@ -239,18 +308,12 @@ def _run_epoch(
         for batch in loader:
             features = _to_batch_features(batch, device)
             output = model(features)
-            report = compute_loss(
-                output,
-                cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
-                my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-                weights=loss_weights,
-                ship_label_per_src=batch.ship_label_per_src.to(
-                    device, non_blocking=True
-                ),
+            total_loss, metrics = _compute_loss_dispatch(
+                head_mode, output, batch, loss_weights, device
             )
             if is_train and optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
-                report.total.backward()  # type: ignore[no-untyped-call]
+                total_loss.backward()  # type: ignore[no-untyped-call]
                 if grad_clip_max_norm > 0.0:
                     pre_clip_norm = float(
                         nn.utils.clip_grad_norm_(
@@ -262,19 +325,16 @@ def _run_epoch(
                 optimizer.step()
                 if on_step is not None:
                     on_step()
-            totals["total"] += float(report.total.detach().item())
-            totals["cand"] += float(report.cand_loss.item())
-            totals["cand_acc"] += report.cand_acc
-            totals["cand_noop_acc"] += report.cand_noop_acc
-            totals["cand_fire_acc"] += report.cand_fire_acc
-            totals["ship"] += float(report.ship_loss.item())
-            totals["ship_mae"] += report.ship_mae
+            for key, value in metrics.items():
+                totals[key] = totals.get(key, 0.0) + value
             n_batches += 1
 
             if n_batches % BATCH_LOG_EVERY == 0:
                 elapsed = time.monotonic() - started
                 rate = n_batches / elapsed if elapsed > 0 else 0.0
                 eta = (n_total - n_batches) / rate if rate > 0 else float("inf")
+                acc_key = "from_acc" if head_mode == "three_head" else "cand_acc"
+                running_acc_val = totals.get(acc_key, 0.0) / max(1, n_batches)
                 logger.info(
                     json.dumps(
                         {
@@ -285,9 +345,7 @@ def _run_epoch(
                             "running_loss": round(
                                 totals["total"] / max(1, n_batches), 4
                             ),
-                            "running_acc": round(
-                                totals["cand_acc"] / max(1, n_batches), 4
-                            ),
+                            "running_acc": round(running_acc_val, 4),
                             "elapsed_s": round(elapsed, 1),
                             "rate_b_per_s": round(rate, 2),
                             "eta_s": round(eta, 1),
@@ -370,6 +428,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         pin_memory=pin_memory,
     )
 
+    head_mode = str(model_cfg.get("head_mode", "candidate"))
     model_config = ModelConfig(
         planet_in_dim=int(model_cfg.get("planet_in_dim", PLANET_FEAT_DIM)),
         global_in_dim=int(model_cfg.get("global_in_dim", GLOBAL_FEAT_DIM)),
@@ -377,9 +436,12 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         cand_k=int(model_cfg.get("cand_k", CAND_K)),
         hidden=int(model_cfg.get("hidden", 128)),
         head_dropout=float(train_cfg.get("head_dropout", 0.0)),
+        head_mode=head_mode,
     )
     model = Case9Policy(model_config).to(device)
-    _stamp(f"model built head_dropout={model_config.head_dropout}")
+    _stamp(
+        f"model built head_mode={head_mode} head_dropout={model_config.head_dropout}"
+    )
 
     # iter4: EMA wrapper. eval / best.pt 選定は EMA weights を使う。
     ema_cfg = train_cfg.get("ema", {}) or {}
@@ -502,6 +564,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             phase="train",
             grad_clip_max_norm=grad_clip_max_norm,
             on_step=ema_step,
+            head_mode=head_mode,
         )
         # iter4: val は EMA weights で評価 (live model は dropout が train-time
         # 振る舞いになっていなくても、AveragedModel(model) は同じ structure を
@@ -515,6 +578,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             device=device,
             epoch=epoch,
             phase="val",
+            head_mode=head_mode,
         )
         current_lr = float(optimizer.param_groups[0]["lr"])
         avg_grad_norm = (
