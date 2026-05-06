@@ -499,6 +499,21 @@ else
     mark "45_dvc_pull_full_failed"
     exit 1
   fi
+  # iter17 fix (case9 retry5 2026-05-06 12:12): `dvc pull --allow-missing --force`
+  # が graph 整合のため targeted pull で取得した case 別 parquet を削除して
+  # しまうケースを観測 (`D data/mart/imitation/case9/train.parquet`)。
+  # --allow-missing 後に case 別 mart parquet を**再 pull**して復活させる。
+  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
+     && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
+    if [ ! -f "${CASE_MART_DIR}/train.parquet" ] \
+       || [ ! -f "${CASE_MART_DIR}/val.parquet" ]; then
+      echo "[onstart] iter17 re-pull: parquet was deleted by --allow-missing"
+      ${DVC_BIN} pull --force \
+        "${CASE_MART_DIR}/train.parquet.dvc" \
+        "${CASE_MART_DIR}/val.parquet.dvc" 2>&1 | tail -10
+      echo "[onstart] iter17 re-pull exit=$?"
+    fi
+  fi
 fi
 
 mark "50_dvc_pull_done"
