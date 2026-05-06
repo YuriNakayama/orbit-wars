@@ -55,16 +55,15 @@ train:
     metric: val_cand_fire_acc
     patience: 5
     mode: max
-  # iter11: 8 連続 hang の真の root cause は onstart の `uv run --project bot`
-  # による venv race condition (iter9 で `Installed 180 packages` retry chain、
-  # iter10 で dvc pull 中に `Uninstalled 25 packages + ModuleNotFoundError
-  # rich._emoji_codes` を観測) と確定。bot/src/runpod_io/onstart.sh.tmpl で
-  # `.venv/bin/{python,dvc}` 直接呼びに統一して race を排除した上で、本来
-  # iter4 で意図した stabilization knobs (grad_clip + EMA + head_dropout)
-  # を再投入し val_total max/min < 2.0 を計測する。
+  # iter12 (B): iter11 hang 切り分け。iter11 で `60_before_train` 通過後に
+  # epoch=0 開始ログ直後 +58min 完全停滞 = uv race fix (iter11) は効いたが
+  # epoch loop 内の別 hang を踏んだ。候補は (a) EMA AveragedModel CUDA
+  # 同期 deadlock、(b) lazy dataset row group cache thrashing。本 iter で
+  # **EMA だけ OFF** にして他は iter11 維持。完走すれば EMA が真因と確定、
+  # 依然 hang するなら lazy dataset 側が真因。
   grad_clip_max_norm: 1.0
   ema:
-    enabled: true
+    enabled: false
     decay: 0.999
   head_dropout: 0.2
   weights_out: pipeline/imitation/case8/policy/weights.pt
