@@ -369,6 +369,21 @@ fi
 
 if [ "${SKIP_UV_SYNC}" -eq 0 ]; then
   echo "[onstart] uv sync RUN: lock hash=${LOCK_HASH:0:12} (file=${LOCK_HASH_FILE})"
+  # iter13 fix (case9 retry 2026-05-06 11:33): broken venv detection.
+  # bot/.venv (or its target) が中身は持つが bin/python が無い壊れた状態だと
+  # uv sync が "not a valid Python environment" で 3 retry 全失敗する。
+  # 復旧: bin/python が無ければ bot/.venv (symlink ごと) と persist 側を
+  # 強制的に空に戻して fresh build に倒す。
+  if [ ! -x bot/.venv/bin/python ]; then
+    echo "[onstart] uv sync: detected broken venv (bin/python missing); resetting"
+    rm -rf bot/.venv 2>/dev/null || true
+    if [ -d /persist/uv-venv-bot ]; then
+      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
+        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
+        || true
+      ln -sfn /persist/uv-venv-bot bot/.venv
+    fi
+  fi
   for attempt in 1 2 3; do
     # --frozen は --locked より厳格 (lock の依存解決を一切再計算しない)。
     # 既存 lock を信用するので smoke run のような短命 pod では正しい挙動。
