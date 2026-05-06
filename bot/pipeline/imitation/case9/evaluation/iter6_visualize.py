@@ -5,7 +5,7 @@ Outputs:
 - data/output/experiment/imitation_case8_iter6_analysis.png
 
 Run:
-    uv run --directory bot python -m pipeline.imitation.case8.evaluation.iter6_visualize
+    uv run --directory bot python -m pipeline.imitation.case9.evaluation.iter6_visualize
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ import yaml
 from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case8.policy.model import DeepSetsPolicy, ModelConfig
-from pipeline.imitation.case8.policy.types import BatchFeatures
-from pipeline.imitation.case8.training.dataset import (
+from pipeline.imitation.case9.policy.model import Case9Policy, ModelConfig
+from pipeline.imitation.case9.policy.types import BatchFeatures
+from pipeline.imitation.case9.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     collate,
@@ -136,7 +136,7 @@ def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
     )
 
 
-def _load_model() -> DeepSetsPolicy:
+def _load_model() -> Case9Policy:
     cfg_yaml = yaml.safe_load(CONFIG.read_text())
     mcfg = cfg_yaml["model"]
     model_cfg = ModelConfig(
@@ -145,7 +145,7 @@ def _load_model() -> DeepSetsPolicy:
         hidden=int(mcfg.get("hidden", 128)),
         ships_buckets=int(mcfg.get("ships_buckets", SHIPS_BUCKETS)),
     )
-    model = DeepSetsPolicy(model_cfg)
+    model = Case9Policy(model_cfg)
     state = torch.load(WEIGHTS, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
@@ -153,7 +153,7 @@ def _load_model() -> DeepSetsPolicy:
 
 
 def _evaluate(
-    model: DeepSetsPolicy,
+    model: Case9Policy,
     val_ds: CaseThreeDataset,
     perturb: tuple[str, list[int]] | None = None,
     rng: np.random.Generator | None = None,

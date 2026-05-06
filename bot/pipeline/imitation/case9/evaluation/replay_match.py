@@ -4,7 +4,7 @@ Uses the canonical selfplay runner (same code path as eval_vs_baseline) so the
 outcome matches the original 100-game batch. Writes a JSON trace summary.
 
 Usage:
-    uv run python -m pipeline.imitation.case8.evaluation.replay_match \\
+    uv run python -m pipeline.imitation.case9.evaluation.replay_match \\
         --seed 19 --label win
 """
 

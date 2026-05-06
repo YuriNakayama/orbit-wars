@@ -38,9 +38,15 @@ class PolicyOutput:
 
     from_logits: torch.Tensor | None = None  # (B, P) — three_head
     target_logits: torch.Tensor | None = None  # (B, P, NUM_TEMPLATES) — three_head
-    ships_logits: torch.Tensor | None = None  # (B, P, ships_buckets) — three_head / candidate_ships
-    candidate_logits: torch.Tensor | None = None  # (B, P, CAND_K) — candidate / candidate_ships
-    ship_pred: torch.Tensor | None = None  # (B, P) — case8-style ship regression (optional)
+    ships_logits: torch.Tensor | None = (
+        None  # (B, P, ships_buckets) — three_head / candidate_ships
+    )
+    candidate_logits: torch.Tensor | None = (
+        None  # (B, P, CAND_K) — candidate / candidate_ships
+    )
+    ship_pred: torch.Tensor | None = (
+        None  # (B, P) — case8-style ship regression (optional)
+    )
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from torch import nn
 
-from .candidates import CAND_FEAT_DIM
+from .candidates import CAND_FEAT_DIM, CAND_K
 from .featurizer import GLOBAL_FEAT_DIM, MAX_PLANETS, PLANET_FEAT_DIM
 from .heads.backbone import BackboneConfig, SetTransformerBackbone
 from .heads.candidate import CandidateHead
@@ -31,6 +31,7 @@ class ModelConfig:
     planet_in_dim: int = PLANET_FEAT_DIM
     global_in_dim: int = GLOBAL_FEAT_DIM
     cand_in_dim: int = CAND_FEAT_DIM
+    cand_k: int = CAND_K
     hidden: int = 128
     attn_heads: int = 4
     inducing_points: int = 16

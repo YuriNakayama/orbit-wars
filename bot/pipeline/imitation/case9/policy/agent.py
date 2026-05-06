@@ -28,7 +28,7 @@ from .featurizer import (
     featurize,
     update_history,
 )
-from .model import Case9Policy, ModelConfig, SUPPORTED_HEAD_MODES
+from .model import SUPPORTED_HEAD_MODES, Case9Policy, ModelConfig
 
 _DEFAULT_WEIGHTS = Path(__file__).resolve().parent / "weights.pt"
 

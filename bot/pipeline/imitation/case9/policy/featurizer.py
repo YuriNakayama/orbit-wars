@@ -27,6 +27,8 @@ from .geometry import (
 from .templates import TEMPLATE_CTX_DIM, template_context_features
 from .timeline import (
     DEFAULT_HORIZON as TIMELINE_HORIZON,
+)
+from .timeline import (
     TimelinePlanet,
     simulate_planet_timeline,
     summarize_timeline,

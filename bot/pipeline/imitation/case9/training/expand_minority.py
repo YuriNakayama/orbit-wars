@@ -6,7 +6,7 @@ sharing keeps memory footprint flat vs the list[dict] path that OOM'd at
 ~17 GB for (289k rows * 2x).
 
 Usage:
-  uv run python -m pipeline.imitation.case8.training.expand_minority \\
+  uv run python -m pipeline.imitation.case9.training.expand_minority \\
       --in-parquet data/mart/imitation/case8/train_q30.parquet \\
       --out-parquet data/mart/imitation/case8/train_q30_dup.parquet \\
       --minority 0,2,5,6,7 \\

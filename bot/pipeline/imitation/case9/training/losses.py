@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from pipeline.imitation.case8.policy.types import PolicyOutput
+from pipeline.imitation.case9.policy.types import PolicyOutput
 
 
 @dataclass(frozen=True)
@@ -100,6 +100,7 @@ def compute_loss(
         )
 
     b_idx, src_idx = valid.nonzero(as_tuple=True)
+    assert output.candidate_logits is not None
     sel_logits = output.candidate_logits[b_idx, src_idx]  # (N, CAND_K)
     sel_labels = cand_slot_per_src[b_idx, src_idx]  # (N,)
 
@@ -148,6 +149,7 @@ def compute_loss(
         ship_valid = my_planet_mask & (ship_label_per_src != -1)  # (B, P)
         if ship_valid.any():
             sb_idx, ss_idx = ship_valid.nonzero(as_tuple=True)
+            assert output.ship_pred is not None
             ship_pred_sel = output.ship_pred[sb_idx, ss_idx]
             ship_target_sel = ship_label_per_src[sb_idx, ss_idx].to(ship_pred_sel.dtype)
             ship_loss = nn.functional.smooth_l1_loss(

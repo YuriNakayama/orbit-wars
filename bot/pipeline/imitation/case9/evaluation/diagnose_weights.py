@@ -2,10 +2,10 @@
 
 Runs inference once over val.parquet with the current weights.pt and emits a
 rich metric report alongside the training-time accuracies. case8-specific
-diagnostic: pulls in case8's DeepSetsPolicy + CaseThreeDataset directly.
+diagnostic: pulls in case8's Case9Policy + CaseThreeDataset directly.
 
 Usage:
-    uv run python -m pipeline.imitation.case8.evaluation.diagnose_weights \\
+    uv run python -m pipeline.imitation.case9.evaluation.diagnose_weights \\
         --weights pipeline/imitation/case8/policy/weights.pt \\
         --report data/output/experiment/imitation_case8_val_metrics.json
 """
@@ -30,10 +30,10 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case8.policy.model import DeepSetsPolicy, ModelConfig
-from pipeline.imitation.case8.policy.templates import NUM_TEMPLATES
-from pipeline.imitation.case8.policy.types import BatchFeatures
-from pipeline.imitation.case8.training.dataset import (
+from pipeline.imitation.case9.policy.model import Case9Policy, ModelConfig
+from pipeline.imitation.case9.policy.templates import NUM_TEMPLATES
+from pipeline.imitation.case9.policy.types import BatchFeatures
+from pipeline.imitation.case9.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     collate,
@@ -63,7 +63,7 @@ def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
     )
 
 
-def _load_model(config: Path, weights: Path) -> DeepSetsPolicy:
+def _load_model(config: Path, weights: Path) -> Case9Policy:
     cfg_yaml = yaml.safe_load(config.read_text())
     mcfg = cfg_yaml.get("model", {})
     model_cfg = ModelConfig(
@@ -72,7 +72,7 @@ def _load_model(config: Path, weights: Path) -> DeepSetsPolicy:
         hidden=int(mcfg.get("hidden", 128)),
         ships_buckets=int(mcfg.get("ships_buckets", SHIPS_BUCKETS)),
     )
-    model = DeepSetsPolicy(model_cfg)
+    model = Case9Policy(model_cfg)
     state = torch.load(weights, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
@@ -80,7 +80,7 @@ def _load_model(config: Path, weights: Path) -> DeepSetsPolicy:
 
 
 def _gather_preds(
-    model: DeepSetsPolicy, val_ds: CaseThreeDataset
+    model: Case9Policy, val_ds: CaseThreeDataset
 ) -> dict[str, np.ndarray]:
     loader: DataLoader[BatchedSample] = DataLoader(
         val_ds,  # type: ignore[arg-type]

@@ -17,9 +17,9 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case8.policy.model import DeepSetsPolicy, ModelConfig
-from pipeline.imitation.case8.policy.types import BatchFeatures
-from pipeline.imitation.case8.training.dataset import (
+from pipeline.imitation.case9.policy.model import Case9Policy, ModelConfig
+from pipeline.imitation.case9.policy.types import BatchFeatures
+from pipeline.imitation.case9.training.dataset import (
     BatchedSample,
     CaseThreeDataset,
     collate,
@@ -42,7 +42,7 @@ def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
     )
 
 
-def _load_model() -> DeepSetsPolicy:
+def _load_model() -> Case9Policy:
     cfg = yaml.safe_load(CONFIG_PATH.read_text())
     mcfg = cfg.get("model", {})
     model_cfg = ModelConfig(
@@ -51,7 +51,7 @@ def _load_model() -> DeepSetsPolicy:
         hidden=int(mcfg.get("hidden", 128)),
         ships_buckets=int(mcfg.get("ships_buckets", SHIPS_BUCKETS)),
     )
-    model = DeepSetsPolicy(model_cfg)
+    model = Case9Policy(model_cfg)
     state = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
@@ -59,7 +59,7 @@ def _load_model() -> DeepSetsPolicy:
 
 
 def _collect_fired(
-    model: DeepSetsPolicy, val_ds: CaseThreeDataset
+    model: Case9Policy, val_ds: CaseThreeDataset
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     loader = DataLoader(val_ds, batch_size=256, shuffle=False, collate_fn=collate)
     target_logits_all: list[np.ndarray] = []

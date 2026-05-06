@@ -162,7 +162,13 @@ def _emit_action(
 def _common_obs_state(
     obs: dict[str, Any], snapshot: WorldSnapshot
 ) -> tuple[
-    dict[int, Planet], dict[int, Planet], float, list[dict[str, Any]], set[int], int, dict[int, int]
+    dict[int, Planet],
+    dict[int, Planet],
+    float,
+    list[dict[str, Any]],
+    set[int],
+    int,
+    dict[int, int],
 ]:
     raw_planets = list(obs.get("planets", []) or [])
     pid_to_planet = {int(row[0]): _build_planet(row) for row in raw_planets}
@@ -196,10 +202,16 @@ def _common_obs_state(
                 best_proj = proj
                 best_pid = p.id
         if best_pid is not None:
-            incoming_friendly[best_pid] = (
-                incoming_friendly.get(best_pid, 0) + f_ships
-            )
-    return pid_to_planet, initial_by_id, ang_vel, comets, comet_ids, step, incoming_friendly
+            incoming_friendly[best_pid] = incoming_friendly.get(best_pid, 0) + f_ships
+    return (
+        pid_to_planet,
+        initial_by_id,
+        ang_vel,
+        comets,
+        comet_ids,
+        step,
+        incoming_friendly,
+    )
 
 
 def _decode_candidate(
@@ -212,11 +224,14 @@ def _decode_candidate(
     use_learned_ships: bool,
 ) -> list[list[int | float]]:
     T = max(float(temperature), 1e-6)
+    assert output.candidate_logits is not None
     cand_logits = output.candidate_logits[0] / T
     slot_argmax = cand_logits.argmax(dim=-1)
     if use_learned_ships:
+        assert output.ships_logits is not None
         ships_argmax = output.ships_logits[0].argmax(dim=-1)  # (P,) bucket idx
     else:
+        assert output.ship_pred is not None
         ship_pred = output.ship_pred[0]
 
     (
@@ -282,6 +297,9 @@ def _decode_three_head(
     from_threshold: float = 0.5,
 ) -> list[list[int | float]]:
     T = max(float(temperature), 1e-6)
+    assert output.from_logits is not None
+    assert output.target_logits is not None
+    assert output.ships_logits is not None
     from_logits = output.from_logits[0] / T
     target_logits = output.target_logits[0] / T
     ships_argmax = output.ships_logits[0].argmax(dim=-1)
@@ -309,9 +327,7 @@ def _decode_three_head(
         tid = int(target_argmax[slot].item())
         if tid == NO_OP_TEMPLATE_ID:
             continue
-        target_pid = resolve_template(
-            tid, list(raw_planets[slot]), raw_planets, player
-        )
+        target_pid = resolve_template(tid, list(raw_planets[slot]), raw_planets, player)
         if target_pid is None:
             continue
         src = pid_to_planet.get(src_pid)
@@ -372,9 +388,7 @@ def decode(
     if head_mode == "three_head":
         if template_ctx is None:
             raise ValueError("three_head decoder requires template_ctx")
-        return _decode_three_head(
-            output, snapshot, obs, template_ctx, temperature
-        )
+        return _decode_three_head(output, snapshot, obs, template_ctx, temperature)
     raise ValueError(f"unknown head_mode={head_mode!r}")
 
 

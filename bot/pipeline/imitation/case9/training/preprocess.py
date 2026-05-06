@@ -44,13 +44,13 @@ import pyarrow.parquet as pq
 import typer
 import yaml
 
-from pipeline.imitation.case8.policy import featurizer
-from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
-from pipeline.imitation.case8.policy.featurizer import (
+from pipeline.imitation.case9.policy import featurizer
+from pipeline.imitation.case9.policy.candidates import CAND_FEAT_DIM, CAND_K
+from pipeline.imitation.case9.policy.featurizer import (
     MAX_PLANETS,
     HistoryState,
 )
-from pipeline.imitation.case8.policy.geometry import Planet, aim_with_prediction
+from pipeline.imitation.case9.policy.geometry import Planet, aim_with_prediction
 
 logger = logging.getLogger(__name__)
 

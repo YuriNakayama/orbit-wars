@@ -23,19 +23,19 @@ from torch import nn, optim
 from torch.optim import swa_utils
 from torch.utils.data import DataLoader
 
-from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
-from pipeline.imitation.case8.policy.featurizer import (
+from pipeline.imitation.case9.policy.candidates import CAND_FEAT_DIM, CAND_K
+from pipeline.imitation.case9.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case8.policy.model import CandidatePolicy, ModelConfig
-from pipeline.imitation.case8.policy.types import BatchFeatures
-from pipeline.imitation.case8.training.dataset import (
+from pipeline.imitation.case9.policy.model import Case9Policy, ModelConfig
+from pipeline.imitation.case9.policy.types import BatchFeatures
+from pipeline.imitation.case9.training.dataset import (
     BatchedSample,
     CaseFourDataset,
     collate,
 )
-from pipeline.imitation.case8.training.losses import LossWeights, compute_loss
+from pipeline.imitation.case9.training.losses import LossWeights, compute_loss
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +378,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         hidden=int(model_cfg.get("hidden", 128)),
         head_dropout=float(train_cfg.get("head_dropout", 0.0)),
     )
-    model = CandidatePolicy(model_config).to(device)
+    model = Case9Policy(model_config).to(device)
     _stamp(f"model built head_dropout={model_config.head_dropout}")
 
     # iter4: EMA wrapper. eval / best.pt 選定は EMA weights を使う。
@@ -674,7 +674,7 @@ def _write_run_json(run_dir: Path, summary: dict[str, Any], *, seed: int) -> Non
             gpu_name = None
     command = os.environ.get(
         "ORBIT_WARS_COMMAND",
-        "uv run --directory bot python -m pipeline.imitation.case8.training.train",
+        "uv run --directory bot python -m pipeline.imitation.case9.training.train",
     )
     weights_path_rel = str(run_dir / "best.pt")
     meta = RunMetadata(

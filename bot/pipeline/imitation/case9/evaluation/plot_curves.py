@@ -5,7 +5,7 @@ case1-specific diagnostic: plot title and head names assume the case1 schema
 (`val_from_acc`, `val_target_acc`, `val_ships_acc`).
 
 Usage:
-    uv run python -m pipeline.imitation.case8.evaluation.plot_curves \\
+    uv run python -m pipeline.imitation.case9.evaluation.plot_curves \\
         --log /tmp/train_iter6.log --out data/output/experiment/curves.png
 """
 

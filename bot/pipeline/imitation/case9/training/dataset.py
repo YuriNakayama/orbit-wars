@@ -26,8 +26,8 @@ import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
-from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
-from pipeline.imitation.case8.policy.featurizer import (
+from pipeline.imitation.case9.policy.candidates import CAND_FEAT_DIM, CAND_K
+from pipeline.imitation.case9.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
