@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -103,6 +104,25 @@ class HeadMetrics:
     from_f1: float
     target_f1: float
     ships_f1: float
+
+
+class GroupDelta(TypedDict):
+    n_col: int
+    delta_from_f1: float
+    delta_target_f1: float
+    delta_ships_f1: float
+    sum_abs_delta: float
+
+
+class BaseMetrics(TypedDict):
+    from_f1: float
+    target_f1: float
+    ships_f1: float
+
+
+class ImportanceReport(TypedDict):
+    base: BaseMetrics
+    groups: dict[str, GroupDelta]
 
 
 def _to_batch_features(sample: BatchedSample) -> BatchFeatures:
@@ -214,7 +234,9 @@ def _evaluate(
 
     target_pred = np.concatenate(target_pred_all)
     target_gt = np.concatenate(target_gt_all)
-    target_f1 = float(f1_score(target_gt, target_pred, average="macro", zero_division=0))
+    target_f1 = float(
+        f1_score(target_gt, target_pred, average="macro", zero_division=0)
+    )
 
     ships_pred = np.concatenate(ships_pred_all)
     ships_gt = np.concatenate(ships_gt_all)
@@ -223,7 +245,7 @@ def _evaluate(
     return HeadMetrics(from_f1=from_f1, target_f1=target_f1, ships_f1=ships_f1)
 
 
-def compute_grouped_importance() -> dict[str, dict[str, float]]:
+def compute_grouped_importance() -> ImportanceReport:
     cfg_yaml = yaml.safe_load(CONFIG.read_text())
     val_parquet_rel = Path(cfg_yaml["data"]["out_val"])
     val_parquet = (
@@ -240,7 +262,7 @@ def compute_grouped_importance() -> dict[str, dict[str, float]]:
         f"ships_f1={base.ships_f1:.4f}"
     )
 
-    results: dict[str, dict[str, float]] = {}
+    results: dict[str, GroupDelta] = {}
     rng = np.random.default_rng(0)
 
     for group, cols in PLANET_GROUPS.items():
@@ -291,7 +313,7 @@ def compute_grouped_importance() -> dict[str, dict[str, float]]:
     }
 
 
-def render_panel(importance: dict[str, dict[str, float]]) -> Path:
+def render_panel(importance: ImportanceReport) -> Path:
     metrics = json.loads((RUN_DIR / "metrics.json").read_text())
     train_loss = metrics["train_loss_history"]
     val_loss = metrics["val_loss_history"]
@@ -364,13 +386,9 @@ def render_panel(importance: dict[str, dict[str, float]]) -> Path:
     ax3 = fig.add_subplot(gs[1, :])
     y = np.arange(len(names))
     ax3.barh(y, sum_abs, color="#1f77b4", alpha=0.4, label="sum |Δ|")
-    ax3.barh(
-        y - 0.22, np.abs(d_from), 0.22, color="#1f77b4", label="|Δfrom_F1|"
-    )
+    ax3.barh(y - 0.22, np.abs(d_from), 0.22, color="#1f77b4", label="|Δfrom_F1|")
     ax3.barh(y, np.abs(d_target), 0.22, color="#ff7f0e", label="|Δtarget_F1|")
-    ax3.barh(
-        y + 0.22, np.abs(d_ships), 0.22, color="#2ca02c", label="|Δships_F1|"
-    )
+    ax3.barh(y + 0.22, np.abs(d_ships), 0.22, color="#2ca02c", label="|Δships_F1|")
     ax3.set_yticks(y)
     ax3.set_yticklabels(names, fontsize=9)
     ax3.invert_yaxis()
@@ -430,8 +448,7 @@ def render_loss_comparison() -> Path:
     for label, dim_str, best_val, best_ep in summary_rows:
         delta = best_val - iter1_best
         txt_lines.append(
-            f"{label:24s} {dim_str:22s} {best_val:.4f}   {best_ep:5d}   "
-            f"{delta:+.4f}"
+            f"{label:24s} {dim_str:22s} {best_val:.4f}   {best_ep:5d}   {delta:+.4f}"
         )
     fig.suptitle(
         "case7 iter1 -> iter6 training comparison\n" + "\n".join(txt_lines),
