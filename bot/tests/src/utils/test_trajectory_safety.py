@@ -13,13 +13,13 @@ The module is pure (no kaggle_environments dependency) and shared via bot/src/ut
 
 from __future__ import annotations
 
-from src.utils.orbit_constants import (
+from utils.orbit_constants import (
     CENTER_X,
     CENTER_Y,
     SUN_R,
     SUN_SAFETY,
 )
-from src.utils.trajectory_safety import (
+from utils.trajectory_safety import (
     Planet,
     comet_appearance_imminent,
     fleet_crosses_other_comet,
@@ -86,8 +86,8 @@ def test_sun_safe_zero_turns_returns_true_outside_safety() -> None:
 
 def test_sun_safe_path_grazes_within_safety_returns_false() -> None:
     # Trajectory passes within SUN_SAFETY of the sun's edge.
-    # Source (CENTER_X-30, CENTER_Y - SUN_R - 1.0) heading east => path is 1.0 above the sun edge,
-    # which is inside (SUN_R + SUN_SAFETY=11.5) - SUN_R = 1.5 buffer => unsafe.
+    # Source (CENTER_X-30, CENTER_Y - SUN_R - 1.0) heading east => path is 1.0
+    # above the sun edge, inside (SUN_R + SUN_SAFETY=11.5) - SUN_R = 1.5 buffer.
     assert not is_trajectory_sun_safe(
         launch_x=CENTER_X - 30.0,
         launch_y=CENTER_Y - SUN_R - 1.0,
@@ -167,7 +167,7 @@ def test_intercept_low_angvel_orbital_target_holds() -> None:
 
 def test_fleet_crosses_comet_on_collision_path_returns_true() -> None:
     # Comet path passes through the fleet's trajectory at turn ~3.
-    # Fleet launches at (10, 50) heading east, ships=1 => speed 1.0 => at turn 3 fleet is at (13, 50).
+    # Fleet launches at (10, 50) east, ships=1 => speed 1.0 => turn 3 at (13, 50).
     comets = [
         {
             "planet_ids": [99],
@@ -211,7 +211,7 @@ def test_fleet_crosses_other_comet_off_path_returns_false() -> None:
 
 
 def test_fleet_crosses_other_comet_excludes_target_planet() -> None:
-    # The collision-path comet IS the target planet -> exclude_planet_id silences the check.
+    # The collision-path comet IS the target -> exclude_planet_id silences check.
     comets = [
         {
             "planet_ids": [99],
