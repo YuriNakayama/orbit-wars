@@ -64,6 +64,30 @@ def test_scrape_dry_run_exits_zero(
     assert "dry_run" in result.stdout
 
 
+def test_scrape_configures_logging_for_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`kaggle scrape` 起動時に root logger を INFO 以上に設定する。"""
+
+    def fake_run(spec: object) -> scraper.ScrapeResult:
+        return _fake_result(dry_run=True, teams_scanned=1)
+
+    monkeypatch.setattr(scraper, "run", fake_run)
+    import logging as _logging
+
+    root = _logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", _logging.WARNING)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["kaggle", "scrape", "--top", "1", "--dry-run", "--data-root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert root.level <= _logging.INFO
+
+
 def test_scrape_rejects_unknown_mode(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(

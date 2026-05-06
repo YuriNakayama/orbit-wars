@@ -9,8 +9,10 @@ Kaggle sub-app (`python -m dataset kaggle ...`):
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -24,6 +26,28 @@ from dataset.selfplay import report
 from dataset.selfplay.runner import RunSpec, run_episodes
 from dataset.storage import loader
 from utils.repo_root import absolute_under_repo
+
+
+def _configure_logging() -> None:
+    """root logger に stdout 向け INFO ハンドラを 1 度だけ設定する。
+
+    すでに root logger に handler が付いている場合 (e.g. テスト環境) は触らない。
+    """
+
+    root = logging.getLogger()
+    if root.handlers:
+        root.setLevel(min(root.level, logging.INFO))
+        return
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
 
 app = typer.Typer(add_completion=False, help="Orbit Wars dataset CLI.")
 kaggle_app = typer.Typer(add_completion=False, help="Kaggle episode scraper.")
@@ -215,6 +239,7 @@ def kaggle_scrape(
 ) -> None:
     """Fetch top-team episodes and persist records + replays."""
 
+    _configure_logging()
     spec = ScrapeSpec(
         top=top,
         modes=_parse_modes(modes),
