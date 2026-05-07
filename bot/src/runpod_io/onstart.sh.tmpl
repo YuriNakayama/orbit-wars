@@ -733,6 +733,9 @@ fi
 
 mark "60_before_train"
 echo "[onstart] step=train_direct stage=<STAGE> case=<CASE>"
+echo "[onstart] train data listing before launch:"
+find data/mart/imitation -maxdepth 2 \( -name '*.parquet' -o -name '*.parquet.dvc' \) \
+  -printf '%p %s bytes\n' 2>&1 | sort | head -40
 # snapshot は引用符を含む JSON なので、RunPod env では base64 で渡されている。
 # 学習プロセス起動時に decode して ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT に再注入する。
 SNAPSHOT_JSON=""
@@ -745,6 +748,7 @@ fi
 TRAIN_LOG="${RUN_DIR_ABS}/train.log"
 GPU_LOG="${RUN_DIR_ABS}/gpu.log"
 mkdir -p "$(dirname "${TRAIN_LOG}")"
+S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 
 # nvidia-smi を background で 10s 周期サンプリング → gpu.log に append
 NVSMI_PID=""
@@ -770,16 +774,50 @@ echo "[onstart] system sampler pid=${SYSMON_PID} -> ${SYSMON_LOG}"
 # iter11: `uv run` 経由排除。cwd=bot に切り替えて .venv/bin/python 直接呼び。
 # train は最長プロセスで、起動時に裏で別の uv コマンドが走ると hang or crash
 # (case8 iter4-9 の `60_before_train` 直後 hang はこれが root cause 候補)。
-ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
-  ORBIT_WARS_RUN_ID="<RUN_ID>" \
-  ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
-  ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
-  ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
-  ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
-  ORBIT_WARS_COMMAND="cd bot && ${PY_BIN} -m <TRAIN_MODULE> <CONFIG_ARG>" \
-  bash -c "cd bot && '${PY_BIN}' -m <TRAIN_MODULE> <CONFIG_ARG>" \
-  2>&1 | tee "${TRAIN_LOG}"
-TRAIN_EXIT=${PIPESTATUS[0]}
+#
+# iter18: train 起動直後に 900s 以上 marker が進まず watcher が stalled 判定した。
+# 原因特定のため、train pipeline を background 実行し、60s ごとに heartbeat marker
+# と train/gpu/system log snapshot を S3 artifacts prefix へアップロードする。
+(
+  set -o pipefail
+  ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
+    ORBIT_WARS_RUN_ID="<RUN_ID>" \
+    ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
+    ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
+    ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
+    ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
+    ORBIT_WARS_COMMAND="cd bot && ${PY_BIN} -m <TRAIN_MODULE> <CONFIG_ARG>" \
+    bash -c "cd bot && '${PY_BIN}' -m <TRAIN_MODULE> <CONFIG_ARG>" \
+    2>&1 | tee "${TRAIN_LOG}"
+) &
+TRAIN_PIPE_PID=$!
+echo "[onstart] train pipeline pid=${TRAIN_PIPE_PID} -> ${TRAIN_LOG}"
+mark "61_train_process_started"
+HEARTBEAT=0
+while kill -0 "${TRAIN_PIPE_PID}" 2>/dev/null; do
+  sleep 60
+  if ! kill -0 "${TRAIN_PIPE_PID}" 2>/dev/null; then
+    break
+  fi
+  HEARTBEAT=$((HEARTBEAT + 1))
+  echo "[onstart] train heartbeat ${HEARTBEAT}: pid=${TRAIN_PIPE_PID}"
+  mark "62_train_heartbeat_${HEARTBEAT}"
+  if command -v aws >/dev/null 2>&1; then
+    for f in train.log gpu.log system.log; do
+      src="${RUN_DIR_ABS}/${f}"
+      if [ -f "${src}" ]; then
+        aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" 2>/dev/null || true
+      fi
+    done
+    if [ -f /var/log/onstart.log ]; then
+      aws s3 cp /var/log/onstart.log "${S3_ARTIFACT_PREFIX}/onstart.log" 2>/dev/null || true
+    fi
+  fi
+done
+wait "${TRAIN_PIPE_PID}"
+TRAIN_EXIT=$?
+echo "[onstart] train pipeline exit=${TRAIN_EXIT}"
+mark "63_train_process_exit_${TRAIN_EXIT}"
 
 # 学習終了後に gpu / system sampler を停止
 if [ -n "${NVSMI_PID}" ]; then
@@ -811,7 +849,6 @@ fi
 # 成果物 (best.pt / metrics.json / run.json / onstart.log) を s3://.../runpod_artifacts/
 # 配下に直接 upload する。これは DVC とは独立した保険経路。dvc push が成功すれば
 # そちらが正本だが、失敗しても artifacts prefix から `dev/runpod pull` で取れる。
-S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 echo "[onstart] step=early_artifact_upload prefix=${S3_ARTIFACT_PREFIX}"
 if command -v aws >/dev/null 2>&1; then
   echo "[onstart] artifact dir listing:"
