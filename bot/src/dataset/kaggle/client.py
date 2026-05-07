@@ -32,6 +32,8 @@ class ClientConfig:
     max_retries: int = 5
     backoff_factor: float = 1.5
     kaggle_config_path: str = "~/.kaggle/kaggle.json"
+    pool_connections: int = 32
+    pool_maxsize: int = 32
 
 
 def _load_credentials(config_path: str) -> tuple[str, str]:
@@ -76,7 +78,14 @@ def build_session(config: ClientConfig | None = None) -> requests.Session:
         allowed_methods=("POST", "GET"),
         raise_on_status=False,
     )
-    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount(
+        "https://",
+        HTTPAdapter(
+            max_retries=retry,
+            pool_connections=cfg.pool_connections,
+            pool_maxsize=cfg.pool_maxsize,
+        ),
+    )
     try:
         session.get(LEADERBOARD_BOOTSTRAP_URL, timeout=cfg.timeout_sec)
     except requests.exceptions.RequestException as exc:
