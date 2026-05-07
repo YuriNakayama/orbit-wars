@@ -38,6 +38,7 @@ from pipeline.imitation.case9.training.dataset import (
 from pipeline.imitation.case9.training.losses import (
     LossWeights,
     compute_candidate_ships_loss,
+    compute_dual_head_loss,
     compute_loss,
     compute_three_head_loss,
 )
@@ -264,6 +265,35 @@ def _compute_loss_dispatch(
             "cand_fire_acc": rep_cs.cand_fire_acc,
             "ships_loss": float(rep_cs.ships_loss.item()),
             "ships_acc": rep_cs.ships_acc,
+        }
+    if head_mode == "dual":
+        rep_d = compute_dual_head_loss(
+            output,  # type: ignore[arg-type]
+            from_multihot=batch.from_multihot.to(device, non_blocking=True),
+            target_per_src=batch.target_per_src.to(device, non_blocking=True),
+            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
+            cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
+            ship_label_per_src=batch.ship_label_per_src.to(device, non_blocking=True),
+            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+            weights=loss_weights,
+        )
+        return rep_d.total, {
+            "total": float(rep_d.total.detach().item()),
+            "three_total": float(rep_d.three.total.detach().item()),
+            "cand_total": float(rep_d.candidate.total.detach().item()),
+            "from_loss": float(rep_d.three.from_loss.item()),
+            "target_loss": float(rep_d.three.target_loss.item()),
+            "ships_loss": float(rep_d.three.ships_loss.item()),
+            "from_acc": rep_d.three.from_acc,
+            "target_acc": rep_d.three.target_acc,
+            "ships_acc": rep_d.three.ships_acc,
+            "cand": float(rep_d.candidate.cand_loss.item()),
+            "cand_acc": rep_d.candidate.cand_acc,
+            "cand_noop_acc": rep_d.candidate.cand_noop_acc,
+            "cand_fire_acc": rep_d.candidate.cand_fire_acc,
+            "ship": float(rep_d.candidate.ship_loss.item()),
+            "ship_mae": rep_d.candidate.ship_mae,
+            "dual_alpha": rep_d.alpha,
         }
     # default: candidate (case8 style)
     rep_c = compute_loss(
@@ -502,6 +532,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         cand_loss_type=str(lw_cfg.get("cand_loss_type", "ce")),
         focal_alpha=float(lw_cfg.get("focal_alpha", 0.25)),
         focal_gamma=float(lw_cfg.get("focal_gamma", 2.0)),
+        dual_alpha=float(lw_cfg.get("dual_alpha", 0.5)),
     )
 
     case_name = str(train_cfg.get("case", "case8"))
@@ -601,6 +632,28 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 "from_acc",
                 "target_acc",
                 "ships_acc",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        elif head_mode == "dual":
+            for k in (
+                "three_total",
+                "cand_total",
+                "from_loss",
+                "target_loss",
+                "ships_loss",
+                "from_acc",
+                "target_acc",
+                "ships_acc",
+                "cand",
+                "cand_acc",
+                "cand_noop_acc",
+                "cand_fire_acc",
+                "ship",
+                "ship_mae",
+                "dual_alpha",
             ):
                 if k in train_metrics:
                     log_row[f"train_{k}"] = round(train_metrics[k], 4)

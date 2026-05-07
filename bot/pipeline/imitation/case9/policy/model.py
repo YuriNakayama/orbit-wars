@@ -4,6 +4,7 @@ config の `head_mode` で 3 variant を切り替え:
   - "three_head":      from + target + ships (case7 流)
   - "candidate":       per-source × CAND_K categorical (case8 流) + SmoothL1 ship_pred
   - "candidate_ships": candidate categorical + 4-bucket ships_logits hybrid
+  - "dual":            3-head + candidate, trained with blended loss
 
 Backbone (Set Transformer ISAB×3 + PMA + global concat) は共通。
 Head 実装は `policy/heads/` 配下の別ファイルに分離している。
@@ -23,7 +24,7 @@ from .heads.candidate_ships import CandidateShipsHead
 from .heads.three_head import ThreeHead
 from .types import BatchFeatures, PolicyOutput
 
-SUPPORTED_HEAD_MODES = ("three_head", "candidate", "candidate_ships")
+SUPPORTED_HEAD_MODES = ("three_head", "candidate", "candidate_ships", "dual")
 
 
 @dataclass(frozen=True)
@@ -74,11 +75,22 @@ class Case9Policy(nn.Module):
                 cand_in_dim=self.cfg.cand_in_dim,
                 head_dropout=self.cfg.head_dropout,
             )
-        else:  # candidate_ships
+        elif self.cfg.head_mode == "candidate_ships":
             self.head_cand_ships = CandidateShipsHead(
                 hidden=self.cfg.hidden,
                 cand_in_dim=self.cfg.cand_in_dim,
                 ships_buckets=self.cfg.ships_buckets,
+                head_dropout=self.cfg.head_dropout,
+            )
+        else:  # dual
+            self.head_three = ThreeHead(
+                hidden=self.cfg.hidden,
+                attn_heads=self.cfg.attn_heads,
+                ships_buckets=self.cfg.ships_buckets,
+            )
+            self.head_cand = CandidateHead(
+                hidden=self.cfg.hidden,
+                cand_in_dim=self.cfg.cand_in_dim,
                 head_dropout=self.cfg.head_dropout,
             )
 
@@ -106,11 +118,30 @@ class Case9Policy(nn.Module):
                 h, ctx, batch.candidate_feats, batch.candidate_mask
             )
             return PolicyOutput(candidate_logits=cand_logits, ship_pred=ship_pred)
-        # candidate_ships
-        cand_logits, ships_logits = self.head_cand_ships(
+        if self.cfg.head_mode == "candidate_ships":
+            cand_logits, ships_logits = self.head_cand_ships(
+                h, ctx, batch.candidate_feats, batch.candidate_mask
+            )
+            return PolicyOutput(candidate_logits=cand_logits, ships_logits=ships_logits)
+
+        from_logits, target_logits, ships_logits = self.head_three(
+            h_with_ctx,
+            ctx,
+            h,
+            batch.template_ctx,
+            batch.my_planet_mask,
+            batch.planet_mask,
+        )
+        cand_logits, ship_pred = self.head_cand(
             h, ctx, batch.candidate_feats, batch.candidate_mask
         )
-        return PolicyOutput(candidate_logits=cand_logits, ships_logits=ships_logits)
+        return PolicyOutput(
+            from_logits=from_logits,
+            target_logits=target_logits,
+            ships_logits=ships_logits,
+            candidate_logits=cand_logits,
+            ship_pred=ship_pred,
+        )
 
 
 def count_parameters(model: nn.Module) -> int:

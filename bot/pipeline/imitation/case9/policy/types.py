@@ -3,13 +3,15 @@
 case9 supports 3 head variants in a single dir (head_mode flag):
   - three_head:    case3/case7 流の (from + target + ships) heads
   - candidate:     case4/case8 流の per-source candidate categorical
-  - candidate_ships: candidate + learned ships head の hybrid
+- candidate_ships: candidate + learned ships head の hybrid
+- dual:          3-head + candidate を同時に返す補助学習 variant
 
 `BatchFeatures` carries both `template_ctx` (3-head 用) and `candidate_feats /
 candidate_mask / candidate_pid` (candidate 用) なので、 head_mode に応じて
 各 variant の forward が必要なフィールドだけ参照する。
 
 `PolicyOutput` は head_mode で利用するフィールドだけが non-None になる。
+dual mode では 3-head と candidate の両方のフィールドが non-None になる。
 """
 
 from __future__ import annotations
@@ -36,13 +38,15 @@ class BatchFeatures:
 class PolicyOutput:
     """All variants populate the fields they use; others are None."""
 
-    from_logits: torch.Tensor | None = None  # (B, P) — three_head
-    target_logits: torch.Tensor | None = None  # (B, P, NUM_TEMPLATES) — three_head
+    from_logits: torch.Tensor | None = None  # (B, P) — three_head / dual
+    target_logits: torch.Tensor | None = (
+        None  # (B, P, NUM_TEMPLATES) — three_head / dual
+    )
     ships_logits: torch.Tensor | None = (
-        None  # (B, P, ships_buckets) — three_head / candidate_ships
+        None  # (B, P, ships_buckets) — three_head / candidate_ships / dual
     )
     candidate_logits: torch.Tensor | None = (
-        None  # (B, P, CAND_K) — candidate / candidate_ships
+        None  # (B, P, CAND_K) — candidate / candidate_ships / dual
     )
     ship_pred: torch.Tensor | None = (
         None  # (B, P) — case8-style ship regression (optional)

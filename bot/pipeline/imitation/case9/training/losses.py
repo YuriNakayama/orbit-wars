@@ -38,6 +38,7 @@ class LossWeights:
     cand_loss_type: str = "ce"
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
+    dual_alpha: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -372,4 +373,44 @@ def compute_candidate_ships_loss(
         cand_fire_acc=cand_fire_acc,
         ships_acc=ships_acc,
         fire_count=fire_count,
+    )
+
+
+@dataclass(frozen=True)
+class DualHeadLossReport:
+    total: torch.Tensor
+    three: ThreeHeadLossReport
+    candidate: LossReport
+    alpha: float
+
+
+def compute_dual_head_loss(
+    output: PolicyOutput,
+    from_multihot: torch.Tensor,
+    target_per_src: torch.Tensor,
+    ships_per_src: torch.Tensor,
+    cand_slot_per_src: torch.Tensor,
+    ship_label_per_src: torch.Tensor,
+    my_planet_mask: torch.Tensor,
+    weights: LossWeights,
+) -> DualHeadLossReport:
+    """Blend 3-head and candidate losses on the shared backbone."""
+    alpha = max(0.0, min(1.0, float(weights.dual_alpha)))
+    three = compute_three_head_loss(
+        output,
+        from_multihot=from_multihot,
+        target_per_src=target_per_src,
+        ships_per_src=ships_per_src,
+        my_planet_mask=my_planet_mask,
+    )
+    candidate = compute_loss(
+        output,
+        cand_slot_per_src=cand_slot_per_src,
+        my_planet_mask=my_planet_mask,
+        weights=weights,
+        ship_label_per_src=ship_label_per_src,
+    )
+    total = alpha * three.total + (1.0 - alpha) * candidate.total
+    return DualHeadLossReport(
+        total=total, three=three, candidate=candidate, alpha=alpha
     )

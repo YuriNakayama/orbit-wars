@@ -20,6 +20,10 @@ SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 def _agent_or_skip(obs: dict[str, object]) -> list[list[int | float]]:
     try:
         return agent(obs)
+    except FileNotFoundError as e:
+        if e.filename and e.filename.endswith("weights.pt"):
+            pytest.skip(f"weights.pt is not available in this worktree: {e}")
+        raise
     except RuntimeError as e:
         if "size mismatch" in str(e) or "Missing key" in str(e):
             pytest.skip(f"weights.pt incompatible with current architecture: {e}")

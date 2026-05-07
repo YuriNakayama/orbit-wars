@@ -58,13 +58,24 @@ def test_forward_shape(head_mode: str) -> None:
         assert out.candidate_logits.shape == (2, MAX_PLANETS, CAND_K)
         assert out.ship_pred.shape == (2, MAX_PLANETS)
         assert out.from_logits is None
-    else:  # candidate_ships
+    elif head_mode == "candidate_ships":
         assert out.candidate_logits is not None
         assert out.ships_logits is not None
         assert out.candidate_logits.shape == (2, MAX_PLANETS, CAND_K)
         assert out.ships_logits.shape == (2, MAX_PLANETS, cfg.ships_buckets)
         assert out.from_logits is None
         assert out.ship_pred is None
+    else:  # dual
+        assert out.from_logits is not None
+        assert out.target_logits is not None
+        assert out.ships_logits is not None
+        assert out.candidate_logits is not None
+        assert out.ship_pred is not None
+        assert out.from_logits.shape == (2, MAX_PLANETS)
+        assert out.target_logits.shape == (2, MAX_PLANETS, NUM_TEMPLATES)
+        assert out.ships_logits.shape == (2, MAX_PLANETS, cfg.ships_buckets)
+        assert out.candidate_logits.shape == (2, MAX_PLANETS, CAND_K)
+        assert out.ship_pred.shape == (2, MAX_PLANETS)
 
 
 @pytest.mark.parametrize("head_mode", SUPPORTED_HEAD_MODES)
@@ -89,11 +100,12 @@ def test_forward_no_nan(head_mode: str) -> None:
 
 @pytest.mark.parametrize("head_mode", SUPPORTED_HEAD_MODES)
 def test_param_count_within_range(head_mode: str) -> None:
-    """Sanity check the 3 variants have similar parameter budgets (~1.1M)."""
+    """Sanity check each variant stays within its expected parameter budget."""
     cfg = ModelConfig(head_mode=head_mode)
     model = Case9Policy(cfg)
     n = count_parameters(model)
-    assert 800_000 < n < 1_500_000, f"{head_mode} has {n} params (expected ~1.1M)"
+    upper = 1_900_000 if head_mode == "dual" else 1_500_000
+    assert 800_000 < n < upper, f"{head_mode} has {n} params"
 
 
 def test_unknown_head_mode_raises() -> None:

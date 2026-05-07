@@ -7,6 +7,7 @@ Supports 3 head variants via `head_mode`:
   - "three_head":      from sigmoid threshold → fire decision.
                        target argmax over NUM_TEMPLATES with template id 7 = no-op.
                        ships_logits 4-bucket → ships.
+  - "dual":            candidate decoder path. 3-head outputs are auxiliary.
 
 Common safety filters (case5 由来) are applied to every variant.
 """
@@ -365,7 +366,7 @@ def decode(
     head_mode: str = "candidate",
     template_ctx: torch.Tensor | None = None,
 ) -> list[list[int | float]]:
-    if head_mode == "candidate":
+    if head_mode in {"candidate", "dual"}:
         return _decode_candidate(
             output,
             snapshot,
