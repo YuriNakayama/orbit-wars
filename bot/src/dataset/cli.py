@@ -22,6 +22,7 @@ from rich.progress import Progress
 from rich.table import Table
 
 from dataset.kaggle import scraper
+from dataset.kaggle.rate_limit import TokenBucket
 from dataset.kaggle.types import ScrapeSpec
 from dataset.selfplay import report
 from dataset.selfplay.runner import RunSpec, run_episodes
@@ -296,7 +297,13 @@ def kaggle_scrape_fetch(
         8,
         "--workers",
         help="Concurrent replay-fetch workers. Token bucket throttles to "
-        "60req/60s globally regardless of worker count.",
+        "rate-capacity / rate-window globally regardless of worker count.",
+    ),
+    rate_capacity: int = typer.Option(
+        60, "--rate-capacity", help="Max requests per --rate-window seconds."
+    ),
+    rate_window: float = typer.Option(
+        60.0, "--rate-window", help="Token bucket window seconds."
     ),
 ) -> None:
     """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
@@ -314,9 +321,11 @@ def kaggle_scrape_fetch(
         include_failed=bool(spec_data.get("include_failed", False)),
     )
     plan = scraper.deserialize_plan(plan_data)
+    rate_limit = TokenBucket(capacity=rate_capacity, window_sec=rate_window)
     result = scraper.fetch_with_plan(
         spec,
         plan,
+        rate_limit=rate_limit,
         run_id=str(payload["run_id"]),
         progress_every=progress_every,
         flush_every=flush_every,
