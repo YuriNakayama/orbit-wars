@@ -1,0 +1,20 @@
+{
+  "skill_name": "research-prompt-builder",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "因果推論のMetaLearnerについて調査プロンプトを作って。CATE推定が目的で、Neural Networkは除外したい",
+      "expected_output": "初期入力から目的・除外条件を読み取り、不足分のみヒアリングして構造化プロンプトを生成"
+    },
+    {
+      "id": 2,
+      "prompt": "研究調査のプロンプトを作りたい",
+      "expected_output": "研究分野から順にすべての項目をヒアリングして構造化プロンプトを生成"
+    },
+    {
+      "id": 3,
+      "prompt": "LLMのRAG手法についてサーベイ用のプロンプトを生成して",
+      "expected_output": "テーマ(RAG)と目的(サーベイ)を読み取り、除外条件・ゴール・手順・ルールをヒアリングして生成"
+    }
+  ]
+}
