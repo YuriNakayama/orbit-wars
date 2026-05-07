@@ -1,0 +1,26 @@
+{
+  "skill_name": "replay-viewer",
+  "evals": [
+    {
+      "id": 0,
+      "name": "selfplay-recent-replay",
+      "prompt": "直近の self-play 1v1 のリプレイを 1 つブラウザで見たい",
+      "expected_output": "selfplay の最新 1v1 マッチを 1 つ選び、Kaggle 公式 HTML プレーヤーを /tmp/replay-viewer/<match_id>.html に書き出す。a concise user question を使って source / 絞り込み / マッチ選択をユーザーに尋ねる流れに沿うこと。",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "kaggle-episode-replay",
+      "prompt": "Kaggle のエピソード replay を 1 つ可視化してくれる？",
+      "expected_output": "kaggle ソースのマッチ (kaggle_ep_*) を一つ選んで HTML を生成。selfplay と混同しないこと。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "filter-baseline-v4-wins",
+      "prompt": "baseline_v4 が勝ってる selfplay の試合を 1 試合再生して見せて",
+      "expected_output": "agent 名フィルタ (baseline_v4) と winner フィルタを正しく組み合わせ、condition を満たすマッチの replay HTML を生成。",
+      "files": []
+    }
+  ]
+}

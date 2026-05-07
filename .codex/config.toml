@@ -1,0 +1,18 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Keep Codex in the workspace sandbox, but avoid repeated approval prompts for
+# normal development commands. Commands that need to escape the sandbox are
+# governed by .codex/rules/default.rules.
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+default_permissions = ":workspace"
+web_search = "cached"
+model_instructions_file = "AGENTS.md"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+multi_agent = true
+shell_tool = true
+unified_exec = true

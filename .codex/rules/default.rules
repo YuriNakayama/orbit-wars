@@ -1,0 +1,213 @@
+# Minimize approval prompts for routine Orbit Wars development.
+# Keep explicit prompts for irreversible, externally visible, costly, or
+# destructive operations.
+
+prefix_rule(
+    pattern = ["ls"],
+    decision = "allow",
+    justification = "Directory listing is safe and frequently needed.",
+)
+
+prefix_rule(
+    pattern = ["pwd"],
+    decision = "allow",
+    justification = "Working-directory inspection is safe.",
+)
+
+prefix_rule(
+    pattern = [["rg", "find", "sed", "cat", "head", "tail", "wc"]],
+    decision = "allow",
+    justification = "Read-only local inspection commands are safe.",
+)
+
+prefix_rule(
+    pattern = ["git", ["status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "grep"]],
+    decision = "allow",
+    justification = "Read-only git inspection is safe.",
+)
+
+prefix_rule(
+    pattern = ["git", ["add", "restore", "commit"]],
+    decision = "allow",
+    justification = "Local git index and commit operations stay in the workspace.",
+)
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Pushing publishes local work to a remote repository.",
+)
+
+prefix_rule(
+    pattern = ["uv"],
+    decision = "allow",
+    justification = "uv is the repository's Python package and command runner.",
+)
+
+prefix_rule(
+    pattern = ["dev/setup"],
+    decision = "allow",
+    justification = "Project dependency setup is a normal local development command.",
+)
+
+prefix_rule(
+    pattern = ["dev/format"],
+    decision = "allow",
+    justification = "Formatting is a safe local workspace operation.",
+)
+
+prefix_rule(
+    pattern = ["dev/lint"],
+    decision = "allow",
+    justification = "Linting is a safe local verification operation.",
+)
+
+prefix_rule(
+    pattern = ["dev/test-bot"],
+    decision = "allow",
+    justification = "Bot tests are a routine local verification command.",
+)
+
+prefix_rule(
+    pattern = ["dev/dvc", ["setup", "pull", "repro", "dag", "add", "status"]],
+    decision = "allow",
+    justification = "Routine DVC setup, fetch, graph, add, and repro commands are expected in this repository.",
+)
+
+prefix_rule(
+    pattern = ["dev/dvc", "push"],
+    decision = "prompt",
+    justification = "DVC push uploads data or artifacts to the remote store.",
+)
+
+prefix_rule(
+    pattern = ["dev/vast", ["pull", "cost-report"]],
+    decision = "allow",
+    justification = "Vast.ai artifact fetch and cost reporting are routine read/fetch operations.",
+)
+
+prefix_rule(
+    pattern = ["dev/vast", ["train", "promote"]],
+    decision = "prompt",
+    justification = "Vast.ai training can spend money, and promote changes canonical artifacts.",
+)
+
+prefix_rule(
+    pattern = ["dev/runpod", ["ps", "status", "summary", "tail", "logs", "watch", "pull", "cost-report"]],
+    decision = "allow",
+    justification = "RunPod status, logs, watch, pull, and cost-report commands are routine operations.",
+)
+
+prefix_rule(
+    pattern = ["dev/runpod", "volume", ["list", "search"]],
+    decision = "allow",
+    justification = "Listing and searching RunPod volumes is read-only.",
+)
+
+prefix_rule(
+    pattern = ["dev/runpod", ["train", "promote"]],
+    decision = "prompt",
+    justification = "RunPod training can spend money, and promote changes canonical artifacts.",
+)
+
+prefix_rule(
+    pattern = ["dev/runpod", "volume", "create"],
+    decision = "prompt",
+    justification = "Creating a RunPod volume can incur cost.",
+)
+
+prefix_rule(
+    pattern = ["dev/submit"],
+    decision = "prompt",
+    justification = "Kaggle submissions are irreversible and consume quota unless explicitly dry-run.",
+)
+
+prefix_rule(
+    pattern = ["kaggle", "competitions", "submit"],
+    decision = "prompt",
+    justification = "Kaggle submissions are irreversible and consume daily quota.",
+)
+
+prefix_rule(
+    pattern = ["gh", ["auth", "status"]],
+    decision = "allow",
+    justification = "GitHub auth status is read-only.",
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", ["view", "list", "status", "checks", "diff"]],
+    decision = "allow",
+    justification = "Read-only PR inspection is safe.",
+)
+
+prefix_rule(
+    pattern = ["gh", "run", ["view", "list"]],
+    decision = "allow",
+    justification = "GitHub Actions run inspection is read-only.",
+)
+
+prefix_rule(
+    pattern = ["gh", "workflow", ["view", "list"]],
+    decision = "allow",
+    justification = "GitHub workflow inspection is read-only.",
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "view"],
+    decision = "allow",
+    justification = "Repository inspection is read-only.",
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", ["view", "list"]],
+    decision = "allow",
+    justification = "Issue inspection is read-only.",
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", ["create", "review", "comment", "edit"]],
+    decision = "prompt",
+    justification = "PR mutation posts or changes content on GitHub.",
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "merge"],
+    decision = "forbidden",
+    justification = "Do not merge PRs from Codex without an explicit separate user action.",
+)
+
+prefix_rule(
+    pattern = ["aws", "iam", ["list-open-id-connect-providers", "get-role"]],
+    decision = "allow",
+    justification = "These IAM inspection commands are read-only and already part of the project workflow.",
+)
+
+prefix_rule(
+    pattern = ["terraform", ["fmt", "validate", "plan"]],
+    decision = "allow",
+    justification = "Terraform formatting, validation, and planning do not apply infrastructure changes.",
+)
+
+prefix_rule(
+    pattern = ["terraform", ["apply", "destroy", "import"]],
+    decision = "prompt",
+    justification = "Terraform apply, destroy, and import can change infrastructure or state.",
+)
+
+prefix_rule(
+    pattern = ["docker", ["ps", "logs"]],
+    decision = "allow",
+    justification = "Docker container listing and log reads are safe inspection commands.",
+)
+
+prefix_rule(
+    pattern = ["curl", "-I"],
+    decision = "allow",
+    justification = "HTTP HEAD checks are low-risk network inspection.",
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "prompt",
+    justification = "Recursive deletion is destructive and should stay explicit.",
+)
