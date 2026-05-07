@@ -704,10 +704,14 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
         if scheduler is not None:
             scheduler.step()
+            primary_acc_key = (
+                "from_acc" if head_mode == "three_head" else "cand_fire_acc"
+            )
+            primary_acc_val = val_metrics.get(primary_acc_key, 0.0)
             _stamp(
                 f"epoch={epoch} done train_total={train_metrics['total']:.2f} "
                 f"val_total={val_metrics['total']:.2f} "
-                f"val_cand_fire_acc={val_metrics['cand_fire_acc']:.4f} "
+                f"val_{primary_acc_key}={primary_acc_val:.4f} "
                 f"next_lr={optimizer.param_groups[0]['lr']:.6f}"
             )
 
