@@ -104,6 +104,29 @@ def _replay_response(episode_id: int) -> dict[str, Any]:
     return {"configuration": {}, "steps": [[{"reward": episode_id}]]}
 
 
+def test_run_records_carry_team_rank(tmp_path: Path) -> None:
+    """leaderboard_fetcher の rank が MatchRecord.agent_kaggle_meta.team_rank に伝わる。"""
+
+    from dataset.storage import loader
+
+    spec = _make_spec(tmp_path)
+    submissions = [{"id": 100, "teamId": 999}, {"id": 101, "teamId": 999}]
+    listing = _listing([_episode(1)], submissions=submissions)
+    scraper.run(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(999, rank=42)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: listing,
+        replay_fetcher=lambda _s, eid: _replay_response(eid),
+        run_id="rid",
+    )
+    df = loader.list_matches(data_root=tmp_path, limit=10)
+    assert df.height == 1
+    assert int(df.row(0, named=True)["agent_0_team_rank"]) == 42
+
+
 def test_run_writes_records_and_replays(tmp_path: Path) -> None:
     spec = _make_spec(tmp_path)
     episodes = [_episode(1), _episode(2, agent_count=4)]

@@ -69,7 +69,7 @@ def test_to_row_roundtrip_ffa4() -> None:
 def test_to_row_contains_schema_version() -> None:
     record = _sample_record()
     row = record.to_row()
-    assert row["schema_version"] == 2
+    assert row["schema_version"] == 3
 
 
 def test_to_row_defaults_kaggle_fields_for_selfplay() -> None:
@@ -94,6 +94,7 @@ def test_to_row_roundtrip_with_kaggle_meta() -> None:
             rating_mu=820.5,
             rating_sigma=40.1,
             state="ACTIVE",
+            team_rank=3,
         ),
         AgentKaggleMeta(
             submission_id=222,
@@ -101,6 +102,7 @@ def test_to_row_roundtrip_with_kaggle_meta() -> None:
             rating_mu=700.0,
             rating_sigma=55.0,
             state="INACTIVE",
+            team_rank=27,
         ),
     )
     original = _sample_record(num_agents=2)
@@ -118,3 +120,5 @@ def test_to_row_roundtrip_with_kaggle_meta() -> None:
     assert restored.source == "kaggle"
     assert restored.episode_id == 42
     assert restored.agent_kaggle_meta == metas
+    assert row["agent_0_team_rank"] == 3
+    assert row["agent_1_team_rank"] == 27

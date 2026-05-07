@@ -66,6 +66,7 @@ class _PlannedEpisode:
     episode_id: int
     raw: dict[str, Any]
     team_id_by_submission: dict[int, int]
+    team_rank_by_id: dict[int, int]
 
 
 @dataclass
@@ -193,6 +194,7 @@ def _fetch_planned_episode_io(
         run_id=run_id,
         scraped_at=_utc_now_iso(),
         team_id_by_submission=planned.team_id_by_submission,
+        team_rank_by_id=planned.team_rank_by_id,
     )
     if spec.dry_run:
         return _FetchedEpisode(episode_id, record, None, failed=False)
@@ -256,6 +258,7 @@ def _plan(
 
     teams = leaderboard_fetcher(spec.top)
     total_teams = len(teams)
+    team_rank_by_id: dict[int, int] = {t.team_id: t.rank for t in teams}
     logger.info(
         "scrape phase=plan top=%d modes=%s limit_per_team=%s seen_existing=%d",
         spec.top,
@@ -310,6 +313,7 @@ def _plan(
                     episode_id=episode_id,
                     raw=raw,
                     team_id_by_submission=team_id_by_submission,
+                    team_rank_by_id=team_rank_by_id,
                 )
             )
             planned_for_team += 1
@@ -615,6 +619,7 @@ def serialize_plan(plan: list[_PlannedEpisode]) -> list[dict[str, Any]]:
             "team_id_by_submission": {
                 str(k): v for k, v in p.team_id_by_submission.items()
             },
+            "team_rank_by_id": {str(k): v for k, v in p.team_rank_by_id.items()},
         }
         for p in plan
     ]
@@ -627,6 +632,9 @@ def deserialize_plan(payload: list[dict[str, Any]]) -> list[_PlannedEpisode]:
             raw=item["raw"],
             team_id_by_submission={
                 int(k): int(v) for k, v in item["team_id_by_submission"].items()
+            },
+            team_rank_by_id={
+                int(k): int(v) for k, v in (item.get("team_rank_by_id") or {}).items()
             },
         )
         for item in payload

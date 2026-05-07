@@ -7,6 +7,9 @@ Schema v2 (2026-04): Kaggle-ソース向けフィールドを追加。
 - source, episode_id, scraped_at (top-level)
 - agent_{i}_submission_id / team_id / rating_mu / rating_sigma / state
 selfplay 由来のレコードでも全フィールドがデフォルト値で埋まる。
+
+Schema v3 (2026-05): leaderboard ランクを保存。
+- agent_{i}_team_rank (scrape 時点の Kaggle leaderboard 順位、未取得は 0)
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 MAX_PLAYERS = 4
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SOURCE_SELFPLAY = "selfplay"
 SOURCE_KAGGLE = "kaggle"
@@ -56,6 +59,7 @@ class AgentKaggleMeta:
     rating_mu: float = 0.0
     rating_sigma: float = 0.0
     state: str = ""
+    team_rank: int = 0  # scrape 時点の leaderboard 順位 (1-based, 0 = 未取得)
 
 
 _DEFAULT_KAGGLE_META = AgentKaggleMeta()
@@ -124,6 +128,7 @@ class MatchRecord:
             row[f"agent_{idx}_turn_max"] = timing.max
             row[f"agent_{idx}_submission_id"] = meta.submission_id
             row[f"agent_{idx}_team_id"] = meta.team_id
+            row[f"agent_{idx}_team_rank"] = meta.team_rank
             row[f"agent_{idx}_rating_mu"] = meta.rating_mu
             row[f"agent_{idx}_rating_sigma"] = meta.rating_sigma
             row[f"agent_{idx}_state"] = meta.state
@@ -154,6 +159,7 @@ class MatchRecord:
             )
             submission_id = int(row.get(f"agent_{idx}_submission_id", 0) or 0)
             team_id = int(row.get(f"agent_{idx}_team_id", 0) or 0)
+            team_rank = int(row.get(f"agent_{idx}_team_rank", 0) or 0)
             rating_mu = float(row.get(f"agent_{idx}_rating_mu", 0.0) or 0.0)
             rating_sigma = float(row.get(f"agent_{idx}_rating_sigma", 0.0) or 0.0)
             state = str(row.get(f"agent_{idx}_state", "") or "")
@@ -164,9 +170,17 @@ class MatchRecord:
                     rating_mu=rating_mu,
                     rating_sigma=rating_sigma,
                     state=state,
+                    team_rank=team_rank,
                 )
             )
-            if submission_id or team_id or rating_mu or rating_sigma or state:
+            if (
+                submission_id
+                or team_id
+                or rating_mu
+                or rating_sigma
+                or state
+                or team_rank
+            ):
                 has_kaggle_meta = True
         return cls(
             match_id=str(row["match_id"]),

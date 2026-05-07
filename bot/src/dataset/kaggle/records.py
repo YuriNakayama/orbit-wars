@@ -122,17 +122,22 @@ def _kaggle_meta(
     agent: dict[str, Any],
     *,
     team_id_by_submission: dict[int, int] | None = None,
+    team_rank_by_id: dict[int, int] | None = None,
 ) -> AgentKaggleMeta:
     submission_id = int(agent.get("submissionId") or 0)
     team_id = 0
     if team_id_by_submission and submission_id in team_id_by_submission:
         team_id = team_id_by_submission[submission_id]
+    team_rank = 0
+    if team_rank_by_id and team_id in team_rank_by_id:
+        team_rank = team_rank_by_id[team_id]
     return AgentKaggleMeta(
         submission_id=submission_id,
         team_id=team_id,
         rating_mu=float(agent.get("updatedScore") or 0.0),
         rating_sigma=0.0,
         state="",
+        team_rank=team_rank,
     )
 
 
@@ -142,6 +147,7 @@ def build_match_record(
     run_id: str,
     scraped_at: str,
     team_id_by_submission: dict[int, int] | None = None,
+    team_rank_by_id: dict[int, int] | None = None,
 ) -> MatchRecord:
     agents = _ordered_agents(meta.agents)
     winner, draw = _resolve_outcome(agents)
@@ -169,7 +175,12 @@ def build_match_record(
         episode_id=meta.episode_id,
         scraped_at=scraped_at,
         agent_kaggle_meta=tuple(
-            _kaggle_meta(a, team_id_by_submission=team_id_by_submission) for a in agents
+            _kaggle_meta(
+                a,
+                team_id_by_submission=team_id_by_submission,
+                team_rank_by_id=team_rank_by_id,
+            )
+            for a in agents
         ),
     )
 
