@@ -1,7 +1,7 @@
 # Hypotheses — imitation/case9 head_setting_optimization
 
 > 作成日: 2026-05-06
-> 最終更新: 2026-05-06
+> 最終更新: 2026-05-07
 > 状態: in_progress
 > 最大 iteration: 上限なし (ユーザー停止指示まで)
 > 主要メトリクス: 学習中 val_loss / val_target_acc / val_ships_acc (case7/case8 同形式) + ローカル self-play 10 戦の挙動評価 (vs baseline_v1)
@@ -44,9 +44,9 @@ case9 は **head 設計の最適化** にスコープを絞る。特徴量 / bac
 
 ## 仮説リスト (priority 順)
 
-- [ ] (P1) **H1: 3-head 単独** — case3 phase2 の 3-head (from + template + ships) のみ。SetT 128 + P=63/G=8 上での 3-head ベースライン。比較 3 パターンの 1 本目
-- [ ] (P1) **H2: candidate head 単独** — case4/case8 の per-source × CAND_K=8 categorical head のみ (CAND_FEAT_DIM=14)。ships rule = `max(target.ships+1, 20)` (notebook 流)。比較 3 パターンの 2 本目
-- [ ] (P1) **H3: candidate head + ships head** — candidate head で source/slot 選択 + 別 ships_head で発射数を 4-bucket categorical 学習 (ships rule を learned head に置換)。H1/H2 のハイブリッド。比較 3 パターンの 3 本目
+- [x] (P1) **H1: 3-head 単独** — case3 phase2 の 3-head (from + template + ships) のみ。SetT 128 + P=63/G=8 上での 3-head ベースライン。比較 3 パターンの 1 本目 — **inconclusive** (val_target_acc=0.928 / 10 ep vs baseline_v1 = 0/10, n<300 で結論不可)
+- [x] (P1) **H2: candidate head 単独** — case4/case8 の per-source × CAND_K=8 categorical head のみ (CAND_FEAT_DIM=14)。ships rule = `max(target.ships+1, 20)` (notebook 流)。比較 3 パターンの 2 本目 — **inconclusive** (val_cand_fire_acc=0.211 / 10 ep = 0/10)
+- [x] (P1) **H3: candidate head + ships head** — candidate head で source/slot 選択 + 別 ships_head で発射数を 4-bucket categorical 学習 (ships rule を learned head に置換)。H1/H2 のハイブリッド。比較 3 パターンの 3 本目 — **inconclusive** (val_cand_fire_acc=0.211 / 10 ep = 0/10)
 - [ ] (P2, depends on 3 パターン比較) **H4: dual head 全部入り (3-head + candidate, blend α=0.5)** — 3 パターン比較の結果次第で、両 head 完全並列 + loss blend を試す
 - [ ] (P2, depends on H4) **H5: dual head blend α 感度 (α=0.25 / 0.75)** — H4 が有望なら blend 比率を 2 値で振り、感度を確認
 - [ ] (P2) **H6: candidate head の K 拡張 (K=8 → K=12)** — candidate slot 数を増やし、target 探索空間を広げる。CAND_FEAT_DIM=14 は維持
@@ -61,3 +61,6 @@ case9 は **head 設計の最適化** にスコープを絞る。特徴量 / bac
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
+| 1 | 2026-05-07 | H1 three_head | hypotheses.md | `20260507-023323__...__98ea59d__seed0` | val_target_acc=0.928 / 10ep=0/10 | inconclusive | iter1_result.md |
+| 1 | 2026-05-07 | H2 candidate | hypotheses.md | `20260506-133924__...__a6a7bee__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md |
+| 1 | 2026-05-07 | H3 candidate_ships | hypotheses.md | `20260507-022131__...__ea87185__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md |
