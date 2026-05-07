@@ -350,6 +350,9 @@ def _format_eta(seconds: float) -> str:
     return f"{int(seconds)}s ({eta.strftime('%H:%M:%S')}Z)"
 
 
+CheckpointCallback = Callable[[int, int], None]
+
+
 def _fetch_all(
     *,
     session: requests.Session,
@@ -363,6 +366,8 @@ def _fetch_all(
     progress_every: int,
     flush_every: int,
     workers: int,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
 ) -> tuple[int, int]:
     """Phase 2 を ThreadPoolExecutor で並列実行し、(records, replays) を返す。
 
@@ -427,6 +432,20 @@ def _fetch_all(
                 written_replays,
                 total_records,
             )
+        if (
+            on_checkpoint is not None
+            and checkpoint_every > 0
+            and idx % checkpoint_every == 0
+        ):
+            try:
+                on_checkpoint(idx, total)
+            except Exception as exc:  # noqa: BLE001 — checkpoint failures are non-fatal
+                logger.warning(
+                    "scrape phase=fetch checkpoint failed at [%d/%d]: %s",
+                    idx,
+                    total,
+                    exc,
+                )
 
     if workers <= 1:
         for idx, planned in enumerate(plan, start=1):
@@ -514,6 +533,8 @@ def fetch_with_plan(
     progress_every: int = 10,
     flush_every: int = 200,
     workers: int = 1,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
 ) -> ScrapeResult:
     """Phase 1 で確定した plan を受け取り Phase 2 のみ実行する。"""
 
@@ -525,6 +546,10 @@ def fetch_with_plan(
         raise ValueError(f"flush_every must be positive, got {flush_every}")
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
+    if checkpoint_every < 0:
+        raise ValueError(
+            f"checkpoint_every must be non-negative, got {checkpoint_every}"
+        )
 
     owns_session = session is None
     session = session or client.build_session()
@@ -548,6 +573,8 @@ def fetch_with_plan(
             progress_every=progress_every,
             flush_every=flush_every,
             workers=workers,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
         )
         tail_records, tail_replays = _flush(acc, spec)
         records_written += tail_records
@@ -619,6 +646,8 @@ def run(
     progress_every: int = 10,
     flush_every: int = 200,
     workers: int = 1,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
 ) -> ScrapeResult:
     """Scrape Kaggle episodes according to `spec` and persist records."""
 
@@ -632,6 +661,10 @@ def run(
         raise ValueError(f"flush_every must be positive, got {flush_every}")
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
+    if checkpoint_every < 0:
+        raise ValueError(
+            f"checkpoint_every must be non-negative, got {checkpoint_every}"
+        )
 
     owns_session = session is None
     session = session or client.build_session()
@@ -671,6 +704,8 @@ def run(
             progress_every=progress_every,
             flush_every=flush_every,
             workers=workers,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
         )
         tail_records, tail_replays = _flush(acc, spec)
         records_written += tail_records

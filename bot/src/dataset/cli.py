@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -305,6 +306,18 @@ def kaggle_scrape_fetch(
     rate_window: float = typer.Option(
         60.0, "--rate-window", help="Token bucket window seconds."
     ),
+    checkpoint_every: int = typer.Option(
+        0,
+        "--checkpoint-every",
+        help="Run --checkpoint-cmd every N fetched episodes. 0 disables.",
+    ),
+    checkpoint_cmd: str = typer.Option(
+        "",
+        "--checkpoint-cmd",
+        help="Shell command to run at each checkpoint (e.g. 'dvc commit -f "
+        "data/lake/kaggle_episodes/matches.dvc && dvc push'). Receives "
+        "CHECKPOINT_IDX/CHECKPOINT_TOTAL env vars.",
+    ),
 ) -> None:
     """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
 
@@ -322,6 +335,26 @@ def kaggle_scrape_fetch(
     )
     plan = scraper.deserialize_plan(plan_data)
     rate_limit = TokenBucket(capacity=rate_capacity, window_sec=rate_window)
+
+    on_checkpoint: scraper.CheckpointCallback | None = None
+    if checkpoint_every > 0 and checkpoint_cmd:
+
+        def on_checkpoint(idx: int, total: int) -> None:
+            console.print(
+                f"[cyan]checkpoint [{idx}/{total}] running: {checkpoint_cmd}[/cyan]"
+            )
+            env = {
+                **os.environ,
+                "CHECKPOINT_IDX": str(idx),
+                "CHECKPOINT_TOTAL": str(total),
+            }
+            result = subprocess.run(checkpoint_cmd, check=False, shell=True, env=env)
+            if result.returncode != 0:
+                console.print(
+                    f"[yellow]checkpoint [{idx}/{total}] command exited "
+                    f"with code {result.returncode}; continuing[/yellow]"
+                )
+
     result = scraper.fetch_with_plan(
         spec,
         plan,
@@ -330,6 +363,8 @@ def kaggle_scrape_fetch(
         progress_every=progress_every,
         flush_every=flush_every,
         workers=workers,
+        checkpoint_every=checkpoint_every,
+        on_checkpoint=on_checkpoint,
     )
     _render_scrape_summary(result)
     if dvc_add and result.records_written > 0:

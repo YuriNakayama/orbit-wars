@@ -83,6 +83,8 @@ jobs:
             --workers 8 \
             --rate-capacity 60 \
             --rate-window 60 \
+            --checkpoint-every 1000 \
+            --checkpoint-cmd "uv run --project bot dvc commit -f data/lake/kaggle_episodes/matches.dvc && uv run --project bot dvc push" \
             2>&1 | tee /tmp/scrape_fetch.log
 
       - name: DVC commit kaggle episodes

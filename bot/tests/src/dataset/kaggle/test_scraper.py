@@ -368,6 +368,40 @@ def test_fetch_with_plan_persists_records(tmp_path: Path) -> None:
     assert result.episodes_planned == 2
 
 
+def test_fetch_with_plan_runs_checkpoint_callback(tmp_path: Path) -> None:
+    """checkpoint_every 件取得ごとに on_checkpoint(idx, total) が呼ばれる。"""
+
+    spec = _make_spec(tmp_path)
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing(
+            [_episode(eid) for eid in range(1, 11)]
+        ),
+    )
+    captured: list[tuple[int, int]] = []
+
+    def cb(idx: int, total: int) -> None:
+        captured.append((idx, total))
+
+    scraper.fetch_with_plan(
+        spec,
+        plan,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        replay_fetcher=lambda _s, eid: _replay_response(eid),
+        run_id="rid",
+        flush_every=2,
+        checkpoint_every=4,
+        on_checkpoint=cb,
+    )
+    # 10 episodes / checkpoint_every=4 → idx=4 と idx=8 の 2 回
+    assert captured == [(4, 10), (8, 10)]
+
+
 def test_fetch_with_plan_parallel_workers_preserve_results(tmp_path: Path) -> None:
     """workers=4 でも 1 episode 1 record 1 replay を取りこぼさず永続化する。"""
 
