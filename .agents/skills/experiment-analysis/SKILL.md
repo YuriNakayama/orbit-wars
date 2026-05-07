@@ -1,27 +1,12 @@
 ---
 name: experiment-analysis
 description: >
-  Replay-driven post-mortem skill for finished Orbit Wars experiments. Selects
-  the analysis target by priority (most recent iter only / last N iters /
-  inconclusive only / specific iter), honors the case's `hypotheses.md` skip
-  list (e.g. `replay 分析を行わない`, `300 対戦 skip`), and typically converts
-  two match replays via a Python script into Markdown (result_1.md /
-  result_2.md). Codex reads those files and produces three views — why we
-  lost / what worked / which turns to focus on next — plus a summary and
-  NEXT ACTION. Updates `hypotheses.md` only with the **adoption write-back**
-  (matching hypothesis checkbox flipped to `- [x]`, verdict note appended,
-  Iteration log row updated). The next-iteration decision (deepen / broaden
-  / list-consume) is **not** made here — that belongs to `experiment-plan`.
-  Read-only on code: does NOT re-train, NOT launch RunPod, NOT edit
-  `backend/pipeline/`. Use whenever the user types `/experiment-analysis`,
-  or asks to interpret / dig into / discuss / explain a finished experiment
-  result — phrases like "対戦ログを分析して", "リプレイから敗因を読み取って",
-  "勝った試合と負けた試合を比較して", "iter9 の負け試合のターン推移を整理して",
-  "loss seed の replay 見て分析まとめて", "case2 の敗因を replay から深掘りしたい",
-  "直近の inconclusive iter まとめて分析して" all count. Don't trigger this
-  skill for designing a NEW experiment from scratch (use `experiment-plan` /
-  `experiment-hypothesize`), full-pipeline execution / re-training (use
-  `experiment-execution`), read-only code review, or plain bug fixes.
+  Replay-driven post-mortem for finished Orbit Wars experiments. Use for
+  /experiment-analysis or requests to analyze or explain replay results,
+  compare wins and losses, identify failure turns, summarize inconclusive
+  iterations, or update adoption notes in hypotheses.md. Does not train, run
+  pipelines, edit code, or decide next-iteration strategy.
+
 ---
 
 # Experiment Analysis Skill (Orbit Wars)

@@ -1,27 +1,12 @@
 ---
 name: experiment
 description: >
-  Hypothesis-list–driven iteration loop for Orbit Wars experiments under
-  `backend/pipeline/{imitation|rulebase|reinforce}/case<N>/`. The single
-  source of truth is the target case's `hypotheses.md` (created by
-  `experiment-hypothesize`). Hears 3 things from the user via `a concise user question`:
-  (1) the target `hypotheses.md` path, (2) the max iteration count, and (3)
-  the loop cadence. Registers a `schedule` (cron) or `loop` (short interval)
-  job whose body is "call `experiment-plan` (which decides list-consume /
-  deepen / broaden), then `experiment-execution`, then `experiment-analysis`,
-  once". Each tick = one hypothesis = one plan → run → analyze cycle. The
-  loop driver itself does NOT decide deepen / broaden — `experiment-plan`
-  Step 0.5 owns that. The driver only reads the plan's reported mode: a
-  broaden outcome stops the loop and surfaces the `/experiment-hypothesize`
-  suggestion; list-consume / deepen continue the cycle. Repeats until
-  hypotheses are exhausted, max iterations are hit, or the user stops the
-  loop. **This skill is invoked ONLY by explicit user request** (typed
-  `/experiment` or said "仮説リストを回したい / iteration loop で実験したい /
-  hypotheses.md を消化して"). Don't auto-trigger this skill from
-  natural-language experiment requests — those go to `experiment-hypothesize`
-  (hypothesis enumeration) / `experiment-plan` (single plan) /
-  `experiment-execution` (single run + RunPod) / `experiment-analysis`
-  (single replay post-mortem) instead.
+  Explicit-only loop driver for Orbit Wars hypothesis-list experiments. Use
+  only when the user types /experiment or clearly asks to consume hypotheses.md
+  in an iteration loop. Schedules repeated plan → execution → analysis cycles
+  until stopped, exhausted, broadened, or maxed out. Do not auto-trigger for
+  normal experiment requests.
+
 ---
 
 # Experiment Skill (Orbit Wars — iteration loop)
