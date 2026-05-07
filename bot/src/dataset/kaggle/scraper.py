@@ -23,6 +23,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -145,34 +146,47 @@ def _filter_episode(
     return episode_id
 
 
-def _fetch_planned_episode(
+@dataclass(frozen=True)
+class _FetchedEpisode:
+    """Phase 2 worker が main thread に返す結果。
+
+    `record` / `replay_payload` が None の場合は何らかの理由でスキップ
+    (parse 失敗 / API エラー)。`failed=True` のとき failed カウンタに加算。
+    """
+
+    episode_id: int
+    record: MatchRecord | None
+    replay_payload: bytes | None
+    failed: bool
+
+
+def _fetch_planned_episode_io(
     *,
     session: requests.Session,
     planned: _PlannedEpisode,
     spec: ScrapeSpec,
-    acc: _Accumulator,
     run_id: str,
     rate_limit: TokenBucket,
     replay_fetcher: ReplayFetcher,
-    seen_ids: set[int],
-) -> None:
-    """Phase 2: filter 済み episode の replay を取得して buffer に積む。"""
+) -> _FetchedEpisode:
+    """Pure I/O: replay 取得 + record 構築。スレッドから安全に呼べる。
+
+    state mutation (acc / seen_ids) は呼び出し側 (main thread) で行う。
+    """
 
     episode_id = planned.episode_id
     try:
         meta = records.parse_episode_meta(planned.raw)
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("parse_episode_meta failed for %s: %s", episode_id, exc)
-        acc.episodes_failed += 1
-        return
+        return _FetchedEpisode(episode_id, None, None, failed=True)
 
     with rate_limit.acquire():
         try:
             replay_resp = replay_fetcher(session, episode_id)
         except client.KaggleEpisodeError as exc:
             logger.warning("get_episode_replay failed for %s: %s", episode_id, exc)
-            acc.episodes_failed += 1
-            return
+            return _FetchedEpisode(episode_id, None, None, failed=True)
 
     record = records.build_match_record(
         meta,
@@ -180,14 +194,34 @@ def _fetch_planned_episode(
         scraped_at=_utc_now_iso(),
         team_id_by_submission=planned.team_id_by_submission,
     )
-    seen_ids.add(episode_id)
-    acc.episodes_fetched += 1
+    if spec.dry_run:
+        return _FetchedEpisode(episode_id, record, None, failed=False)
+    payload_str = client.extract_replay_json(replay_resp)
+    payload = gzip.compress(payload_str.encode("utf-8"))
+    return _FetchedEpisode(episode_id, record, payload, failed=False)
 
+
+def _apply_fetched(
+    fetched: _FetchedEpisode,
+    *,
+    spec: ScrapeSpec,
+    acc: _Accumulator,
+    seen_ids: set[int],
+) -> None:
+    """Worker から返った結果を main thread の buffer に反映する。"""
+
+    if fetched.failed:
+        acc.episodes_failed += 1
+        return
+    if fetched.record is None:
+        return
+    seen_ids.add(fetched.episode_id)
+    acc.episodes_fetched += 1
     if spec.dry_run:
         return
-    acc.buffered_records.append(record)
-    payload_str = client.extract_replay_json(replay_resp)
-    acc.buffered_replays[record.match_id] = gzip.compress(payload_str.encode("utf-8"))
+    acc.buffered_records.append(fetched.record)
+    if fetched.replay_payload is not None:
+        acc.buffered_replays[fetched.record.match_id] = fetched.replay_payload
 
 
 def _lookup_submission_id(
@@ -328,11 +362,15 @@ def _fetch_all(
     replay_fetcher: ReplayFetcher,
     progress_every: int,
     flush_every: int,
+    workers: int,
 ) -> tuple[int, int]:
-    """Phase 2 を回し、(total_records_written, total_replays_written) を返す。
+    """Phase 2 を ThreadPoolExecutor で並列実行し、(records, replays) を返す。
 
-    `flush_every` 件取得ごとに `_flush` を挟み、cancel / timeout / SIGTERM で
-    途中終了した場合でもそれまでに蓄積した分は永続化済みになるようにする。
+    - 各 worker は `_fetch_planned_episode_io` で replay を取得 (rate_limit
+      で 60req/60s に制限される)。
+    - 取得結果は main thread に集約され、buffer mutation は逐次実行される。
+    - `flush_every` 件処理ごとに `_flush` を挟み、cancel/timeout 時の loss を抑える。
+    - `workers=1` の場合は ThreadPool を作らず逐次実行 (テスト容易性のため)。
     """
 
     total_records = 0
@@ -341,19 +379,26 @@ def _fetch_all(
     if total == 0:
         logger.info("scrape phase=fetch nothing to download")
         return total_records, total_replays
-    logger.info("scrape phase=fetch total=%d flush_every=%d", total, flush_every)
+    logger.info(
+        "scrape phase=fetch total=%d flush_every=%d workers=%d",
+        total,
+        flush_every,
+        workers,
+    )
     started = time.monotonic()
-    for idx, planned in enumerate(plan, start=1):
-        _fetch_planned_episode(
+
+    def _io(planned: _PlannedEpisode) -> _FetchedEpisode:
+        return _fetch_planned_episode_io(
             session=session,
             planned=planned,
             spec=spec,
-            acc=acc,
             run_id=run_id,
             rate_limit=rate_limit,
             replay_fetcher=replay_fetcher,
-            seen_ids=seen_ids,
         )
+
+    def _on_processed(idx: int) -> None:
+        nonlocal total_records, total_replays
         if idx == total or idx % progress_every == 0:
             elapsed = time.monotonic() - started
             pct = 100.0 * idx / total
@@ -370,7 +415,6 @@ def _fetch_all(
                 _format_eta(eta_sec),
             )
         if idx % flush_every == 0 and acc.buffered_records:
-            buffered = len(acc.buffered_records)
             written_records, written_replays = _flush(acc, spec)
             total_records += written_records
             total_replays += written_replays
@@ -383,7 +427,19 @@ def _fetch_all(
                 written_replays,
                 total_records,
             )
-            del buffered
+
+    if workers <= 1:
+        for idx, planned in enumerate(plan, start=1):
+            fetched = _io(planned)
+            _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+            _on_processed(idx)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_io, p) for p in plan]
+            for idx, future in enumerate(as_completed(futures), start=1):
+                fetched = future.result()
+                _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+                _on_processed(idx)
     return total_records, total_replays
 
 
@@ -457,6 +513,7 @@ def fetch_with_plan(
     run_id: str,
     progress_every: int = 10,
     flush_every: int = 200,
+    workers: int = 1,
 ) -> ScrapeResult:
     """Phase 1 で確定した plan を受け取り Phase 2 のみ実行する。"""
 
@@ -466,6 +523,8 @@ def fetch_with_plan(
         raise ValueError(f"progress_every must be positive, got {progress_every}")
     if flush_every <= 0:
         raise ValueError(f"flush_every must be positive, got {flush_every}")
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
 
     owns_session = session is None
     session = session or client.build_session()
@@ -488,6 +547,7 @@ def fetch_with_plan(
             replay_fetcher=replay_fetcher,
             progress_every=progress_every,
             flush_every=flush_every,
+            workers=workers,
         )
         tail_records, tail_replays = _flush(acc, spec)
         records_written += tail_records
@@ -558,6 +618,7 @@ def run(
     run_id: str | None = None,
     progress_every: int = 10,
     flush_every: int = 200,
+    workers: int = 1,
 ) -> ScrapeResult:
     """Scrape Kaggle episodes according to `spec` and persist records."""
 
@@ -569,6 +630,8 @@ def run(
         raise ValueError(f"progress_every must be positive, got {progress_every}")
     if flush_every <= 0:
         raise ValueError(f"flush_every must be positive, got {flush_every}")
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
 
     owns_session = session is None
     session = session or client.build_session()
@@ -607,6 +670,7 @@ def run(
             replay_fetcher=replay_fetcher,
             progress_every=progress_every,
             flush_every=flush_every,
+            workers=workers,
         )
         tail_records, tail_replays = _flush(acc, spec)
         records_written += tail_records
