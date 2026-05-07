@@ -589,19 +589,49 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "lr": round(current_lr, 8),
             "avg_grad_norm_pre_clip": round(avg_grad_norm, 4),
             "train_total": round(train_metrics["total"], 4),
-            "train_cand_loss": round(train_metrics["cand"], 4),
-            "train_ship_loss": round(train_metrics["ship"], 4),
-            "train_ship_mae": round(train_metrics["ship_mae"], 4),
             "val_total": round(val_metrics["total"], 4),
-            "val_cand_loss": round(val_metrics["cand"], 4),
-            "val_cand_acc": round(val_metrics["cand_acc"], 4),
-            "val_cand_noop_acc": round(val_metrics["cand_noop_acc"], 4),
-            "val_cand_fire_acc": round(val_metrics["cand_fire_acc"], 4),
-            "val_ship_loss": round(val_metrics["ship"], 4),
-            "val_ship_mae": round(val_metrics["ship_mae"], 4),
             "ema_eval": ema_model is not None,
             "epoch_elapsed_s": round(time.monotonic() - epoch_started, 1),
         }
+        if head_mode == "three_head":
+            for k in (
+                "from_loss",
+                "target_loss",
+                "ships_loss",
+                "from_acc",
+                "target_acc",
+                "ships_acc",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        elif head_mode == "candidate_ships":
+            for k in (
+                "cand",
+                "cand_acc",
+                "cand_noop_acc",
+                "cand_fire_acc",
+                "ships_loss",
+                "ships_acc",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        else:  # candidate
+            for k in (
+                "cand",
+                "cand_acc",
+                "cand_noop_acc",
+                "cand_fire_acc",
+                "ship",
+                "ship_mae",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
 
         candidate_value = _select_metric_value(val_metrics, best_metric_name)
         improved = (
