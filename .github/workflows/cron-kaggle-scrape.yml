@@ -80,8 +80,8 @@ jobs:
         run: |
           uv run --project bot python -m dataset kaggle scrape-fetch \
             --plan-in /tmp/scrape_plan.json \
-            --workers 16 \
-            --rate-capacity 120 \
+            --workers 8 \
+            --rate-capacity 60 \
             --rate-window 60 \
             2>&1 | tee /tmp/scrape_fetch.log
 
