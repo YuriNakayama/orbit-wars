@@ -128,11 +128,13 @@ def _find_dvc_root(start: Path) -> Path | None:
 
 
 def _dvc_add_matches(data_root: Path) -> None:
-    """Run `dvc add <matches>` from the DVC project root that owns the target.
+    """Update DVC tracking for `<data_root>/matches` from the DVC project root.
 
-    Worktree から外部パスを指定された場合でも、target の実体側に `.dvc/` がある
-    なら、そこを CWD として `dvc add` を呼ぶ。Skips with a warning if `dvc` is
-    not on PATH or the target is missing.
+    既存の `<matches>.dvc` がある場合は **`dvc commit -f`** で hash 更新だけを
+    行う。`dvc add` は repo 全体の outs (`dvc.yaml` の stage を含む) を scan
+    するため、無関係な stage の重複定義に引きずられて失敗することがあるが
+    `dvc commit` は対象の `.dvc` ファイルだけを書き換えるので副作用が少ない。
+    `<matches>.dvc` がまだ無い (初回登録) のときだけ `dvc add` を呼ぶ。
     """
     target = (data_root / "matches").resolve()
     if not target.exists():
@@ -149,17 +151,23 @@ def _dvc_add_matches(data_root: Path) -> None:
         )
         raise typer.Exit(code=1)
     rel_target = target.relative_to(dvc_root)
-    cmd = [dvc_bin, "add", str(rel_target)]
+    dvc_meta = dvc_root / f"{rel_target}.dvc"
+    if dvc_meta.exists():
+        cmd = [dvc_bin, "commit", "-f", str(rel_target) + ".dvc"]
+        verb = "dvc commit"
+    else:
+        cmd = [dvc_bin, "add", str(rel_target)]
+        verb = "dvc add"
     console.print(f"[cyan]running (cwd={dvc_root}): {' '.join(cmd)}[/cyan]")
     result = subprocess.run(cmd, check=False, cwd=dvc_root)
     if result.returncode != 0:
         console.print(
-            f"[red]dvc add exited with code {result.returncode}; "
+            f"[red]{verb} exited with code {result.returncode}; "
             "review output above and resolve manually[/red]"
         )
         raise typer.Exit(code=result.returncode)
     console.print(
-        f"[green]dvc add complete; commit `{rel_target}.dvc` and run `dvc push` "
+        f"[green]{verb} complete; commit `{rel_target}.dvc` and run `dvc push` "
         "when ready[/green]"
     )
 
