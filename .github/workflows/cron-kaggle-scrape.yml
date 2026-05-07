@@ -80,14 +80,27 @@ jobs:
         run: |
           uv run --project bot python -m dataset kaggle scrape-fetch \
             --plan-in /tmp/scrape_plan.json \
-            --dvc-add \
             2>&1 | tee /tmp/scrape_fetch.log
+
+      - name: DVC commit kaggle episodes
+        # cancel/timeout 時も periodic flush 済みの matches/ を救出するため
+        # `if: always()` で実行する。`dvc commit -f` は対象 .dvc のみ書き換えるので
+        # 他 stage の重複定義に引きずられず安全。
+        if: always()
+        run: |
+          if [ ! -d data/lake/kaggle_episodes/matches ]; then
+            echo "matches dir missing; skip"
+            exit 0
+          fi
+          uv run --project bot dvc commit -f data/lake/kaggle_episodes/matches.dvc
 
       - name: Detect data changes
         id: diff
+        if: always()
         run: |
-          # `dvc add` は内部で `git add` まで実行するため、変更は staged 側に
-          # 載る。`git diff` (unstaged のみ) では検出できないので HEAD と比較する。
+          # `dvc add` / `dvc commit` は matches.dvc を書き換えるが、`git add` 自動実行は
+          # `dvc add` のみ。cancel 時にも救出したいので `git diff` (unstaged 含む)
+          # と HEAD 比較の両方を確認する。
           if git diff --quiet HEAD -- data/lake/kaggle_episodes/matches.dvc; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -95,11 +108,11 @@ jobs:
           fi
 
       - name: DVC push
-        if: steps.diff.outputs.changed == 'true'
+        if: always() && steps.diff.outputs.changed == 'true'
         run: uv run --project bot dvc push
 
       - name: Create pull request
-        if: steps.diff.outputs.changed == 'true'
+        if: always() && steps.diff.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

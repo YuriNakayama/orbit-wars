@@ -368,6 +368,36 @@ def test_fetch_with_plan_persists_records(tmp_path: Path) -> None:
     assert result.episodes_planned == 2
 
 
+def test_fetch_with_plan_parallel_workers_preserve_results(tmp_path: Path) -> None:
+    """workers=4 でも 1 episode 1 record 1 replay を取りこぼさず永続化する。"""
+
+    spec = _make_spec(tmp_path)
+    episodes = [_episode(eid) for eid in range(1, 21)]
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing(episodes),
+    )
+    result = scraper.fetch_with_plan(
+        spec,
+        plan,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        replay_fetcher=lambda _s, eid: _replay_response(eid),
+        run_id="rid",
+        progress_every=10,
+        flush_every=5,
+        workers=4,
+    )
+    assert result.episodes_planned == 20
+    assert result.episodes_fetched == 20
+    assert result.records_written == 20
+    assert result.replays_written == 20
+
+
 def test_fetch_with_plan_periodic_flush_persists_partial(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

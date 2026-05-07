@@ -292,6 +292,12 @@ def kaggle_scrape_fetch(
         help="Persist buffered records/replays every N fetched episodes "
         "(reduces loss on cancel/timeout).",
     ),
+    workers: int = typer.Option(
+        8,
+        "--workers",
+        help="Concurrent replay-fetch workers. Token bucket throttles to "
+        "60req/60s globally regardless of worker count.",
+    ),
 ) -> None:
     """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
 
@@ -314,6 +320,7 @@ def kaggle_scrape_fetch(
         run_id=str(payload["run_id"]),
         progress_every=progress_every,
         flush_every=flush_every,
+        workers=workers,
     )
     _render_scrape_summary(result)
     if dvc_add and result.records_written > 0:
