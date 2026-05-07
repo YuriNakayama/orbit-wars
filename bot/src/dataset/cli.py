@@ -278,6 +278,12 @@ def kaggle_scrape_fetch(
     progress_every: int = typer.Option(
         10, "--progress-every", help="Log every N fetched episodes."
     ),
+    flush_every: int = typer.Option(
+        200,
+        "--flush-every",
+        help="Persist buffered records/replays every N fetched episodes "
+        "(reduces loss on cancel/timeout).",
+    ),
 ) -> None:
     """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
 
@@ -295,7 +301,11 @@ def kaggle_scrape_fetch(
     )
     plan = scraper.deserialize_plan(plan_data)
     result = scraper.fetch_with_plan(
-        spec, plan, run_id=str(payload["run_id"]), progress_every=progress_every
+        spec,
+        plan,
+        run_id=str(payload["run_id"]),
+        progress_every=progress_every,
+        flush_every=flush_every,
     )
     _render_scrape_summary(result)
     if dvc_add and result.records_written > 0:
