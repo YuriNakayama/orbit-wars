@@ -327,12 +327,21 @@ def _fetch_all(
     rate_limit: TokenBucket,
     replay_fetcher: ReplayFetcher,
     progress_every: int,
-) -> None:
+    flush_every: int,
+) -> tuple[int, int]:
+    """Phase 2 を回し、(total_records_written, total_replays_written) を返す。
+
+    `flush_every` 件取得ごとに `_flush` を挟み、cancel / timeout / SIGTERM で
+    途中終了した場合でもそれまでに蓄積した分は永続化済みになるようにする。
+    """
+
+    total_records = 0
+    total_replays = 0
     total = len(plan)
     if total == 0:
         logger.info("scrape phase=fetch nothing to download")
-        return
-    logger.info("scrape phase=fetch total=%d", total)
+        return total_records, total_replays
+    logger.info("scrape phase=fetch total=%d flush_every=%d", total, flush_every)
     started = time.monotonic()
     for idx, planned in enumerate(plan, start=1):
         _fetch_planned_episode(
@@ -360,6 +369,22 @@ def _fetch_all(
                 int(elapsed),
                 _format_eta(eta_sec),
             )
+        if idx % flush_every == 0 and acc.buffered_records:
+            buffered = len(acc.buffered_records)
+            written_records, written_replays = _flush(acc, spec)
+            total_records += written_records
+            total_replays += written_replays
+            logger.info(
+                "scrape phase=fetch flush [%d/%d] persisted records=%d "
+                "replays=%d (cumulative records=%d)",
+                idx,
+                total,
+                written_records,
+                written_replays,
+                total_records,
+            )
+            del buffered
+    return total_records, total_replays
 
 
 def plan_only(
@@ -431,6 +456,7 @@ def fetch_with_plan(
     replay_fetcher: ReplayFetcher | None = None,
     run_id: str,
     progress_every: int = 10,
+    flush_every: int = 200,
 ) -> ScrapeResult:
     """Phase 1 で確定した plan を受け取り Phase 2 のみ実行する。"""
 
@@ -438,6 +464,8 @@ def fetch_with_plan(
         raise ValueError("spec.modes must be non-empty")
     if progress_every <= 0:
         raise ValueError(f"progress_every must be positive, got {progress_every}")
+    if flush_every <= 0:
+        raise ValueError(f"flush_every must be positive, got {flush_every}")
 
     owns_session = session is None
     session = session or client.build_session()
@@ -446,8 +474,10 @@ def fetch_with_plan(
 
     seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
     acc = _Accumulator()
+    records_written = 0
+    replays_written = 0
     try:
-        _fetch_all(
+        records_written, replays_written = _fetch_all(
             session=session,
             spec=spec,
             plan=plan,
@@ -457,10 +487,15 @@ def fetch_with_plan(
             rate_limit=rate_limit,
             replay_fetcher=replay_fetcher,
             progress_every=progress_every,
+            flush_every=flush_every,
         )
-        records_written, replays_written = _flush(acc, spec)
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
     except KeyboardInterrupt:
-        records_written, replays_written = _flush(acc, spec)
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
         raise
     finally:
         if owns_session:
@@ -522,6 +557,7 @@ def run(
     replay_fetcher: ReplayFetcher | None = None,
     run_id: str | None = None,
     progress_every: int = 10,
+    flush_every: int = 200,
 ) -> ScrapeResult:
     """Scrape Kaggle episodes according to `spec` and persist records."""
 
@@ -531,6 +567,8 @@ def run(
         raise ValueError("spec.modes must be non-empty")
     if progress_every <= 0:
         raise ValueError(f"progress_every must be positive, got {progress_every}")
+    if flush_every <= 0:
+        raise ValueError(f"flush_every must be positive, got {flush_every}")
 
     owns_session = session is None
     session = session or client.build_session()
@@ -544,6 +582,8 @@ def run(
     seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
     acc = _Accumulator()
     plan: list[_PlannedEpisode] = []
+    records_written = 0
+    replays_written = 0
 
     try:
         plan = _plan(
@@ -556,7 +596,7 @@ def run(
             team_fetcher=team_fetcher,
             episodes_lister=episodes_lister,
         )
-        _fetch_all(
+        records_written, replays_written = _fetch_all(
             session=session,
             spec=spec,
             plan=plan,
@@ -566,10 +606,15 @@ def run(
             rate_limit=rate_limit,
             replay_fetcher=replay_fetcher,
             progress_every=progress_every,
+            flush_every=flush_every,
         )
-        records_written, replays_written = _flush(acc, spec)
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
     except KeyboardInterrupt:
-        records_written, replays_written = _flush(acc, spec)
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
         raise
     finally:
         if owns_session:

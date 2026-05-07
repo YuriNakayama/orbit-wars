@@ -368,6 +368,39 @@ def test_fetch_with_plan_persists_records(tmp_path: Path) -> None:
     assert result.episodes_planned == 2
 
 
+def test_fetch_with_plan_periodic_flush_persists_partial(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """flush_every で永続化が小刻みに走り、cumulative ログが出る。"""
+
+    spec = _make_spec(tmp_path)
+    _, plan = scraper.plan_only(
+        spec,
+        session=MagicMock(),
+        rate_limit=_fast_bucket(),
+        leaderboard_fetcher=lambda _top: [_team(10)],
+        team_fetcher=lambda _s, _t: _team_response(),
+        episodes_lister=lambda _s, _sid: _listing(
+            [_episode(eid) for eid in (1, 2, 3, 4, 5)]
+        ),
+    )
+    with caplog.at_level("INFO", logger="dataset.kaggle.scraper"):
+        result = scraper.fetch_with_plan(
+            spec,
+            plan,
+            session=MagicMock(),
+            rate_limit=_fast_bucket(),
+            replay_fetcher=lambda _s, eid: _replay_response(eid),
+            run_id="rid",
+            progress_every=10,
+            flush_every=2,
+        )
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("phase=fetch flush" in m for m in msgs)
+    assert result.records_written == 5
+    assert result.replays_written == 5
+
+
 def test_fetch_logs_eta_and_percent(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
