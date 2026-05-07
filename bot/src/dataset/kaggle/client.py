@@ -29,8 +29,8 @@ class KaggleEpisodeError(RuntimeError):
 class ClientConfig:
     user_agent: str = "orbit-wars-log-collector/0.1"
     timeout_sec: float = 30.0
-    max_retries: int = 5
-    backoff_factor: float = 1.5
+    max_retries: int = 3
+    backoff_factor: float = 1.0
     kaggle_config_path: str = "~/.kaggle/kaggle.json"
     pool_connections: int = 32
     pool_maxsize: int = 32
@@ -166,7 +166,7 @@ def get_episode_replay(
     session: requests.Session,
     episode_id: int,
     *,
-    timeout: float = 60.0,
+    timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Episode の完全な replay JSON (configuration / steps) を取得。"""
 

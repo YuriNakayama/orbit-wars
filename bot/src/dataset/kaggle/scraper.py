@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -396,6 +397,25 @@ def _fetch_all(
     )
     started = time.monotonic()
 
+    # Heartbeat thread: 60秒ごとに「生きているか」と直近の進捗を出すことで、
+    # GitHub Actions の job 完了まで見えないライブログでも stall 判別可能にする。
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        while not stop_heartbeat.wait(60.0):
+            elapsed = time.monotonic() - started
+            logger.info(
+                "scrape phase=fetch heartbeat elapsed=%ds fetched=%d failed=%d "
+                "buffered=%d",
+                int(elapsed),
+                acc.episodes_fetched,
+                acc.episodes_failed,
+                len(acc.buffered_records),
+            )
+
+    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+    hb_thread.start()
+
     def _io(planned: _PlannedEpisode) -> _FetchedEpisode:
         return _fetch_planned_episode_io(
             session=session,
@@ -451,18 +471,21 @@ def _fetch_all(
                     exc,
                 )
 
-    if workers <= 1:
-        for idx, planned in enumerate(plan, start=1):
-            fetched = _io(planned)
-            _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
-            _on_processed(idx)
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_io, p) for p in plan]
-            for idx, future in enumerate(as_completed(futures), start=1):
-                fetched = future.result()
+    try:
+        if workers <= 1:
+            for idx, planned in enumerate(plan, start=1):
+                fetched = _io(planned)
                 _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
                 _on_processed(idx)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_io, p) for p in plan]
+                for idx, future in enumerate(as_completed(futures), start=1):
+                    fetched = future.result()
+                    _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+                    _on_processed(idx)
+    finally:
+        stop_heartbeat.set()
     return total_records, total_replays
 
 
