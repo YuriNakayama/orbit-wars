@@ -46,6 +46,32 @@ stages:
       - data/mart/imitation/case1/eval_metrics.json:
           cache: false
 
+  preprocess_imitation_case3:
+    cmd: uv run --directory bot python -m pipeline.imitation.case3.training.preprocess --config pipeline/imitation/case3/configs/il_phase2.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case3/training/preprocess.py
+      - bot/pipeline/imitation/case3/policy/featurizer_phase2.py
+      - bot/pipeline/imitation/case3/policy/geometry.py
+      - bot/pipeline/imitation/case3/policy/templates.py
+      - bot/pipeline/imitation/case3/configs/il_phase2.yaml
+    outs:
+      - data/mart/imitation/case3/train_phase2_fixed.parquet
+      - data/mart/imitation/case3/val_phase2_fixed.parquet
+
+  preprocess_imitation_case4:
+    cmd: uv run --directory bot python -m pipeline.imitation.case4.training.preprocess --config pipeline/imitation/case4/configs/il_case4.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case4/training/preprocess.py
+      - bot/pipeline/imitation/case4/policy/featurizer.py
+      - bot/pipeline/imitation/case4/policy/candidates.py
+      - bot/pipeline/imitation/case4/policy/geometry.py
+      - bot/pipeline/imitation/case4/configs/il_case4.yaml
+    outs:
+      - data/mart/imitation/case4/train.parquet
+      - data/mart/imitation/case4/val.parquet
+
   preprocess_imitation_case5:
     cmd: uv run --directory bot python -m pipeline.imitation.case5.training.preprocess --config pipeline/imitation/case5/configs/il_case5.yaml
     deps:
