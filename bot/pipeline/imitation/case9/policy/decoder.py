@@ -7,6 +7,8 @@ Supports 3 head variants via `head_mode`:
   - "three_head":      from sigmoid threshold → fire decision.
                        target argmax over NUM_TEMPLATES with template id 7 = no-op.
                        ships_logits 4-bucket → ships.
+  - "template_ships":  target argmax over NUM_TEMPLATES directly per source.
+                       template id 7 = no-op. ships_logits 4-bucket → ships.
   - "dual":            candidate decoder path. 3-head outputs are auxiliary.
 
 Common safety filters (case5 由来) are applied to every variant.
@@ -356,6 +358,66 @@ def _decode_three_head(
     return actions
 
 
+def _decode_template_ships(
+    output: PolicyOutput,
+    snapshot: WorldSnapshot,
+    obs: dict[str, Any],
+    temperature: float,
+) -> list[list[int | float]]:
+    T = max(float(temperature), 1e-6)
+    assert output.target_logits is not None
+    assert output.ships_logits is not None
+    target_logits = output.target_logits[0] / T
+    ships_argmax = output.ships_logits[0].argmax(dim=-1)
+    target_argmax = target_logits.argmax(dim=-1)
+
+    (
+        pid_to_planet,
+        initial_by_id,
+        ang_vel,
+        comets,
+        comet_ids,
+        step,
+        incoming_friendly,
+    ) = _common_obs_state(obs, snapshot)
+    raw_planets = list(obs.get("planets", []) or [])
+    committed = dict(incoming_friendly)
+    actions: list[list[int | float]] = []
+    player = snapshot.player
+
+    for src_pid in snapshot.my_planet_ids:
+        slot = snapshot.planet_ids.index(src_pid)
+        tid = int(target_argmax[slot].item())
+        if tid == NO_OP_TEMPLATE_ID:
+            continue
+        target_pid = resolve_template(tid, list(raw_planets[slot]), raw_planets, player)
+        if target_pid is None:
+            continue
+        src = pid_to_planet.get(src_pid)
+        target = pid_to_planet.get(int(target_pid))
+        if src is None or target is None:
+            continue
+        bucket = int(ships_argmax[slot].item())
+        bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
+        rule_floor = _fixed_ship_count(target.ships)
+        ships = max(rule_floor, SHIPS_BUCKETS[bucket])
+        action = _emit_action(
+            src,
+            target,
+            ships,
+            initial_by_id,
+            ang_vel,
+            comets,
+            comet_ids,
+            step,
+            committed,
+            player,
+        )
+        if action is not None:
+            actions.append(action)
+    return actions
+
+
 def decode(
     output: PolicyOutput,
     snapshot: WorldSnapshot,
@@ -390,6 +452,8 @@ def decode(
         if template_ctx is None:
             raise ValueError("three_head decoder requires template_ctx")
         return _decode_three_head(output, snapshot, obs, template_ctx, temperature)
+    if head_mode == "template_ships":
+        return _decode_template_ships(output, snapshot, obs, temperature)
     raise ValueError(f"unknown head_mode={head_mode!r}")
 
 

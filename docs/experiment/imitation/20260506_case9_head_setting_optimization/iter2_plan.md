@@ -1,65 +1,78 @@
-# Imitation/case9 — dual head blend α=0.5 (iter2)
+# Imitation/case9 — 3 head families behavior comparison (iter2)
 
-> 作成日: 2026-05-07
+> 作成日: 2026-05-08
 > 仮説 ID: H4
 > hypotheses.md: docs/experiment/imitation/20260506_case9_head_setting_optimization/hypotheses.md
 > 関連: docs/experiment/imitation/20260506_case9_head_setting_optimization/iter1_result.md
-> スコープ: `bot/pipeline/imitation/case9/` の head 構造を dual head 化し、3-head と candidate head の loss を α=0.5 で同時学習する
+> スコープ: `bot/pipeline/imitation/case9/` で head family を 3 パターンに揃え、学習時 train/val 精度推移とローカル対戦挙動を比較する
 
 ## 仮説 (Hypothesis)
 
-H4: dual head 全部入り (3-head + candidate, blend α=0.5) — H1 の from/target/ships 予測と H2/H3 の candidate slot 予測は失敗モードが異なる可能性があるため、共通 Set Transformer backbone 上で両 head を同時に学習し、loss を 0.5 / 0.5 で混ぜることで、表現学習と推論候補選択の安定性を改善できる。
+H4: 3-head / candidate×ship数予測 / template×ship数予測の 3 パターンは、同じ Set Transformer backbone と同じ case9 データでも、**no-op/fire の表現方法**が異なるため学習曲線と対戦挙動が分かれる。
 
-## 既存コードの現状
+- **3-head**: `from` で fire/no-fire を独立判定し、fired source だけ `template` と `ships` を学習する。
+- **candidate×ships**: candidate slot 0 を no-op、slot 1..K を target 候補として直接分類し、別 head で ships bucket を学習する。
+- **template×ships**: template の最終 class を no-op とし、source ごとに `template incl no-op` と `ships bucket` を学習する。`from` head を持たず、no-op/fire は template 分類に内包する。
 
-- 主要モジュール: `bot/pipeline/imitation/case9/policy/model.py` は `three_head` / `candidate` / `candidate_ships` の 3 head mode を排他的に切り替える構造。
-- head 実装: `policy/heads/three_head.py` と `policy/heads/candidate.py` は既に分離済みで、dual 化は新 head 追加または `Case9Policy` の mode 追加で対応可能。
-- loss 実装: `training/losses.py` と `training/train.py` は head_mode ごとに loss dispatch しているため、`dual` 用 dispatch を追加する。
-- 過去 iter: H1/H2/H3 はいずれも 10 ep = 0/10 で、n<300 ルールにより採否は inconclusive。val 指標は H1: `val_target_acc=0.928`、H2/H3: `val_cand_fire_acc=0.211`。
+この比較で明らかにすることは、**candidate 空間での直接候補選択**と **template 空間での抽象行動選択**のどちらが、学習精度・fire精度・ローカル挙動の観点で安定するかである。
 
-## スコープ (Scope)
+## 固定軸
 
-- 変更ファイル:
-  - `bot/pipeline/imitation/case9/policy/model.py`
-  - `bot/pipeline/imitation/case9/policy/types.py`
-  - `bot/pipeline/imitation/case9/training/losses.py`
-  - `bot/pipeline/imitation/case9/training/train.py`
-  - `bot/pipeline/imitation/case9/configs/il_case9_dual.yaml` (新規)
-- ハイパーパラメータ / config:
-  - `model.head_mode: dual`
-  - `train.loss_weights.dual_alpha: 0.5`
-  - backbone / featurizer / dataset / scheduler は既存 3 パターンと同一に固定
-- データセット / 特徴量変更: なし
-- 推論方針: 初期実装では candidate logits を主出力として decode に使い、3-head は補助 loss として扱う。必要なら result で 3-head blend inference を次仮説化する。
+| 軸 | 固定値 |
+|---|---|
+| data | `data/mart/imitation/case9/train.parquet`, `val.parquet` |
+| featurizer | case9 既存 PLANET=41 / GLOBAL=20 |
+| backbone | Set Transformer hidden=128, ISAB×3, PMA |
+| optimizer | AdamW, lr=1e-3, cosine warmup, batch_size=128 |
+| 評価相手 | `baseline_v1` |
+| 対戦数 | local 10 ep smoke/挙動確認のみ。n<300 なので採否は inconclusive 固定 |
 
-## 実装ステップ (Implementation outline)
+## 比較対象
 
-1. `PolicyOutput` に dual mode で必要な 3-head 出力と candidate 出力を同時に保持できるフィールドを追加する。
-2. `Case9Policy` に `head_mode="dual"` を追加し、`ThreeHead` と `CandidateHead` を同時に保持して forward で両方を返す。
-3. `training/losses.py` に dual loss を追加する。式は `total = α * three_head_total + (1 - α) * candidate_total` とし、metric は両 head の主要値を同時に返す。
-4. `training/train.py` の dispatch / metric map / best metric 周りに dual mode を追加する。best metric はまず `val_cand_fire_acc` を維持し、補助として `val_target_acc` を記録する。
-5. `configs/il_case9_dual.yaml` を追加し、既存 config と同じ学習条件で `weights_out: pipeline/imitation/case9/policy/weights_dual.pt` に保存する。
-6. inference の canonical 化はこの iter では行わず、評価時のみ `IL_CASE9_HEAD_MODE=dual` と dual weights で動作確認する。必要なら `agent.py` / `decoder.py` の dual 対応を最小追加する。
+| variant | head_mode | 学習ターゲット | best metric | 推論 |
+|---|---|---|---|---|
+| A: 3-head | `three_head` | from BCE + template CE + ships CE | `val_target_acc` | from sigmoid → template → ships |
+| B: candidate×ships | `candidate_ships` | candidate slot CE/focal + ships CE | `val_cand_fire_acc` | candidate argmax, slot0=no-op → ships |
+| C: template×ships | `template_ships` | template incl no-op CE + ships CE | `val_template_fire_acc` | template argmax, last=no-op → ships |
 
-## 検証方法 (Validation method)
+## 実装ステップ
 
-### スキップする検証 (from hypotheses.md skip list)
+1. `policy/heads/template_ships.py` を追加し、template incl no-op + ships bucket の head を実装する。
+2. `Case9Policy` / `PolicyOutput` / decoder / loss dispatch / train logging に `head_mode="template_ships"` を追加する。
+3. `configs/il_case9_template_ships.yaml` を追加し、既存 2 variant と同条件で学習できるようにする。
+4. `dev/runpod` case registry と selfplay agent registry に `case9_template_ships` / `il_v9_template_ships` を追加する。
+5. targeted tests と 1 episode smoke を通す。
+6. 既存 run の A/B と新規 C を同じ表にまとめ、必要に応じて A/B も同 SHA で再学習して完全比較にする。
 
-- Kaggle publicScore は引用しない。
-- skill rating は使わない。
-- 300 対戦による評価はしない。
-- n<300 のローカル 10 / 30 ep 結果だけで確定結論を出さない。採否は val 指標 + ローカル挙動 + replay 定性で判断し、原則 inconclusive を許容する。
+## 検証方法
 
 ### 実施する検証
 
-- ローカル smoke: 1 episode self-play で import / decode / action shape を確認する。
-- ローカル test: `dev/test-bot` を実行する。
-- リモート学習: `dev/runpod train <commit-sha> --case case9` 相当で RunPod 学習を実行する。想定所要時間は 30〜90 分。
-- 評価: 学習中 `val_loss` / `val_cand_fire_acc` / `val_target_acc` / `val_ships_acc` を H1〜H3 と比較し、ローカル self-play 10 戦の挙動を baseline_v1 相手に確認する。
-- replay 分析: 代表的な勝敗または loss seed を最大 2 試合 Markdown 化し、過剰発射 / no-op 偏り / target 選択の破綻を確認する。
+- targeted tests: `uv run --directory bot pytest tests/pipeline/imitation/case9 -q --no-header -x`
+- import sanity: `IL_CASE9_HEAD_MODE=template_ships` で agent import
+- 1 episode smoke: `il_v9_template_ships` vs `baseline_v1`
+- 学習: RunPod で `case9_template_ships` を実行。必要なら `case9_three_head` / `case9_candidate_ships` も同一 commit で再実行する。
+- 可視化: 各 run の `history.jsonl` / `train.log` から `train_*_acc` / `val_*_acc` / loss 推移を PNG/CSV 化する。
+- ローカル対戦: 各 variant の best.pt を canonical weights に差し替え、`baseline_v1` 相手に 10 ep 実行し、勝敗・平均turn・action発火傾向を比較する。
 
-## リスク / 既知の不確実性
+### スキップする検証
 
-- H1〜H3 がすべて 10 ep = 0/10 のため、dual 化だけでは挙動改善しない可能性が高い。
-- 3-head と candidate head の supervision が競合すると、共通 backbone がどちらにも中途半端に最適化される可能性がある。
-- 推論で candidate 側のみ使う場合、3-head は補助表現学習としてしか効かない。改善が見えた場合は H5 または follow-up で inference blend を切り分ける。
+- Kaggle publicScore は引用しない。
+- skill rating は使わない。
+- 300 対戦は行わない。
+- n<300 のローカル対戦だけでは採否を確定しない。
+
+## 成功/観測基準
+
+| 観測 | 意味 |
+|---|---|
+| `template_ships` の `val_template_fire_acc` が 3-head/candidate系より高い | no-opをtemplate分類に内包する方が fire判断に有利 |
+| `candidate_ships` の `val_cand_fire_acc` が高いが対戦挙動が悪い | 候補分類精度と実行policy品質の乖離 |
+| `3-head` が平均turnで粘る | from head の保守的fire判断が防御寄りに働く可能性 |
+| 3者とも10戦0勝 | 現行backbone/headだけでは baseline_v1 を超える証拠なし。n<300なので inconclusive |
+
+## リスク
+
+- A/B は既存 run を流用すると commit差が残る。完全比較が必要なら再学習する。
+- `template_ships` は no-op 多数派に寄り、fire recall が低くなる可能性がある。
+- agent loader は現状 `weights.pt` を読むため、ローカル対戦時は variant ごとに一時的に `weights.pt` を差し替える必要がある。

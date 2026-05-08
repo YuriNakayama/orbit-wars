@@ -183,6 +183,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "bot/pipeline/imitation/case9/policy/weights_candidate_ships.pt"
         ),
     },
+    "case9_template_ships": {
+        "stage": "train_imitation_case9_template_ships",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_template_ships.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case9/policy/weights_template_ships.pt"
+        ),
+    },
     "case9_dual": {
         "stage": "train_imitation_case9_dual",
         "train_module": "pipeline.imitation.case9.training.train",
@@ -209,7 +220,8 @@ def _case_subdir(case: str) -> str:
     """Map a registry key to the on-disk case subdirectory.
 
     case9 has head variants registered as separate keys (case9_three_head /
-    case9_candidate / case9_candidate_ships / case9_dual) but they all share the same
+    case9_candidate / case9_candidate_ships / case9_template_ships /
+    case9_dual) but they all share the same
     `data/output/models/imitation/case9/` tree on disk (same training
     pipeline, different head_mode). Strip the `_<variant>` suffix.
     """

@@ -65,6 +65,14 @@ def test_forward_shape(head_mode: str) -> None:
         assert out.ships_logits.shape == (2, MAX_PLANETS, cfg.ships_buckets)
         assert out.from_logits is None
         assert out.ship_pred is None
+    elif head_mode == "template_ships":
+        assert out.target_logits is not None
+        assert out.ships_logits is not None
+        assert out.target_logits.shape == (2, MAX_PLANETS, NUM_TEMPLATES)
+        assert out.ships_logits.shape == (2, MAX_PLANETS, cfg.ships_buckets)
+        assert out.from_logits is None
+        assert out.candidate_logits is None
+        assert out.ship_pred is None
     else:  # dual
         assert out.from_logits is not None
         assert out.target_logits is not None

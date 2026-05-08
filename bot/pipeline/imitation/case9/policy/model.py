@@ -4,6 +4,7 @@ config の `head_mode` で 3 variant を切り替え:
   - "three_head":      from + target + ships (case7 流)
   - "candidate":       per-source × CAND_K categorical (case8 流) + SmoothL1 ship_pred
   - "candidate_ships": candidate categorical + 4-bucket ships_logits hybrid
+  - "template_ships":  template categorical incl no-op + ships bucket
   - "dual":            3-head + candidate, trained with blended loss
 
 Backbone (Set Transformer ISAB×3 + PMA + global concat) は共通。
@@ -21,10 +22,17 @@ from .featurizer import GLOBAL_FEAT_DIM, MAX_PLANETS, PLANET_FEAT_DIM
 from .heads.backbone import BackboneConfig, SetTransformerBackbone
 from .heads.candidate import CandidateHead
 from .heads.candidate_ships import CandidateShipsHead
+from .heads.template_ships import TemplateShipsHead
 from .heads.three_head import ThreeHead
 from .types import BatchFeatures, PolicyOutput
 
-SUPPORTED_HEAD_MODES = ("three_head", "candidate", "candidate_ships", "dual")
+SUPPORTED_HEAD_MODES = (
+    "three_head",
+    "candidate",
+    "candidate_ships",
+    "template_ships",
+    "dual",
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,12 @@ class Case9Policy(nn.Module):
                 ships_buckets=self.cfg.ships_buckets,
                 head_dropout=self.cfg.head_dropout,
             )
+        elif self.cfg.head_mode == "template_ships":
+            self.head_template_ships = TemplateShipsHead(
+                hidden=self.cfg.hidden,
+                attn_heads=self.cfg.attn_heads,
+                ships_buckets=self.cfg.ships_buckets,
+            )
         else:  # dual
             self.head_three = ThreeHead(
                 hidden=self.cfg.hidden,
@@ -123,6 +137,11 @@ class Case9Policy(nn.Module):
                 h, ctx, batch.candidate_feats, batch.candidate_mask
             )
             return PolicyOutput(candidate_logits=cand_logits, ships_logits=ships_logits)
+        if self.cfg.head_mode == "template_ships":
+            target_logits, ships_logits = self.head_template_ships(
+                h_with_ctx, h, batch.template_ctx, batch.planet_mask
+            )
+            return PolicyOutput(target_logits=target_logits, ships_logits=ships_logits)
 
         from_logits, target_logits, ships_logits = self.head_three(
             h_with_ctx,

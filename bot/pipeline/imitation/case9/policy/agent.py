@@ -8,6 +8,7 @@ process across matches).
   - three_head      → weights_three_head.pt
   - candidate       → weights_candidate.pt
   - candidate_ships → weights_candidate_ships.pt
+  - template_ships  → weights_template_ships.pt
   - dual            → weights_dual.pt (candidate decode + 3-head auxiliary)
 The canonical submission weight is `weights.pt` (a copy of the chosen variant).
 The variant is read from the env var `IL_CASE9_HEAD_MODE` (default: candidate).

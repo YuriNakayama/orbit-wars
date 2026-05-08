@@ -40,6 +40,7 @@ from pipeline.imitation.case9.training.losses import (
     compute_candidate_ships_loss,
     compute_dual_head_loss,
     compute_loss,
+    compute_template_ships_loss,
     compute_three_head_loss,
 )
 
@@ -158,6 +159,11 @@ _METRIC_KEY_MAP: dict[str, str] = {
     "val_from_acc": "from_acc",
     "val_target_acc": "target_acc",
     "val_ships_acc": "ships_acc",
+    # template_ships metrics
+    "val_template_loss": "template_loss",
+    "val_template_acc": "template_acc",
+    "val_template_noop_acc": "template_noop_acc",
+    "val_template_fire_acc": "template_fire_acc",
 }
 
 
@@ -266,6 +272,22 @@ def _compute_loss_dispatch(
             "ships_loss": float(rep_cs.ships_loss.item()),
             "ships_acc": rep_cs.ships_acc,
         }
+    if head_mode == "template_ships":
+        rep_ts = compute_template_ships_loss(
+            output,  # type: ignore[arg-type]
+            target_per_src=batch.target_per_src.to(device, non_blocking=True),
+            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
+            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+        )
+        return rep_ts.total, {
+            "total": float(rep_ts.total.detach().item()),
+            "template_loss": float(rep_ts.template_loss.item()),
+            "template_acc": rep_ts.template_acc,
+            "template_noop_acc": rep_ts.template_noop_acc,
+            "template_fire_acc": rep_ts.template_fire_acc,
+            "ships_loss": float(rep_ts.ships_loss.item()),
+            "ships_acc": rep_ts.ships_acc,
+        }
     if head_mode == "dual":
         rep_d = compute_dual_head_loss(
             output,  # type: ignore[arg-type]
@@ -363,7 +385,12 @@ def _run_epoch(
                 elapsed = time.monotonic() - started
                 rate = n_batches / elapsed if elapsed > 0 else 0.0
                 eta = (n_total - n_batches) / rate if rate > 0 else float("inf")
-                acc_key = "from_acc" if head_mode == "three_head" else "cand_acc"
+                if head_mode == "three_head":
+                    acc_key = "from_acc"
+                elif head_mode == "template_ships":
+                    acc_key = "template_acc"
+                else:
+                    acc_key = "cand_acc"
                 running_acc_val = totals.get(acc_key, 0.0) / max(1, n_batches)
                 logger.info(
                     json.dumps(
@@ -672,6 +699,19 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                     log_row[f"train_{k}"] = round(train_metrics[k], 4)
                 if k in val_metrics:
                     log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        elif head_mode == "template_ships":
+            for k in (
+                "template_loss",
+                "template_acc",
+                "template_noop_acc",
+                "template_fire_acc",
+                "ships_loss",
+                "ships_acc",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
         else:  # candidate
             for k in (
                 "cand",
@@ -757,9 +797,12 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
         if scheduler is not None:
             scheduler.step()
-            primary_acc_key = (
-                "from_acc" if head_mode == "three_head" else "cand_fire_acc"
-            )
+            if head_mode == "three_head":
+                primary_acc_key = "from_acc"
+            elif head_mode == "template_ships":
+                primary_acc_key = "template_fire_acc"
+            else:
+                primary_acc_key = "cand_fire_acc"
             primary_acc_val = val_metrics.get(primary_acc_key, 0.0)
             _stamp(
                 f"epoch={epoch} done train_total={train_metrics['total']:.2f} "

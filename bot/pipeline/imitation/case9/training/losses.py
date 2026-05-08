@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from pipeline.imitation.case9.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case9.policy.types import PolicyOutput
 
 
@@ -280,6 +281,18 @@ class CandidateShipsLossReport:
     fire_count: int
 
 
+@dataclass(frozen=True)
+class TemplateShipsLossReport:
+    total: torch.Tensor
+    template_loss: torch.Tensor
+    ships_loss: torch.Tensor
+    template_acc: float
+    template_noop_acc: float
+    template_fire_acc: float
+    ships_acc: float
+    fire_count: int
+
+
 def compute_candidate_ships_loss(
     output: PolicyOutput,
     cand_slot_per_src: torch.Tensor,  # (B, P) int64; -1 = unused
@@ -371,6 +384,96 @@ def compute_candidate_ships_loss(
         cand_acc=cand_acc,
         cand_noop_acc=cand_noop_acc,
         cand_fire_acc=cand_fire_acc,
+        ships_acc=ships_acc,
+        fire_count=fire_count,
+    )
+
+
+def compute_template_ships_loss(
+    output: PolicyOutput,
+    target_per_src: torch.Tensor,  # (B, P) int64; -1 = no-op / unused
+    ships_per_src: torch.Tensor,  # (B, P) int64; -1 = unused (fired only)
+    my_planet_mask: torch.Tensor,  # (B, P) bool
+    template_w: float = 1.0,
+    ships_w: float = 0.5,
+    label_smoothing: float = 0.1,
+) -> TemplateShipsLossReport:
+    """Template categorical incl no-op + ships 4-bucket categorical.
+
+    Unlike `three_head`, no-op/fire is represented directly as the final
+    template class.  This makes it structurally comparable with
+    `candidate_ships`, where slot 0 is no-op.
+    """
+    device = my_planet_mask.device
+    zero = torch.zeros((), device=device)
+
+    assert output.target_logits is not None
+    assert output.ships_logits is not None
+
+    if not my_planet_mask.any():
+        return TemplateShipsLossReport(
+            total=zero,
+            template_loss=zero,
+            ships_loss=zero,
+            template_acc=0.0,
+            template_noop_acc=0.0,
+            template_fire_acc=0.0,
+            ships_acc=0.0,
+            fire_count=0,
+        )
+
+    noop_id = NUM_TEMPLATES - 1
+    template_labels = torch.where(
+        target_per_src >= 0,
+        target_per_src,
+        torch.full_like(target_per_src, noop_id),
+    )
+    b_idx, s_idx = my_planet_mask.nonzero(as_tuple=True)
+    tmpl_logits = output.target_logits[b_idx, s_idx]
+    tmpl_labels = template_labels[b_idx, s_idx]
+    template_loss = nn.functional.cross_entropy(
+        tmpl_logits, tmpl_labels, label_smoothing=label_smoothing
+    )
+    with torch.no_grad():
+        pred = tmpl_logits.argmax(dim=-1)
+        match = (pred == tmpl_labels).float()
+        template_acc = float(match.mean().item())
+        is_noop = tmpl_labels == noop_id
+        is_fire = ~is_noop
+        n_noop = int(is_noop.sum().item())
+        n_fire = int(is_fire.sum().item())
+        template_noop_acc = float(match[is_noop].mean().item()) if n_noop else 0.0
+        template_fire_acc = float(match[is_fire].mean().item()) if n_fire else 0.0
+
+    ships_valid = my_planet_mask & (ships_per_src != -1)
+    fire_count = 0
+    if ships_valid.any():
+        sb_idx, ss_idx = ships_valid.nonzero(as_tuple=True)
+        ships_logits_sel = output.ships_logits[sb_idx, ss_idx]
+        ships_labels = ships_per_src[sb_idx, ss_idx]
+        ships_loss = nn.functional.cross_entropy(
+            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+        )
+        with torch.no_grad():
+            ships_acc = float(
+                (ships_logits_sel.argmax(dim=-1) == ships_labels)
+                .float()
+                .mean()
+                .item()
+            )
+            fire_count = int(ships_valid.sum().item())
+    else:
+        ships_loss = zero
+        ships_acc = 0.0
+
+    total = template_w * template_loss + ships_w * ships_loss
+    return TemplateShipsLossReport(
+        total=total,
+        template_loss=template_loss.detach(),
+        ships_loss=ships_loss.detach(),
+        template_acc=template_acc,
+        template_noop_acc=template_noop_acc,
+        template_fire_acc=template_fire_acc,
         ships_acc=ships_acc,
         fire_count=fire_count,
     )

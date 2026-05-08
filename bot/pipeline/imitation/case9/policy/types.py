@@ -1,10 +1,11 @@
 """Frozen dataclasses for imitation/case9.
 
-case9 supports 3 head variants in a single dir (head_mode flag):
-  - three_head:    case3/case7 流の (from + target + ships) heads
-  - candidate:     case4/case8 流の per-source candidate categorical
-- candidate_ships: candidate + learned ships head の hybrid
-- dual:          3-head + candidate を同時に返す補助学習 variant
+case9 supports multiple head variants in a single dir (head_mode flag):
+  - three_head:       case3/case7 流の (from + target + ships) heads
+  - candidate:        case4/case8 流の per-source candidate categorical
+  - candidate_ships:  candidate + learned ships head の hybrid
+  - template_ships:   template categorical incl no-op + learned ships head
+  - dual:             3-head + candidate を同時に返す補助学習 variant
 
 `BatchFeatures` carries both `template_ctx` (3-head 用) and `candidate_feats /
 candidate_mask / candidate_pid` (candidate 用) なので、 head_mode に応じて
@@ -40,11 +41,10 @@ class PolicyOutput:
 
     from_logits: torch.Tensor | None = None  # (B, P) — three_head / dual
     target_logits: torch.Tensor | None = (
-        None  # (B, P, NUM_TEMPLATES) — three_head / dual
+        None  # (B, P, NUM_TEMPLATES) — three_head / template_ships / dual
     )
-    ships_logits: torch.Tensor | None = (
-        None  # (B, P, ships_buckets) — three_head / candidate_ships / dual
-    )
+    # (B, P, ships_buckets) — three_head / candidate_ships / template_ships / dual
+    ships_logits: torch.Tensor | None = None
     candidate_logits: torch.Tensor | None = (
         None  # (B, P, CAND_K) — candidate / candidate_ships / dual
     )
