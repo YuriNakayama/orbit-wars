@@ -1,33 +1,12 @@
 ---
 name: experiment-plan
 description: >
-  Hypothesis-management decision maker and per-iteration `iterN_plan.md`
-  writer for Orbit Wars experiments under `backend/pipeline/`. Reads the
-  case's `hypotheses.md` to decide which mode the next iteration should run
-  in: (a) **list-consume** when pending hypotheses exist (pick by priority
-  and plan it), (b) **deepen** when no pending hypotheses but the previous
-  result invites a follow-up (auto-append a new hypothesis to the list and
-  plan it), (c) **broaden** when recent results show the genre is poor-fit
-  (set `hypotheses.md` state to `paused` and recommend re-running
-  `experiment-hypothesize` — no plan written this turn). After deciding,
-  for modes (a) and (b) writes one `iterN_plan.md` under
-  `docs/experiment/{family}/{yyyymmdd}_case{N}_{topic}/`. Reads existing
-  case code for a reality check, runs a minimal hearing on metric / scope,
-  and honors the case's `hypotheses.md > 実施しない検証 / 評価 (skip list)`
-  so that the plan's 検証方法 section is automatically shortened (e.g.
-  300-対戦 skip → ローカル評価を loss curve のみに置換). Stops at the plan;
-  does NOT implement code, push commits, or launch GPU training. Does NOT
-  enumerate the **initial** hypotheses (that is `experiment-hypothesize`'s
-  job). Does NOT do open-ended web research.
-  Use whenever the user types `/experiment-plan`, asks for a single
-  iteration's plan ("次の iter の plan 作って", "H3 の plan.md だけ書いて",
-  "imitation/case1 で dropout を 0.3 に上げる plan を書きたい",
-  "rulebase/case2 改良の plan.md だけ先に書いて"), or hands a 1-line
-  hypothesis. Don't trigger this skill for initial hypothesis brainstorming
-  from scratch (use `experiment-hypothesize`), full-pipeline execution
-  including RunPod training (use `experiment-execution`), result
-  interpretation after a run finishes (use `experiment-analysis`), or
-  large-scale multi-domain feature planning (use `feature-plan`).
+  Single-iteration planning skill for Orbit Wars experiments. Use for
+  /experiment-plan, one-line hypotheses, or requests to write the next
+  iterN_plan.md. Reads hypotheses.md, chooses list-consume / deepen / broaden,
+  honors skip-list limits, and writes only the plan. Does not implement,
+  train, analyze finished results, or enumerate initial hypotheses.
+
 ---
 
 # Experiment Plan Skill (Orbit Wars)

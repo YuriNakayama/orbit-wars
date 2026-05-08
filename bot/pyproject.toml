@@ -23,6 +23,7 @@ dependencies = [
     "orbit-wars-vendor",
     "runpod>=1.7.0",
     "psutil>=6.0.0",
+    "scikit-learn>=1.8.0",
 ]
 
 [tool.uv.sources]
@@ -39,7 +40,6 @@ build-backend = "hatchling.build"
 dev = [
     { include-group = "lint" },
     { include-group = "env" },
-    "scikit-learn>=1.8.0",
 ]
 lint = [
     "mypy>=1.15.0",
@@ -124,6 +124,11 @@ max-complexity = 5
 "pipeline/imitation/case8/evaluation/eval_vs_baseline.py" = ["B008"]
 "pipeline/imitation/case8/policy/timeline.py" = ["E501"]
 "pipeline/imitation/case8/policy/featurizer.py" = ["E501"]
+"pipeline/imitation/case9/training/preprocess.py" = ["B008", "E501"]
+"pipeline/imitation/case9/training/train.py" = ["B008"]
+"pipeline/imitation/case9/evaluation/eval_vs_baseline.py" = ["B008"]
+"pipeline/imitation/case9/policy/timeline.py" = ["E501"]
+"pipeline/imitation/case9/policy/featurizer.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/pipeline/**/test_*.py" = ["E501"]
 "tests/pipeline/rulebase/case1/snapshots/**" = ["ALL"]
@@ -237,6 +242,18 @@ module = [
     "pipeline.imitation.case8.training.train",
     "pipeline.imitation.case8.evaluation.eval_vs_baseline",
     "pipeline.imitation.case8.evaluation.calibrate_heads",
+    "pipeline.imitation.case8.evaluation.tune_thresholds",
+    "pipeline.imitation.case8.evaluation.iter6_visualize",
+    "pipeline.imitation.case8.evaluation.diagnose_weights",
+    "pipeline.imitation.case9.training.preprocess",
+    "pipeline.imitation.case9.training.train",
+    "pipeline.imitation.case9.evaluation.eval_vs_baseline",
+    "pipeline.imitation.case9.evaluation.calibrate_heads",
+    "pipeline.imitation.case9.evaluation.tune_thresholds",
+    "pipeline.imitation.case9.evaluation.iter6_visualize",
+    "pipeline.imitation.case9.evaluation.diagnose_weights",
+    "pipeline.imitation.case9.evaluation.plot_curves",
+    "pipeline.imitation.case9.evaluation.replay_match",
 ]
 ignore_errors = true
 

@@ -57,6 +57,7 @@ def _split_count_for_seed(seed: int) -> tuple[int, int]:
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 def test_fleet_split_rate_stays_below_threshold() -> None:
     """自己対戦の 1 エピソード平均分割件数が閾値以下であること。
 

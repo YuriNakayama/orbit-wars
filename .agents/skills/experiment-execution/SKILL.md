@@ -1,26 +1,12 @@
 ---
 name: experiment-execution
 description: >
-  Execution runner for Orbit Wars experiments under `backend/pipeline/`. Takes
-  a single hypothesis (one line in `hypotheses.md` or one `iterN_plan.md`) and
-  drives the full cycle inline in the main session: case implementation →
-  local smoke test (1-episode self-play, mandatory) → `dev/test-backend` →
-  push & RunPod GPU launch → in-flight monitoring (progress / steps / loss /
-  GPU·CPU·memory) → on failure, stop & terminate the pod and relaunch
-  (auto-recover) → evaluation → `iterN_result.md`. Honors the
-  `hypotheses.md` skip list (e.g. `300 対戦 skip` → evaluation is reduced to
-  training-log only, `smoke skip` → skip the 1-ep self-play, `RunPod 不使用` →
-  full local pipeline). Use whenever the user types `/experiment-execution`,
-  or asks to run / execute / iterate / kick off an experiment, train a new
-  model, launch a RunPod run, propose a new case, or write up an experiment
-  result — even if they don't explicitly say "execute", phrases like
-  "imitation/case1 で dropout を試したい", "rulebase/case2 を改良して回したい",
-  "runpod で学習を回して結果まとめて", "新しい case を切って学習させたい",
-  "iter5_plan.md に従って実装して回して", "H3 を実行して" all count. Don't
-  trigger this skill for hypothesis-only discussion (use `experiment-plan` /
-  `experiment-hypothesize`), interactive result interpretation after a run
-  finishes (use `experiment-analysis`), read-only code review, plain bug
-  fixes, or Kaggle submission requests.
+  Full execution runner for one Orbit Wars experiment hypothesis or
+  iterN_plan.md. Use for /experiment-execution or requests to run, train,
+  launch RunPod, implement a case change, execute a plan, monitor/recover a
+  run, evaluate, and write iterN_result.md. Not for planning-only, replay
+  analysis, code review, bug fixes, Kaggle submissions, or loop orchestration.
+
 ---
 
 # Experiment Execution Skill (Orbit Wars)

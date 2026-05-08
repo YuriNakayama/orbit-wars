@@ -1,23 +1,12 @@
 ---
 name: experiment-hypothesize
 description: >
-  Hypothesis-list builder for Orbit Wars experiments under
-  `backend/pipeline/{imitation|rulebase|reinforce}/case<N>/`. Runs **once** per
-  family / case to enumerate the hypotheses worth testing for that genre via
-  code investigation + (opt-in) web research + a structured hearing, and emits
-  `docs/experiment/{family}/{yyyymmdd}_case{N}_{topic}/hypotheses.md` as a
-  checklist together with a skip list (`実施しない検証 / 評価`). The downstream
-  `experiment` (loop driver) treats this `hypotheses.md` as the single source
-  of truth. Read-only on code: does NOT implement, NOT push, NOT launch RunPod,
-  NOT write `iterN_plan.md`. Use whenever the user types
-  `/experiment-hypothesize`, or asks to enumerate / brainstorm / organize
-  hypotheses for a case — phrases like "case1 の仮説をリストアップして",
-  "dropout 周りで試すべき仮説を網羅したい", "新しい case の調査方針を整理したい",
-  "hypotheses.md を作りたい", "ジャンル単位でやることを並べて" all count.
-  Don't trigger this skill for single-iteration planning of one hypothesis
-  (use `experiment-plan`), full-pipeline execution (use `experiment-execution`),
-  result interpretation (use `experiment-analysis`), or multi-iteration loop
-  orchestration (use `experiment`).
+  Hypothesis-list builder for Orbit Wars experiment cases. Use for
+  /experiment-hypothesize or requests to brainstorm, enumerate, organize, or
+  create hypotheses.md for a case. Investigates code and optional research,
+  conducts a structured hearing, and writes a checklist plus skip list. Does
+  not implement, write iter plans, train, analyze results, or run loops.
+
 ---
 
 # Experiment Hypothesize Skill (Orbit Wars)
