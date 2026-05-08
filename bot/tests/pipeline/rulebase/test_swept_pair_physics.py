@@ -16,7 +16,9 @@ def test_first_engine_hit_turn_uses_swept_pair_collision(case: str) -> None:
 
     src = planet_cls(99, 0, 5.0, -4.1, 1.0, 100, 0)
     target = planet_cls(7, -1, 0.0, 0.0, 1.0, 10, 0)
-    comets = [{"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}]
+    comets = [
+        {"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}
+    ]
 
     hit_turn = physics._first_engine_hit_turn(
         src=src,

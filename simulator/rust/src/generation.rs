@@ -208,6 +208,7 @@ fn overlaps_existing_simple(existing: &[Planet], temp: &[Planet]) -> bool {
     false
 }
 
+#[allow(dead_code)]
 fn overlaps_with_orbital_check(existing: &[Planet], temp: &[Planet]) -> bool {
     for tp in temp {
         let tp_orbital = distance((tp.x, tp.y), (CENTER, CENTER));

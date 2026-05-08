@@ -1,0 +1,79 @@
+#!/bin/bash
+# Kaggle Orbit Wars リーダーボード上位チームのエピソードを取得し DVC にコミット。
+#
+# `data/lake/kaggle_episodes/matches.dvc` を最新の S3 cache と同期させ、Phase 1
+# (plan) → Phase 2 (fetch) を実行する。途中で SIGTERM / SIGINT / 例外が発生
+# しても、scrape-fetch の finalize-cmd によりそれまでに永続化した分が
+# `dvc commit && dvc push` されるよう保証する。
+#
+# Usage:
+#   dev/scrape-kaggle [--top N] [--limit-per-team K] [--rate N] [--workers W]
+#                     [--no-push] [-- <python args>]
+#
+# 環境変数:
+#   KAGGLE_USERNAME / KAGGLE_KEY
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (DVC remote 用、`bot/.env` 参照可)
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+TOP="${SCRAPE_TOP:-120}"
+MODES="${SCRAPE_MODES:-1v1,ffa4}"
+LIMIT_PER_TEAM="${SCRAPE_LIMIT_PER_TEAM:-0}"
+WORKERS="${SCRAPE_WORKERS:-6}"
+RATE_CAPACITY="${SCRAPE_RATE_CAPACITY:-45}"
+RATE_WINDOW="${SCRAPE_RATE_WINDOW:-60}"
+CHECKPOINT_EVERY="${SCRAPE_CHECKPOINT_EVERY:-1000}"
+SKIP_PUSH="${SCRAPE_SKIP_PUSH:-0}"
+PLAN_PATH="${SCRAPE_PLAN_PATH:-/tmp/scrape_plan.json}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --top) TOP="$2"; shift 2 ;;
+    --modes) MODES="$2"; shift 2 ;;
+    --limit-per-team) LIMIT_PER_TEAM="$2"; shift 2 ;;
+    --workers) WORKERS="$2"; shift 2 ;;
+    --rate) RATE_CAPACITY="$2"; shift 2 ;;
+    --rate-window) RATE_WINDOW="$2"; shift 2 ;;
+    --checkpoint-every) CHECKPOINT_EVERY="$2"; shift 2 ;;
+    --no-push) SKIP_PUSH=1; shift ;;
+    --) shift; break ;;
+    *) echo "Unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+UV_RUN="uv run --project bot"
+
+# 1. 既存データを S3 から pull (skipped_existing を構築)
+echo "== Step 1: dvc pull existing matches =="
+$UV_RUN dvc pull data/lake/kaggle_episodes/matches.dvc
+
+# 2. Phase 1: plan
+echo "== Step 2: plan phase =="
+plan_args=(
+  --plan-out "${PLAN_PATH}"
+  --top "${TOP}"
+  --modes "${MODES}"
+)
+if [ "${LIMIT_PER_TEAM}" -gt 0 ]; then
+  plan_args+=(--limit-per-team "${LIMIT_PER_TEAM}")
+fi
+$UV_RUN python -m dataset kaggle scrape-plan "${plan_args[@]}"
+
+# 3. finalize/checkpoint command (DVC commit + push)
+DVC_CMD="$UV_RUN dvc commit -f --no-relink data/lake/kaggle_episodes/matches.dvc"
+if [ "${SKIP_PUSH}" -ne 1 ]; then
+  DVC_CMD="${DVC_CMD} && $UV_RUN dvc push"
+fi
+
+# 4. Phase 2: fetch with periodic checkpoint + finalize on exit
+echo "== Step 3: fetch phase (checkpoint every ${CHECKPOINT_EVERY}, finalize on exit) =="
+$UV_RUN python -m dataset kaggle scrape-fetch \
+  --plan-in "${PLAN_PATH}" \
+  --workers "${WORKERS}" \
+  --rate-capacity "${RATE_CAPACITY}" \
+  --rate-window "${RATE_WINDOW}" \
+  --checkpoint-every "${CHECKPOINT_EVERY}" \
+  --checkpoint-cmd "${DVC_CMD}" \
+  --finalize-cmd "${DVC_CMD}"
