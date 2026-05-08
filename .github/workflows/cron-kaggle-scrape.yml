@@ -80,8 +80,8 @@ jobs:
         run: |
           uv run --project bot python -m dataset kaggle scrape-fetch \
             --plan-in /tmp/scrape_plan.json \
-            --workers 8 \
-            --rate-capacity 60 \
+            --workers 6 \
+            --rate-capacity 45 \
             --rate-window 60 \
             --checkpoint-every 1000 \
             --checkpoint-cmd "uv run --project bot dvc commit -f --no-relink data/lake/kaggle_episodes/matches.dvc && uv run --project bot dvc push" \
