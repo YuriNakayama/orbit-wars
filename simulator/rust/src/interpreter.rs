@@ -16,7 +16,7 @@
 //!     `env.steps` before each call).
 
 use crate::combat::resolve_combats;
-use crate::physics::{advance_comets, advance_fleets, finalize_motion, rotate_planets};
+use crate::physics::{advance_fleets, apply_planet_paths, compute_planet_paths, finalize_motion};
 use crate::state::{Fleet, Move, OrbitWarsState};
 
 /// Run a single turn against `state` with the given per-player actions.
@@ -56,18 +56,14 @@ pub fn step(state: &mut OrbitWarsState, actions: &[Vec<Move>]) {
         }
     }
 
-    // Phase 2: fleet movement (with continuous collision against planets).
-    let mut outcome = advance_fleets(state);
+    // Phase 2: compute each planet's end-of-tick path before fleet movement.
+    let (planet_paths, expired_comets) = compute_planet_paths(state);
 
-    // Phase 3: planet movement + sweep, then comet advance + sweep.
-    rotate_planets(state, &mut outcome);
-    // Skip comet advance entirely when no comet groups exist (typical for
-    // turns 0-49 and the 70-150 / 170-250 / ... gaps between spawns).
-    let expired_comets = if state.comets.is_empty() {
-        Vec::new()
-    } else {
-        advance_comets(state, &mut outcome)
-    };
+    // Phase 3: fleet movement with swept-pair planet collision detection.
+    let outcome = advance_fleets(state, &planet_paths);
+
+    // Phase 4: apply planet movement (collisions were already resolved).
+    apply_planet_paths(state, &planet_paths);
 
     // Phase 5: combat resolution. Must run BEFORE finalize_motion because
     // combat reads from the (still un-pruned) fleet vector through the

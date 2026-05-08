@@ -122,21 +122,7 @@ pub fn generate_planets(
         }
     }
 
-    // Phase 1.5: one orbiting group on the y=x diagonal
-    for att in phase15.iter() {
-        if att.orbital_skip {
-            continue;
-        }
-        let r = 1.0 + (att.prod as f64).ln();
-        let x = CENTER + att.orbital_r * (std::f64::consts::PI / 4.0).cos();
-        let y = CENTER + att.orbital_r * (std::f64::consts::PI / 4.0).sin();
-        let temp = mirror4(id_counter, x, y, r, att.ships, att.prod);
-        if !overlaps_with_orbital_check(&planets, &temp) {
-            planets.extend(temp);
-            id_counter += 4;
-            break;
-        }
-    }
+    let _ = phase15;
 
     // Phase 2: fill remaining
     let mut has_orbiting = false;
@@ -175,8 +161,8 @@ fn mirror4(id0: i64, x: f64, y: f64, r: f64, ships: i64, prod: i64) -> Vec<Plane
         Planet {
             id: id0,
             owner: -1,
-            x,
-            y,
+            x: y,
+            y: x,
             radius: r,
             ships,
             production: prod,
@@ -202,8 +188,8 @@ fn mirror4(id0: i64, x: f64, y: f64, r: f64, ships: i64, prod: i64) -> Vec<Plane
         Planet {
             id: id0 + 3,
             owner: -1,
-            x: BOARD_SIZE - x,
-            y: BOARD_SIZE - y,
+            x: BOARD_SIZE - y,
+            y: BOARD_SIZE - x,
             radius: r,
             ships,
             production: prod,
@@ -354,10 +340,10 @@ fn try_attempt(
         }
         // 4 symmetric points
         let sym_pts = [
-            (cx, cy),
+            (cy, cx),
             (BOARD_SIZE - cx, cy),
             (cx, BOARD_SIZE - cy),
-            (BOARD_SIZE - cx, BOARD_SIZE - cy),
+            (BOARD_SIZE - cy, BOARD_SIZE - cx),
         ];
         // Static planets
         for planet in &static_planets {
@@ -410,13 +396,13 @@ pub fn generate_comet_paths(
             initial_planets,
             comet_planet_ids,
         ) {
-            // 4 symmetric paths.
-            let p0: Vec<[f64; 2]> = visible.iter().map(|&(x, y)| [x, y]).collect();
+            // 4 rotationally symmetric paths.
+            let p0: Vec<[f64; 2]> = visible.iter().map(|&(x, y)| [y, x]).collect();
             let p1: Vec<[f64; 2]> = visible.iter().map(|&(x, y)| [BOARD_SIZE - x, y]).collect();
             let p2: Vec<[f64; 2]> = visible.iter().map(|&(x, y)| [x, BOARD_SIZE - y]).collect();
             let p3: Vec<[f64; 2]> = visible
                 .iter()
-                .map(|&(x, y)| [BOARD_SIZE - x, BOARD_SIZE - y])
+                .map(|&(x, y)| [BOARD_SIZE - y, BOARD_SIZE - x])
                 .collect();
             return Some([p0, p1, p2, p3]);
         }

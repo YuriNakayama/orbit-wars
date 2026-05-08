@@ -34,19 +34,12 @@ backend takes effect on the next `env.step` without re-importing.
 
 ## Backend = `rust` semantics (hybrid)
 
-The Rust port does NOT implement initial planet generation
-(`generate_planets`); we delegate the **generation-touching turns** back
-to Python so the global `random` cursor stays in lock-step with upstream:
-
-  1. The very first step (planets are still empty) — runs `generate_planets`
-     in Python.
-  2. Each step where `(obs.step + 1) in COMET_SPAWN_STEPS` (i.e. steps
-     49 / 149 / 249 / 349 / 449 — the turn before each spawn) — pre-samples
-     attempts in Python and dispatches to Rust `fast_generate_comet_paths`.
-
-All other steps go through the Rust interpreter. This costs ~6 Python
-steps per 500-turn episode (~1.2%) when the Rust backend is active and
-preserves full upstream compatibility.
+The Rust backend delegates bootstrap generation (`generate_planets`) to
+the vendored Python simulator so it follows the upstream deterministic
+seed contract exactly. Comet spawn turns use the same per-spawn seeded RNG
+sequence as upstream and dispatch the path filtering math to Rust via
+`fast_generate_comet_paths`. All other steps go through the Rust
+interpreter.
 """
 
 from __future__ import annotations
@@ -223,6 +216,9 @@ def _spawn_comet_via_rust(state: Any, env: Any) -> bool:
 
     angular_velocity = float(_get_field(obs, "angular_velocity") or 0.0)
     comet_speed = float(env.configuration.cometSpeed)
+    env_info = getattr(env, "info", None) or {}
+    episode_seed = env_info.get("seed", 0) or 0
+    comet_rng = random.Random(f"orbit_wars-comet-{episode_seed}-{spawn_step}")
     initial_planets = list(_get_field(obs, "initial_planets") or [])
     comet_planet_ids = list(_get_field(obs, "comet_planet_ids") or [])
     planets = list(_get_field(obs, "planets") or [])
@@ -234,17 +230,16 @@ def _spawn_comet_via_rust(state: Any, env: Any) -> bool:
     #       perihelion check (continue does NOT consume more random)
     #       phi = random.uniform(pi/6, pi/3)
     # When perihelion < threshold, upstream `continue`s before drawing phi.
-    # We replicate that exactly so the global random cursor lands where
-    # upstream would put it.
+    # We replicate that exactly against the per-spawn deterministic RNG.
     attempts: list[tuple[float, float, float]] = []
     for _ in range(300):
-        e = random.uniform(0.75, 0.93)
-        a = random.uniform(60, 150)
+        e = comet_rng.uniform(0.75, 0.93)
+        a = comet_rng.uniform(60, 150)
         perihelion = a * (1 - e)
         if perihelion < SUN_RADIUS + COMET_RADIUS:
             attempts.append((e, a, 0.0))  # phi is unused; Rust filters by perihelion too
             continue
-        phi = random.uniform(math.pi / 6, math.pi / 3)
+        phi = comet_rng.uniform(math.pi / 6, math.pi / 3)
         attempts.append((e, a, phi))
 
     paths = _rust_generate_comet_paths(
@@ -260,10 +255,10 @@ def _spawn_comet_via_rust(state: Any, env: Any) -> bool:
 
     # Mirror upstream: ship count = min of 4 random.randint(1, 99)
     comet_ships = min(
-        random.randint(1, 99),
-        random.randint(1, 99),
-        random.randint(1, 99),
-        random.randint(1, 99),
+        comet_rng.randint(1, 99),
+        comet_rng.randint(1, 99),
+        comet_rng.randint(1, 99),
+        comet_rng.randint(1, 99),
     )
 
     # Append the new comet group + 4 planets, mutating the same lists the

@@ -40,6 +40,35 @@ def _dist(ax: float, ay: float, bx: float, by: float) -> float:
     return math.hypot(ax - bx, ay - by)
 
 
+def _swept_pair_hit(
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+    p0x: float,
+    p0y: float,
+    p1x: float,
+    p1y: float,
+    radius: float,
+) -> bool:
+    d0x = ax - p0x
+    d0y = ay - p0y
+    dvx = (bx - ax) - (p1x - p0x)
+    dvy = (by - ay) - (p1y - p0y)
+    quad_a = dvx * dvx + dvy * dvy
+    quad_b = 2.0 * (d0x * dvx + d0y * dvy)
+    quad_c = d0x * d0x + d0y * d0y - radius * radius
+    if quad_a < 1e-12:
+        return quad_c <= 0.0
+    disc = quad_b * quad_b - 4.0 * quad_a * quad_c
+    if disc < 0.0:
+        return False
+    sq = math.sqrt(disc)
+    t1 = (-quad_b - sq) / (2.0 * quad_a)
+    t2 = (-quad_b + sq) / (2.0 * quad_a)
+    return t2 >= 0.0 and t1 <= 1.0
+
+
 def is_trajectory_sun_safe(
     launch_x: float,
     launch_y: float,
@@ -160,14 +189,31 @@ def fleet_crosses_other_comet(
         for cid in pids:
             if cid == exclude_planet_id:
                 continue
-            for t in range(turns + 1):
+            prev_cpos = _predict_comet_position(cid, comets, 0)
+            if prev_cpos is None:
+                continue
+            prev_fx = launch_x
+            prev_fy = launch_y
+            for t in range(1, turns + 1):
                 cpos = _predict_comet_position(cid, comets, t)
                 if cpos is None:
-                    continue
+                    break
                 fx = launch_x + dx * speed * t
                 fy = launch_y + dy * speed * t
-                if _dist(fx, fy, cpos[0], cpos[1]) < threshold:
+                if _swept_pair_hit(
+                    prev_fx,
+                    prev_fy,
+                    fx,
+                    fy,
+                    prev_cpos[0],
+                    prev_cpos[1],
+                    cpos[0],
+                    cpos[1],
+                    threshold,
+                ):
                     return True
+                prev_fx, prev_fy = fx, fy
+                prev_cpos = cpos
     return False
 
 

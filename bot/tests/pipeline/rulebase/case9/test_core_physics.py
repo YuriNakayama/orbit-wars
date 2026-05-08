@@ -319,6 +319,35 @@ def _engine_segment_distance(
     return math.hypot(px - projx, py - projy)
 
 
+def _engine_swept_pair_hit(
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+    p0x: float,
+    p0y: float,
+    p1x: float,
+    p1y: float,
+    radius: float,
+) -> bool:
+    d0x = ax - p0x
+    d0y = ay - p0y
+    dvx = (bx - ax) - (p1x - p0x)
+    dvy = (by - ay) - (p1y - p0y)
+    quad_a = dvx * dvx + dvy * dvy
+    quad_b = 2.0 * (d0x * dvx + d0y * dvy)
+    quad_c = d0x * d0x + d0y * d0y - radius * radius
+    if quad_a < 1e-12:
+        return quad_c <= 0.0
+    disc = quad_b * quad_b - 4.0 * quad_a * quad_c
+    if disc < 0.0:
+        return False
+    sq = math.sqrt(disc)
+    t1 = (-quad_b - sq) / (2.0 * quad_a)
+    t2 = (-quad_b + sq) / (2.0 * quad_a)
+    return t2 >= 0.0 and t1 <= 1.0
+
+
 _LAUNCH_OFFSET = 0.1
 
 
@@ -342,12 +371,10 @@ def _engine_replay_hit(
         fx = start_x + cos_a * speed * t
         fy = start_y + sin_a * speed * t
         prev_tx, prev_ty = predict_planet_position(tgt, initial, ang_vel, t - 1)
-        d = _engine_segment_distance(prev_tx, prev_ty, fx_prev, fy_prev, fx, fy)
-        if d < tgt.radius:
-            return True, t
         tx, ty = predict_planet_position(tgt, initial, ang_vel, t)
-        d2 = _engine_segment_distance(fx, fy, prev_tx, prev_ty, tx, ty)
-        if d2 < tgt.radius:
+        if _engine_swept_pair_hit(
+            fx_prev, fy_prev, fx, fy, prev_tx, prev_ty, tx, ty, tgt.radius
+        ):
             return True, t
         fx_prev, fy_prev = fx, fy
     return False, None
