@@ -64,4 +64,4 @@ case9 は **head 設計の最適化** にスコープを絞る。特徴量 / bac
 | 1 | 2026-05-07 | H1 three_head | hypotheses.md | `20260507-023323__...__98ea59d__seed0` | val_target_acc=0.928 / 10ep=0/10 | inconclusive | iter1_result.md |
 | 1 | 2026-05-07 | H2 candidate | hypotheses.md | `20260506-133924__...__a6a7bee__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md |
 | 1 | 2026-05-07 | H3 candidate_ships | hypotheses.md | `20260507-022131__...__ea87185__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md |
-| 2 | 2026-05-08 | H4 head_family_behavior_comparison | iter2_plan.md | 実行中 | template_ships実装中 / A,B既存runあり | 実行中 | iter2_result.md |
+| 2 | 2026-05-08 | H4 head_family_behavior_comparison | iter2_plan.md | local_small only (`ba6228c`) | 3head 0/3 avg265t / cand×ships 0/3 avg164t / template×ships 0/3 avg118t | inconclusive | iter2_result.md |
