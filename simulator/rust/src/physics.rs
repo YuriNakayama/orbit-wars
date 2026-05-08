@@ -167,8 +167,7 @@ pub fn compute_planet_paths(state: &mut OrbitWarsState) -> (Vec<PlanetPath>, Vec
 
     for slot in 0..state.planets.len() {
         let planet_id = state.planets[slot].id;
-        if planet_id < 0 || (planet_id as usize) >= is_comet.len() || is_comet[planet_id as usize]
-        {
+        if planet_id < 0 || (planet_id as usize) >= is_comet.len() || is_comet[planet_id as usize] {
             continue;
         }
         let init_idx = initial_slot[planet_id as usize];
@@ -225,7 +224,10 @@ pub fn compute_planet_paths(state: &mut OrbitWarsState) -> (Vec<PlanetPath>, Vec
 
 /// Phase 3 of the upstream interpreter: advance every fleet by its speed,
 /// then test swept-pair planet hits before bounds and sun checks.
-pub fn advance_fleets(state: &mut OrbitWarsState, planet_paths: &[PlanetPath]) -> FleetMovementOutcome {
+pub fn advance_fleets(
+    state: &mut OrbitWarsState,
+    planet_paths: &[PlanetPath],
+) -> FleetMovementOutcome {
     let combat_lists: Vec<(i64, Vec<usize>)> =
         state.planets.iter().map(|p| (p.id, Vec::new())).collect();
     let fleets_to_remove = vec![false; state.fleets.len()];
