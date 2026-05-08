@@ -1,7 +1,7 @@
 schema: '2.0'
 stages:
   preprocess_imitation_case1:
-    cmd: uv run --directory bot python -m 
+    cmd: uv run --directory bot python -m
       pipeline.imitation.case1.training.preprocess
     deps:
     - path: bot/pipeline/imitation/case1/policy/featurizer.py
@@ -48,7 +48,7 @@ stages:
       md5: 57c2622113bfa081eac1f01251be471a
       size: 21907954
   train_imitation_case1:
-    cmd: uv run --directory bot python -m 
+    cmd: uv run --directory bot python -m
       pipeline.imitation.case1.training.train
     deps:
     - path: bot/pipeline/imitation/case1/policy/model.py
@@ -110,7 +110,7 @@ stages:
       md5: 6e33b5e92f490ad1a06d95d8ca8b3036
       size: 977061
   eval_imitation_case1:
-    cmd: uv run --directory bot python -m 
+    cmd: uv run --directory bot python -m
       pipeline.imitation.case1.evaluation.eval_vs_baseline
     deps:
     - path: bot/pipeline/imitation/case1/evaluation/eval_vs_baseline.py
@@ -133,8 +133,8 @@ stages:
       md5: 64803cc3b27f0b39911d935d2fbd993a
       size: 313
   preprocess_imitation_case8:
-    cmd: uv run --directory bot python -m 
-      pipeline.imitation.case8.training.preprocess --config 
+    cmd: uv run --directory bot python -m
+      pipeline.imitation.case8.training.preprocess --config
       pipeline/imitation/case8/configs/il_case8.yaml
     deps:
     - path: bot/pipeline/imitation/case8/configs/il_case8.yaml
@@ -175,3 +175,132 @@ stages:
       hash: md5
       md5: b87ae24d6903bdc5ef675e9c622280f9
       size: 119285960
+  train_imitation_case9_candidate:
+    cmd: uv run --directory bot python -m
+      pipeline.imitation.case9.training.train --config
+      pipeline/imitation/case9/configs/il_case9_candidate.yaml
+    deps:
+    - path: bot/pipeline/imitation/case9/configs/il_case9_candidate.yaml
+      hash: md5
+      md5: 58b0bff9b8e7fce56d58e8005aa1477b
+      size: 1410
+    - path: bot/pipeline/imitation/case9/policy/heads
+      hash: md5
+      md5: b52a24eefa29c5cc8f4db70b55755c00.dir
+      size: 13568
+      nfiles: 6
+    - path: bot/pipeline/imitation/case9/policy/model.py
+      hash: md5
+      md5: ed51b6ef4d8058e71f85655ab851ebb2
+      size: 6545
+    - path: bot/pipeline/imitation/case9/training/dataset.py
+      hash: md5
+      md5: aa14bcf1260664b56aeced821465a57b
+      size: 14274
+    - path: bot/pipeline/imitation/case9/training/losses.py
+      hash: md5
+      md5: 4241911f45a2d51fd499bf257d01322f
+      size: 18785
+    - path: bot/pipeline/imitation/case9/training/train.py
+      hash: md5
+      md5: 9634db04e296ab327e51ee28a652f1a0
+      size: 37551
+    - path: data/mart/imitation/case9/train.parquet
+      hash: md5
+      md5: 7171edabe7f1915cb3ed1afc74215aad
+      size: 1048245115
+    - path: data/mart/imitation/case9/val.parquet
+      hash: md5
+      md5: 14a483795c40203d245eebfefd91badb
+      size: 135416388
+    outs:
+    - path: bot/pipeline/imitation/case9/policy/weights_candidate.pt
+      hash: md5
+      md5: 35e6463c016c2a35e2bf9c49e03a62b9
+      size: 4593516
+  train_imitation_case9_three_head:
+    cmd: uv run --directory bot python -m
+      pipeline.imitation.case9.training.train --config
+      pipeline/imitation/case9/configs/il_case9_three_head.yaml
+    deps:
+    - path: bot/pipeline/imitation/case9/configs/il_case9_three_head.yaml
+      hash: md5
+      md5: f8ab3fc6598c48c65ed2ab1991fd0823
+      size: 1617
+    - path: bot/pipeline/imitation/case9/policy/heads
+      hash: md5
+      md5: b52a24eefa29c5cc8f4db70b55755c00.dir
+      size: 13568
+      nfiles: 6
+    - path: bot/pipeline/imitation/case9/policy/model.py
+      hash: md5
+      md5: ed51b6ef4d8058e71f85655ab851ebb2
+      size: 6545
+    - path: bot/pipeline/imitation/case9/training/dataset.py
+      hash: md5
+      md5: aa14bcf1260664b56aeced821465a57b
+      size: 14274
+    - path: bot/pipeline/imitation/case9/training/losses.py
+      hash: md5
+      md5: 4241911f45a2d51fd499bf257d01322f
+      size: 18785
+    - path: bot/pipeline/imitation/case9/training/train.py
+      hash: md5
+      md5: 9634db04e296ab327e51ee28a652f1a0
+      size: 37551
+    - path: data/mart/imitation/case9/train.parquet
+      hash: md5
+      md5: 7171edabe7f1915cb3ed1afc74215aad
+      size: 1048245115
+    - path: data/mart/imitation/case9/val.parquet
+      hash: md5
+      md5: 14a483795c40203d245eebfefd91badb
+      size: 135416388
+    outs:
+    - path: bot/pipeline/imitation/case9/policy/weights_three_head.pt
+      hash: md5
+      md5: 39438815c7e0ce634bc6f0aff14977c1
+      size: 4617959
+  train_imitation_case9_candidate_ships:
+    cmd: uv run --directory bot python -m
+      pipeline.imitation.case9.training.train --config
+      pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml
+    deps:
+    - path: bot/pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml
+      hash: md5
+      md5: 1fe56f0bebe227b540b4741912ac95e5
+      size: 1638
+    - path: bot/pipeline/imitation/case9/policy/heads
+      hash: md5
+      md5: b52a24eefa29c5cc8f4db70b55755c00.dir
+      size: 13568
+      nfiles: 6
+    - path: bot/pipeline/imitation/case9/policy/model.py
+      hash: md5
+      md5: ed51b6ef4d8058e71f85655ab851ebb2
+      size: 6545
+    - path: bot/pipeline/imitation/case9/training/dataset.py
+      hash: md5
+      md5: aa14bcf1260664b56aeced821465a57b
+      size: 14274
+    - path: bot/pipeline/imitation/case9/training/losses.py
+      hash: md5
+      md5: 4241911f45a2d51fd499bf257d01322f
+      size: 18785
+    - path: bot/pipeline/imitation/case9/training/train.py
+      hash: md5
+      md5: 9634db04e296ab327e51ee28a652f1a0
+      size: 37551
+    - path: data/mart/imitation/case9/train.parquet
+      hash: md5
+      md5: 7171edabe7f1915cb3ed1afc74215aad
+      size: 1048245115
+    - path: data/mart/imitation/case9/val.parquet
+      hash: md5
+      md5: 14a483795c40203d245eebfefd91badb
+      size: 135416388
+    outs:
+    - path: bot/pipeline/imitation/case9/policy/weights_candidate_ships.pt
+      hash: md5
+      md5: 82f26e7501c59588ca733171a5d1c446
+      size: 4595180

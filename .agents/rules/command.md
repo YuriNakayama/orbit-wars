@@ -9,11 +9,24 @@ dev/setup             # Install dependencies (uv sync)
 dev/format            # Code formatting (ruff)
 dev/lint              # Static analysis (ruff + mypy)
 dev/test-bot          # CI (format check → lint → type check → pytest)
+dev/loop              # Re-inject a prompt into the latest Codex session every N minutes
 dev/create-worktree   # Create git worktree with .env copy
 dev/dvc               # DVC operations (setup / pull / repro / push / dag / add)
 dev/vast              # Vast.ai GPU pod control (train / pull / promote / cost-report / volume)
 dev/runpod            # RunPod GPU pod control (train / pull / promote / cost-report / volume)
 ```
+
+## Codex Loop
+
+```bash
+dev/loop <minutes> <prompt...>
+printf 'prompt text' | dev/loop <minutes> -
+```
+
+`dev/loop` runs once immediately, then uses `codex exec resume --last -` to
+re-inject the same prompt into the latest Codex session every `<minutes>`
+minutes. Iterations do not overlap; if an iteration runs longer than the
+interval, the next one starts immediately after it finishes. Stop with Ctrl-C.
 
 ## DVC Commands
 
