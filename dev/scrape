@@ -51,15 +51,15 @@ $UV_RUN dvc pull data/lake/kaggle_episodes/matches.dvc
 
 # 2. Phase 1: plan
 echo "== Step 2: plan phase =="
-limit_args=()
+plan_args=(
+  --plan-out "${PLAN_PATH}"
+  --top "${TOP}"
+  --modes "${MODES}"
+)
 if [ "${LIMIT_PER_TEAM}" -gt 0 ]; then
-  limit_args=(--limit-per-team "${LIMIT_PER_TEAM}")
+  plan_args+=(--limit-per-team "${LIMIT_PER_TEAM}")
 fi
-$UV_RUN python -m dataset kaggle scrape-plan \
-  --plan-out "${PLAN_PATH}" \
-  --top "${TOP}" \
-  --modes "${MODES}" \
-  "${limit_args[@]}"
+$UV_RUN python -m dataset kaggle scrape-plan "${plan_args[@]}"
 
 # 3. finalize/checkpoint command (DVC commit + push)
 DVC_CMD="$UV_RUN dvc commit -f --no-relink data/lake/kaggle_episodes/matches.dvc"
