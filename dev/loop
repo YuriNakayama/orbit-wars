@@ -1,0 +1,97 @@
+#!/bin/bash
+# Re-inject a prompt into the latest Codex session every N minutes.
+#
+# Usage:
+#   dev/loop <minutes> <prompt...>
+#   printf 'prompt text' | dev/loop <minutes> -
+#
+# Examples:
+#   dev/loop 10 "status を確認して、必要なら次の実験を進めて"
+#   dev/loop 30 - < prompt.txt
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+usage() {
+  cat <<'USAGE' >&2
+Usage:
+  dev/loop <minutes> <prompt...>
+  printf 'prompt text' | dev/loop <minutes> -
+
+Re-injects the prompt into the latest Codex session via:
+  codex exec resume --last -
+
+Notes:
+  - <minutes> must be a positive integer.
+  - Runs once immediately, then repeats every <minutes> minutes.
+  - Iterations do not overlap; if one run exceeds the interval, the next starts immediately.
+  - Stop with Ctrl-C.
+USAGE
+}
+
+if [ "$#" -lt 2 ]; then
+  usage
+  exit 2
+fi
+
+MINUTES="$1"
+shift
+
+if ! [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: <minutes> must be a positive integer: $MINUTES" >&2
+  usage
+  exit 2
+fi
+
+if [ "$1" = "-" ] && [ "$#" -eq 1 ]; then
+  PROMPT="$(cat)"
+else
+  PROMPT="$*"
+fi
+
+if [ -z "$PROMPT" ]; then
+  echo "error: prompt must not be empty" >&2
+  usage
+  exit 2
+fi
+
+INTERVAL_SECONDS=$((MINUTES * 60))
+ITERATION=0
+NEXT_START=$(date +%s)
+
+stop() {
+  printf '\n== dev/loop: stopped ==\n' >&2
+  exit 130
+}
+trap stop INT TERM
+
+cd "$ROOT_DIR"
+
+while true; do
+  ITERATION=$((ITERATION + 1))
+  STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S %Z')
+  echo "== dev/loop: iteration ${ITERATION} at ${STARTED_AT} ==" >&2
+
+  set +e
+  printf '%s\n' "$PROMPT" | codex exec resume --last -
+  STATUS=$?
+  set -e
+
+  FINISHED_AT=$(date '+%Y-%m-%d %H:%M:%S %Z')
+  if [ "$STATUS" -ne 0 ]; then
+    echo "== dev/loop: iteration ${ITERATION} failed with exit ${STATUS} at ${FINISHED_AT}; continuing ==" >&2
+  else
+    echo "== dev/loop: iteration ${ITERATION} finished at ${FINISHED_AT} ==" >&2
+  fi
+
+  NEXT_START=$((NEXT_START + INTERVAL_SECONDS))
+  NOW=$(date +%s)
+  SLEEP_SECONDS=$((NEXT_START - NOW))
+  if [ "$SLEEP_SECONDS" -gt 0 ]; then
+    echo "== dev/loop: sleeping ${SLEEP_SECONDS}s until next injection ==" >&2
+    sleep "$SLEEP_SECONDS"
+  else
+    echo "== dev/loop: interval overrun; starting next injection immediately ==" >&2
+    NEXT_START="$NOW"
+  fi
+done

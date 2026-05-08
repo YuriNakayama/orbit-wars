@@ -69,6 +69,12 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["dev/loop"],
+    decision = "prompt",
+    justification = "A Codex loop repeatedly re-injects prompts and can continue making autonomous changes.",
+)
+
+prefix_rule(
     pattern = ["dev/dvc", ["setup", "pull", "repro", "dag", "add", "status"]],
     decision = "allow",
     justification = "Routine DVC setup, fetch, graph, add, and repro commands are expected in this repository.",
