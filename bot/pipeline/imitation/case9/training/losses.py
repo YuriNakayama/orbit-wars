@@ -31,8 +31,15 @@ from pipeline.imitation.case9.policy.types import PolicyOutput
 class LossWeights:
     cand_w: float = 1.0
     cand_class_weights: torch.Tensor | None = None
+    template_class_weights: torch.Tensor | None = None
+    ships_class_weights: torch.Tensor | None = None
     label_smoothing: float = 0.0
     ship_w: float = 1.0
+    three_from_w: float = 1.0
+    three_target_w: float = 1.0
+    three_ships_w: float = 0.5
+    three_pos_weight: float = 5.0
+    template_w: float = 1.0
     # iter3: cand_loss_type="focal" で focal loss、"ce" (default) で従来 CE。
     # focal は label imbalance に頑健 (easy examples を down-weight)、
     # FL(p_t) = -α_t (1 - p_t)^γ log(p_t) (Lin et al., 2017).
@@ -242,7 +249,9 @@ def compute_three_head_loss(
         ships_logits_sel = output.ships_logits[b_idx, s_idx]  # (N, ships_buckets)
         ships_labels = ships_per_src[b_idx, s_idx]
         ships_loss = nn.functional.cross_entropy(
-            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+            ships_logits_sel,
+            ships_labels,
+            label_smoothing=label_smoothing,
         )
         with torch.no_grad():
             ships_acc = float(
@@ -363,8 +372,16 @@ def compute_candidate_ships_loss(
         sb_idx, ss_idx = ships_valid.nonzero(as_tuple=True)
         ships_logits_sel = output.ships_logits[sb_idx, ss_idx]
         ships_labels = ships_bucket_per_src[sb_idx, ss_idx]
+        ship_cw = (
+            weights.ships_class_weights.to(ships_logits_sel.device)
+            if weights.ships_class_weights is not None
+            else None
+        )
         ships_loss = nn.functional.cross_entropy(
-            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+            ships_logits_sel,
+            ships_labels,
+            weight=ship_cw,
+            label_smoothing=label_smoothing,
         )
         with torch.no_grad():
             ships_acc = float(
@@ -394,9 +411,7 @@ def compute_template_ships_loss(
     target_per_src: torch.Tensor,  # (B, P) int64; -1 = no-op / unused
     ships_per_src: torch.Tensor,  # (B, P) int64; -1 = unused (fired only)
     my_planet_mask: torch.Tensor,  # (B, P) bool
-    template_w: float = 1.0,
-    ships_w: float = 0.5,
-    label_smoothing: float = 0.1,
+    weights: LossWeights,
 ) -> TemplateShipsLossReport:
     """Template categorical incl no-op + ships 4-bucket categorical.
 
@@ -431,9 +446,26 @@ def compute_template_ships_loss(
     b_idx, s_idx = my_planet_mask.nonzero(as_tuple=True)
     tmpl_logits = output.target_logits[b_idx, s_idx]
     tmpl_labels = template_labels[b_idx, s_idx]
-    template_loss = nn.functional.cross_entropy(
-        tmpl_logits, tmpl_labels, label_smoothing=label_smoothing
+    tmpl_cw = (
+        weights.template_class_weights.to(tmpl_logits.device)
+        if weights.template_class_weights is not None
+        else None
     )
+    if weights.cand_loss_type.lower() == "focal":
+        template_loss = _focal_cross_entropy(
+            tmpl_logits,
+            tmpl_labels,
+            alpha=weights.focal_alpha,
+            gamma=weights.focal_gamma,
+            weight=tmpl_cw,
+        )
+    else:
+        template_loss = nn.functional.cross_entropy(
+            tmpl_logits,
+            tmpl_labels,
+            weight=tmpl_cw,
+            label_smoothing=weights.label_smoothing,
+        )
     with torch.no_grad():
         pred = tmpl_logits.argmax(dim=-1)
         match = (pred == tmpl_labels).float()
@@ -451,8 +483,16 @@ def compute_template_ships_loss(
         sb_idx, ss_idx = ships_valid.nonzero(as_tuple=True)
         ships_logits_sel = output.ships_logits[sb_idx, ss_idx]
         ships_labels = ships_per_src[sb_idx, ss_idx]
+        ship_cw = (
+            weights.ships_class_weights.to(ships_logits_sel.device)
+            if weights.ships_class_weights is not None
+            else None
+        )
         ships_loss = nn.functional.cross_entropy(
-            ships_logits_sel, ships_labels, label_smoothing=label_smoothing
+            ships_logits_sel,
+            ships_labels,
+            weight=ship_cw,
+            label_smoothing=weights.label_smoothing,
         )
         with torch.no_grad():
             ships_acc = float(
@@ -466,7 +506,7 @@ def compute_template_ships_loss(
         ships_loss = zero
         ships_acc = 0.0
 
-    total = template_w * template_loss + ships_w * ships_loss
+    total = weights.template_w * template_loss + weights.ship_w * ships_loss
     return TemplateShipsLossReport(
         total=total,
         template_loss=template_loss.detach(),

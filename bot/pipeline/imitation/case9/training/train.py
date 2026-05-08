@@ -29,6 +29,7 @@ from pipeline.imitation.case9.policy.featurizer import (
     PLANET_FEAT_DIM,
 )
 from pipeline.imitation.case9.policy.model import Case9Policy, ModelConfig
+from pipeline.imitation.case9.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case9.policy.types import BatchFeatures
 from pipeline.imitation.case9.training.dataset import (
     BatchedSample,
@@ -243,6 +244,11 @@ def _compute_loss_dispatch(
             target_per_src=batch.target_per_src.to(device, non_blocking=True),
             ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
             my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+            from_w=loss_weights.three_from_w,
+            target_w=loss_weights.three_target_w,
+            ships_w=loss_weights.three_ships_w,
+            pos_weight=loss_weights.three_pos_weight,
+            label_smoothing=loss_weights.label_smoothing,
         )
         return rep3.total, {
             "total": float(rep3.total.detach().item()),
@@ -262,6 +268,8 @@ def _compute_loss_dispatch(
             ),
             my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
             weights=loss_weights,
+            ships_w=loss_weights.ship_w,
+            label_smoothing=loss_weights.label_smoothing,
         )
         return rep_cs.total, {
             "total": float(rep_cs.total.detach().item()),
@@ -278,6 +286,7 @@ def _compute_loss_dispatch(
             target_per_src=batch.target_per_src.to(device, non_blocking=True),
             ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
             my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+            weights=loss_weights,
         )
         return rep_ts.total, {
             "total": float(rep_ts.total.detach().item()),
@@ -492,6 +501,9 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         cand_in_dim=int(model_cfg.get("cand_in_dim", CAND_FEAT_DIM)),
         cand_k=int(model_cfg.get("cand_k", CAND_K)),
         hidden=int(model_cfg.get("hidden", 128)),
+        attn_heads=int(model_cfg.get("attn_heads", 4)),
+        inducing_points=int(model_cfg.get("inducing_points", 16)),
+        encoder_layers=int(model_cfg.get("encoder_layers", 3)),
         head_dropout=float(train_cfg.get("head_dropout", 0.0)),
         head_mode=head_mode,
     )
@@ -539,23 +551,53 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
     lw_cfg = train_cfg.get("loss_weights", {}) or {}
     cand_cw: torch.Tensor | None = None
+    template_cw: torch.Tensor | None = None
+    ships_cw: torch.Tensor | None = None
+    class_weight_beta = float(lw_cfg.get("class_weight_beta", 0.999))
     if bool(lw_cfg.get("use_class_weights", False)):
         cand_cw = train_ds.class_weight_on_slots(
             num_classes=model_config.cand_k,
-            beta=float(lw_cfg.get("class_weight_beta", 0.999)),
+            beta=class_weight_beta,
+            ignore_index=-1,
+        )
+        template_cw = train_ds.class_weight_on_templates_including_noop(
+            num_classes=NUM_TEMPLATES + 1,
+            beta=class_weight_beta,
+            ignore_index=-1,
+        )
+        ships_cw = train_ds.class_weight_on_ships(
+            num_classes=model_config.ships_buckets,
+            beta=class_weight_beta,
             ignore_index=-1,
         )
         logger.info(
             json.dumps(
-                {"cand_class_weights": [round(float(x), 4) for x in cand_cw.tolist()]}
+                {
+                    "cand_class_weights": [
+                        round(float(x), 4) for x in cand_cw.tolist()
+                    ],
+                    "template_class_weights": [
+                        round(float(x), 4) for x in template_cw.tolist()
+                    ],
+                    "ships_class_weights": [
+                        round(float(x), 4) for x in ships_cw.tolist()
+                    ],
+                }
             )
         )
 
     weights = LossWeights(
         cand_w=float(lw_cfg.get("cand", 1.0)),
         cand_class_weights=cand_cw,
+        template_class_weights=template_cw,
+        ships_class_weights=ships_cw,
         label_smoothing=float(lw_cfg.get("label_smoothing", 0.0)),
         ship_w=float(lw_cfg.get("ship", 1.0)),
+        three_from_w=float(lw_cfg.get("from", 1.0)),
+        three_target_w=float(lw_cfg.get("target", 1.0)),
+        three_ships_w=float(lw_cfg.get("three_ship", lw_cfg.get("ship", 0.5))),
+        three_pos_weight=float(lw_cfg.get("from_pos_weight", 5.0)),
+        template_w=float(lw_cfg.get("template", lw_cfg.get("cand", 1.0))),
         cand_loss_type=str(lw_cfg.get("cand_loss_type", "ce")),
         focal_alpha=float(lw_cfg.get("focal_alpha", 0.25)),
         focal_gamma=float(lw_cfg.get("focal_gamma", 2.0)),

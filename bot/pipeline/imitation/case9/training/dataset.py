@@ -235,6 +235,45 @@ class CaseFourDataset(Dataset[Sample]):
         weights = raw / max(mean_raw, 1e-12)
         return torch.tensor(weights, dtype=torch.float32)
 
+
+    def class_weight_on_templates_including_noop(
+        self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
+    ) -> torch.Tensor:
+        """Inverse-frequency weights for template_ships, including no-op class."""
+        del beta
+        labels = self._target_per_src.copy()
+        labels[labels == ignore_index] = num_classes - 1
+        valid = self._my_planet_mask.reshape(-1)
+        flat = labels.reshape(-1)[valid]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
+        present_mask = counts > 0
+        if not present_mask.any():
+            return torch.ones(num_classes, dtype=torch.float32)
+        raw = np.zeros(num_classes, dtype=np.float64)
+        raw[present_mask] = 1.0 / counts[present_mask]
+        mean_raw = float(raw[present_mask].mean())
+        weights = raw / max(mean_raw, 1e-12)
+        return torch.tensor(weights, dtype=torch.float32)
+
+    def class_weight_on_ships(
+        self, num_classes: int = 4, beta: float = 0.999, ignore_index: int = -1
+    ) -> torch.Tensor:
+        """Inverse-frequency weights for fired-source ship buckets."""
+        del beta
+        flat = self._ships_per_src.reshape(-1)
+        if np.all(flat == ignore_index):
+            flat = self._ships_bucket_per_src.reshape(-1)
+        flat = flat[flat != ignore_index]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
+        present_mask = counts > 0
+        if not present_mask.any():
+            return torch.ones(num_classes, dtype=torch.float32)
+        raw = np.zeros(num_classes, dtype=np.float64)
+        raw[present_mask] = 1.0 / counts[present_mask]
+        mean_raw = float(raw[present_mask].mean())
+        weights = raw / max(mean_raw, 1e-12)
+        return torch.tensor(weights, dtype=torch.float32)
+
     def __len__(self) -> int:
         return int(self._n)
 
