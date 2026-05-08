@@ -26,7 +26,13 @@ def existing_episode_ids(
     files = list(root.glob("**/*.parquet"))
     if not files:
         return set()
-    lf = pl.scan_parquet(str(root / "**/*.parquet"), hive_partitioning=True)
+    # extra_columns='ignore' により schema バージョン違い (e.g. v2 と v3 が
+    # 同居) を許容する。新規追加カラムは不要なので無視で問題ない。
+    lf = pl.scan_parquet(
+        str(root / "**/*.parquet"),
+        hive_partitioning=True,
+        extra_columns="ignore",
+    )
     lf = lf.filter(pl.col("source") == SOURCE_KAGGLE)
     if modes is not None and len(modes) > 0:
         lf = lf.filter(pl.col("mode").is_in(list(modes)))

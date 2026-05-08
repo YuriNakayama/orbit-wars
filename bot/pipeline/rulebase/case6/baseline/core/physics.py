@@ -180,6 +180,36 @@ def _point_to_segment_distance(
     return math.hypot(px - projx, py - projy)
 
 
+def _swept_pair_hit(
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+    p0x: float,
+    p0y: float,
+    p1x: float,
+    p1y: float,
+    radius: float,
+) -> bool:
+    """Mirror simulator swept_pair_hit for two points moving over one tick."""
+    d0x = ax - p0x
+    d0y = ay - p0y
+    dvx = (bx - ax) - (p1x - p0x)
+    dvy = (by - ay) - (p1y - p0y)
+    quad_a = dvx * dvx + dvy * dvy
+    quad_b = 2.0 * (d0x * dvx + d0y * dvy)
+    quad_c = d0x * d0x + d0y * d0y - radius * radius
+    if quad_a < 1e-12:
+        return quad_c <= 0.0
+    disc = quad_b * quad_b - 4.0 * quad_a * quad_c
+    if disc < 0.0:
+        return False
+    sq = math.sqrt(disc)
+    t1 = (-quad_b - sq) / (2.0 * quad_a)
+    t2 = (-quad_b + sq) / (2.0 * quad_a)
+    return t2 >= 0.0 and t1 <= 1.0
+
+
 _LAUNCH_OFFSET: float = 0.1  # engine starts fleets at planet surface + 0.1
 
 
@@ -197,11 +227,9 @@ def _first_engine_hit_turn(
 ) -> int | None:
     """Replay fleet over [turn_lo, turn_hi]; return first hit turn or None.
 
-    Mirrors kaggle_environments.envs.orbit_wars per-turn order:
-      1. fleet moves from pos[t-1] to pos[t]
-         collision: seg_dist(planet_at_(t-1), fleet_seg) < planet.radius
-      2. planet moves from pos[t-1] to pos[t]
-         sweep: seg_dist(fleet_at_t, planet_seg) < planet.radius
+    Mirrors kaggle_environments.envs.orbit_wars per-turn collision semantics:
+      fleet and target both move over the tick, and the engine checks whether
+      their swept pair comes within target.radius at any intermediate time.
 
     Fleet start point is `src.center + (src.radius + 0.1) * direction`,
     not `src.center` — short-range shots otherwise predict the wrong hit turn.
@@ -228,23 +256,20 @@ def _first_engine_hit_turn(
     for t in range(start, turn_hi + 1):
         fx, fy = fleet_at(t)
 
-        # Step 1: fleet moves; engine compares against planet at (t-1).
         planet_prev = target_at(t - 1)
-        if planet_prev is not None:
-            d = _point_to_segment_distance(
-                planet_prev[0], planet_prev[1], fx_prev, fy_prev, fx, fy
-            )
-            if d < target.radius:
-                return t
-
-        # Step 2: planet moves; engine sweep checks fleet (already at t)
-        # against planet's (t-1)→t segment.
         planet_now = target_at(t)
         if planet_prev is not None and planet_now is not None:
-            d = _point_to_segment_distance(
-                fx, fy, planet_prev[0], planet_prev[1], planet_now[0], planet_now[1]
-            )
-            if d < target.radius:
+            if _swept_pair_hit(
+                fx_prev,
+                fy_prev,
+                fx,
+                fy,
+                planet_prev[0],
+                planet_prev[1],
+                planet_now[0],
+                planet_now[1],
+                target.radius,
+            ):
                 return t
 
         fx_prev, fy_prev = fx, fy

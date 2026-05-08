@@ -3,16 +3,30 @@
 leaderboard → team → publicLeaderboardSubmissionId → ListEpisodes → GetEpisodeReplay
 → records/replay 永続化の全体フロー。`ScrapeSpec` に設定を集約し、
 `run(...)` が `ScrapeResult` を返す。`dry_run=True` では FS 書き込みを skip する。
+
+実行は 2 phase 構成:
+
+1. Phase 1 (plan): leaderboard / team / list_episodes を走査し、既取得 / mode 不一致 /
+   失敗 episode を除外したうえで「実際に replay 取得すべき episode リスト」を確定する。
+   replay は呼ばずレートも軽い (top×2 calls)。
+2. Phase 2 (fetch): plan で確定した episode に対してのみ replay 取得 + 永続化。
+   `[i/total]` 形式で進捗ログを出力。
+
+差分ダウンロードは `state.existing_episode_ids` で読み込んだ `seen_ids` に含まれる
+episode_id を Phase 1 段階で除外することで実現している。
 """
 
 from __future__ import annotations
 
 import gzip
 import logging
+import threading
+import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
@@ -40,11 +54,20 @@ class ScrapeResult:
     episodes_skipped_existing: int
     episodes_skipped_failed: int
     episodes_skipped_mode: int
+    episodes_planned: int
     episodes_fetched: int
     episodes_failed: int
     records_written: int
     replays_written: int
     dry_run: bool
+
+
+@dataclass(frozen=True)
+class _PlannedEpisode:
+    episode_id: int
+    raw: dict[str, Any]
+    team_id_by_submission: dict[int, int]
+    team_rank_by_id: dict[int, int]
 
 
 @dataclass
@@ -84,69 +107,124 @@ def _flush(acc: _Accumulator, spec: ScrapeSpec) -> tuple[int, int]:
     return written_records, written_replays
 
 
-def _process_episode(
+def _filter_episode(
     *,
-    session: requests.Session,
     raw: dict[str, Any],
     spec: ScrapeSpec,
     seen_ids: set[int],
     acc: _Accumulator,
-    run_id: str,
-    rate_limit: TokenBucket,
-    replay_fetcher: ReplayFetcher,
-    team_id_by_submission: dict[int, int],
-) -> None:
+) -> int | None:
+    """Phase 1 用フィルタ。replay 取得対象なら episode_id を返し、skip なら None。"""
+
     acc.episodes_considered += 1
     episode_id = int(raw.get("id") or 0)
     if episode_id <= 0:
         acc.episodes_failed += 1
-        return
+        return None
     if episode_id in seen_ids:
         acc.episodes_skipped_existing += 1
-        return
+        return None
 
     agents = raw.get("agents") or []
     if not isinstance(agents, list):
         acc.episodes_failed += 1
-        return
+        return None
 
     if not spec.include_failed and records.is_failed_episode(raw):
         acc.episodes_skipped_failed += 1
-        return
+        return None
 
     try:
         meta = records.parse_episode_meta(raw)
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("parse_episode_meta failed for %s: %s", episode_id, exc)
         acc.episodes_failed += 1
-        return
+        return None
 
     if meta.mode not in spec.modes:
         acc.episodes_skipped_mode += 1
-        return
+        return None
+
+    return episode_id
+
+
+@dataclass(frozen=True)
+class _FetchedEpisode:
+    """Phase 2 worker が main thread に返す結果。
+
+    `record` / `replay_payload` が None の場合は何らかの理由でスキップ
+    (parse 失敗 / API エラー)。`failed=True` のとき failed カウンタに加算。
+    """
+
+    episode_id: int
+    record: MatchRecord | None
+    replay_payload: bytes | None
+    failed: bool
+
+
+def _fetch_planned_episode_io(
+    *,
+    session: requests.Session,
+    planned: _PlannedEpisode,
+    spec: ScrapeSpec,
+    run_id: str,
+    rate_limit: TokenBucket,
+    replay_fetcher: ReplayFetcher,
+) -> _FetchedEpisode:
+    """Pure I/O: replay 取得 + record 構築。スレッドから安全に呼べる。
+
+    state mutation (acc / seen_ids) は呼び出し側 (main thread) で行う。
+    """
+
+    episode_id = planned.episode_id
+    try:
+        meta = records.parse_episode_meta(planned.raw)
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.warning("parse_episode_meta failed for %s: %s", episode_id, exc)
+        return _FetchedEpisode(episode_id, None, None, failed=True)
 
     with rate_limit.acquire():
         try:
             replay_resp = replay_fetcher(session, episode_id)
         except client.KaggleEpisodeError as exc:
             logger.warning("get_episode_replay failed for %s: %s", episode_id, exc)
-            acc.episodes_failed += 1
-            return
+            return _FetchedEpisode(episode_id, None, None, failed=True)
 
     record = records.build_match_record(
         meta,
         run_id=run_id,
         scraped_at=_utc_now_iso(),
-        team_id_by_submission=team_id_by_submission,
+        team_id_by_submission=planned.team_id_by_submission,
+        team_rank_by_id=planned.team_rank_by_id,
     )
-    seen_ids.add(episode_id)
-    acc.episodes_fetched += 1
+    if spec.dry_run:
+        return _FetchedEpisode(episode_id, record, None, failed=False)
+    payload_str = client.extract_replay_json(replay_resp)
+    payload = gzip.compress(payload_str.encode("utf-8"))
+    return _FetchedEpisode(episode_id, record, payload, failed=False)
 
+
+def _apply_fetched(
+    fetched: _FetchedEpisode,
+    *,
+    spec: ScrapeSpec,
+    acc: _Accumulator,
+    seen_ids: set[int],
+) -> None:
+    """Worker から返った結果を main thread の buffer に反映する。"""
+
+    if fetched.failed:
+        acc.episodes_failed += 1
+        return
+    if fetched.record is None:
+        return
+    seen_ids.add(fetched.episode_id)
+    acc.episodes_fetched += 1
     if spec.dry_run:
         return
-    acc.buffered_records.append(record)
-    payload_str = client.extract_replay_json(replay_resp)
-    acc.buffered_replays[record.match_id] = gzip.compress(payload_str.encode("utf-8"))
+    acc.buffered_records.append(fetched.record)
+    if fetched.replay_payload is not None:
+        acc.buffered_replays[fetched.record.match_id] = fetched.replay_payload
 
 
 def _lookup_submission_id(
@@ -166,7 +244,286 @@ def _lookup_submission_id(
         return None
 
 
-def run(
+def _plan(
+    *,
+    session: requests.Session,
+    spec: ScrapeSpec,
+    seen_ids: set[int],
+    acc: _Accumulator,
+    rate_limit: TokenBucket,
+    leaderboard_fetcher: LeaderboardFetcher,
+    team_fetcher: TeamFetcher,
+    episodes_lister: EpisodesLister,
+) -> list[_PlannedEpisode]:
+    """Phase 1: 取得予定 episode を確定する (replay 取得は行わない)。"""
+
+    teams = leaderboard_fetcher(spec.top)
+    total_teams = len(teams)
+    team_rank_by_id: dict[int, int] = {t.team_id: t.rank for t in teams}
+    logger.info(
+        "scrape phase=plan top=%d modes=%s limit_per_team=%s seen_existing=%d",
+        spec.top,
+        ",".join(spec.modes),
+        spec.limit_per_team if spec.limit_per_team is not None else "all",
+        len(seen_ids),
+    )
+    plan: list[_PlannedEpisode] = []
+    started = time.monotonic()
+
+    for team_idx, team in enumerate(teams, start=1):
+        acc.teams_scanned += 1
+        with rate_limit.acquire():
+            submission_id = _lookup_submission_id(session, team.team_id, team_fetcher)
+        if submission_id is None:
+            acc.teams_without_submission += 1
+            logger.info(
+                "scrape phase=plan team=[%d/%d] team_id=%d no_submission",
+                team_idx,
+                total_teams,
+                team.team_id,
+            )
+            continue
+        with rate_limit.acquire():
+            try:
+                listing = episodes_lister(session, submission_id)
+            except client.KaggleEpisodeError as exc:
+                logger.warning(
+                    "list_episodes_for_submission failed for %s: %s",
+                    submission_id,
+                    exc,
+                )
+                continue
+        raw_episodes = listing.get("episodes") if isinstance(listing, dict) else None
+        episodes: list[Any] = raw_episodes if isinstance(raw_episodes, list) else []
+        team_id_by_submission = records.extract_submission_team_map(listing)
+
+        planned_for_team = 0
+        for raw in episodes:
+            if not isinstance(raw, dict):
+                continue
+            if (
+                spec.limit_per_team is not None
+                and planned_for_team >= spec.limit_per_team
+            ):
+                break
+            episode_id = _filter_episode(raw=raw, spec=spec, seen_ids=seen_ids, acc=acc)
+            if episode_id is None:
+                continue
+            plan.append(
+                _PlannedEpisode(
+                    episode_id=episode_id,
+                    raw=raw,
+                    team_id_by_submission=team_id_by_submission,
+                    team_rank_by_id=team_rank_by_id,
+                )
+            )
+            planned_for_team += 1
+
+        elapsed = time.monotonic() - started
+        pct = 100.0 * team_idx / total_teams if total_teams else 0.0
+        eta_sec = elapsed * (total_teams - team_idx) / team_idx if team_idx > 0 else 0.0
+        logger.info(
+            "scrape phase=plan team=[%d/%d] %.1f%% team_id=%d "
+            "listed=%d planned=%d cumulative=%d elapsed=%ds eta=%s",
+            team_idx,
+            total_teams,
+            pct,
+            team.team_id,
+            len(episodes),
+            planned_for_team,
+            len(plan),
+            int(elapsed),
+            _format_eta(eta_sec),
+        )
+
+    logger.info(
+        "scrape phase=plan done teams_scanned=%d planned=%d "
+        "skipped_existing=%d skipped_failed=%d skipped_mode=%d",
+        acc.teams_scanned,
+        len(plan),
+        acc.episodes_skipped_existing,
+        acc.episodes_skipped_failed,
+        acc.episodes_skipped_mode,
+    )
+    return plan
+
+
+def _format_eta(seconds: float) -> str:
+    if seconds <= 0 or seconds != seconds:  # NaN
+        return "-"
+    eta = datetime.now(tz=UTC) + timedelta(seconds=seconds)
+    return f"{int(seconds)}s ({eta.strftime('%H:%M:%S')}Z)"
+
+
+CheckpointCallback = Callable[[int, int], None]
+
+
+def _fetch_all(
+    *,
+    session: requests.Session,
+    spec: ScrapeSpec,
+    plan: list[_PlannedEpisode],
+    seen_ids: set[int],
+    acc: _Accumulator,
+    run_id: str,
+    rate_limit: TokenBucket,
+    replay_fetcher: ReplayFetcher,
+    progress_every: int,
+    flush_every: int,
+    workers: int,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
+) -> tuple[int, int]:
+    """Phase 2 を ThreadPoolExecutor で並列実行し、(records, replays) を返す。
+
+    - 各 worker は `_fetch_planned_episode_io` で replay を取得 (rate_limit
+      で 60req/60s に制限される)。
+    - 取得結果は main thread に集約され、buffer mutation は逐次実行される。
+    - `flush_every` 件処理ごとに `_flush` を挟み、cancel/timeout 時の loss を抑える。
+    - `workers=1` の場合は ThreadPool を作らず逐次実行 (テスト容易性のため)。
+    """
+
+    total_records = 0
+    total_replays = 0
+    total = len(plan)
+    if total == 0:
+        logger.info("scrape phase=fetch nothing to download")
+        return total_records, total_replays
+    logger.info(
+        "scrape phase=fetch total=%d flush_every=%d workers=%d",
+        total,
+        flush_every,
+        workers,
+    )
+    started = time.monotonic()
+
+    # Heartbeat thread: 60秒ごとに「生きているか」と直近の進捗を出すことで、
+    # GitHub Actions の job 完了まで見えないライブログでも stall 判別可能にする。
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        while not stop_heartbeat.wait(60.0):
+            elapsed = time.monotonic() - started
+            logger.info(
+                "scrape phase=fetch heartbeat elapsed=%ds fetched=%d failed=%d "
+                "buffered=%d",
+                int(elapsed),
+                acc.episodes_fetched,
+                acc.episodes_failed,
+                len(acc.buffered_records),
+            )
+
+    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+    hb_thread.start()
+
+    def _io(planned: _PlannedEpisode) -> _FetchedEpisode:
+        return _fetch_planned_episode_io(
+            session=session,
+            planned=planned,
+            spec=spec,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+        )
+
+    def _on_processed(idx: int) -> None:
+        nonlocal total_records, total_replays
+        if idx == total or idx % progress_every == 0:
+            elapsed = time.monotonic() - started
+            pct = 100.0 * idx / total
+            eta_sec = elapsed * (total - idx) / idx if idx > 0 else 0.0
+            logger.info(
+                "scrape phase=fetch [%d/%d] %.1f%% fetched=%d failed=%d "
+                "elapsed=%ds eta=%s",
+                idx,
+                total,
+                pct,
+                acc.episodes_fetched,
+                acc.episodes_failed,
+                int(elapsed),
+                _format_eta(eta_sec),
+            )
+        if idx % flush_every == 0 and acc.buffered_records:
+            written_records, written_replays = _flush(acc, spec)
+            total_records += written_records
+            total_replays += written_replays
+            logger.info(
+                "scrape phase=fetch flush [%d/%d] persisted records=%d "
+                "replays=%d (cumulative records=%d)",
+                idx,
+                total,
+                written_records,
+                written_replays,
+                total_records,
+            )
+        if (
+            on_checkpoint is not None
+            and checkpoint_every > 0
+            and idx % checkpoint_every == 0
+        ):
+            try:
+                on_checkpoint(idx, total)
+            except Exception as exc:  # noqa: BLE001 — checkpoint failures are non-fatal
+                logger.warning(
+                    "scrape phase=fetch checkpoint failed at [%d/%d]: %s",
+                    idx,
+                    total,
+                    exc,
+                )
+
+    try:
+        if workers <= 1:
+            for idx, planned in enumerate(plan, start=1):
+                fetched = _io(planned)
+                _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+                _on_processed(idx)
+        else:
+            # サブミットを batch 化して、stuck worker 1 個が大量の queued
+            # task を巻き込まないようにする。各 batch 内では as_completed に
+            # 全体 timeout を付け、超過したら諦めて次の batch へ進む。
+            batch_size = max(workers * 4, 32)
+            # 1 batch あたり最大 wall-clock 上限 (rate ratio + 安全マージン)
+            batch_timeout = max(
+                120.0, batch_size / max(rate_limit.capacity, 1) * 60.0 * 3
+            )
+            idx = 0
+            for batch_start in range(0, total, batch_size):
+                batch = plan[batch_start : batch_start + batch_size]
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [pool.submit(_io, p) for p in batch]
+                    try:
+                        completed = list(as_completed(futures, timeout=batch_timeout))
+                    except TimeoutError:
+                        completed = [f for f in futures if f.done()]
+                        stuck = [f for f in futures if not f.done()]
+                        logger.warning(
+                            "scrape phase=fetch batch timeout: %d/%d completed, "
+                            "%d stuck — cancelling and skipping",
+                            len(completed),
+                            len(batch),
+                            len(stuck),
+                        )
+                        for f in stuck:
+                            f.cancel()
+                            acc.episodes_failed += 1
+                    for future in completed:
+                        idx += 1
+                        try:
+                            fetched = future.result(timeout=0)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "scrape phase=fetch worker exception: %s", exc
+                            )
+                            acc.episodes_failed += 1
+                            continue
+                        _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+                        _on_processed(idx)
+    finally:
+        stop_heartbeat.set()
+    return total_records, total_replays
+
+
+def plan_only(
     spec: ScrapeSpec,
     *,
     session: requests.Session | None = None,
@@ -174,10 +531,9 @@ def run(
     leaderboard_fetcher: LeaderboardFetcher | None = None,
     team_fetcher: TeamFetcher | None = None,
     episodes_lister: EpisodesLister | None = None,
-    replay_fetcher: ReplayFetcher | None = None,
     run_id: str | None = None,
-) -> ScrapeResult:
-    """Scrape Kaggle episodes according to `spec` and persist records."""
+) -> tuple[ScrapeResult, list[_PlannedEpisode]]:
+    """Phase 1 のみ実行。確定 plan と途中 ScrapeResult (planned 件数まで) を返す。"""
 
     if spec.top <= 0:
         raise ValueError(f"spec.top must be positive, got {spec.top}")
@@ -190,64 +546,239 @@ def run(
     leaderboard_fetcher = leaderboard_fetcher or leaderboard.fetch
     team_fetcher = team_fetcher or client.get_team
     episodes_lister = episodes_lister or client.list_episodes_for_submission
+    run_id = run_id or f"kaggle_{uuid.uuid4().hex[:8]}"
+
+    seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
+    acc = _Accumulator()
+    try:
+        plan = _plan(
+            session=session,
+            spec=spec,
+            seen_ids=seen_ids,
+            acc=acc,
+            rate_limit=rate_limit,
+            leaderboard_fetcher=leaderboard_fetcher,
+            team_fetcher=team_fetcher,
+            episodes_lister=episodes_lister,
+        )
+    finally:
+        if owns_session:
+            session.close()
+
+    result = ScrapeResult(
+        run_id=run_id,
+        teams_scanned=acc.teams_scanned,
+        teams_without_submission=acc.teams_without_submission,
+        episodes_considered=acc.episodes_considered,
+        episodes_skipped_existing=acc.episodes_skipped_existing,
+        episodes_skipped_failed=acc.episodes_skipped_failed,
+        episodes_skipped_mode=acc.episodes_skipped_mode,
+        episodes_planned=len(plan),
+        episodes_fetched=0,
+        episodes_failed=acc.episodes_failed,
+        records_written=0,
+        replays_written=0,
+        dry_run=spec.dry_run,
+    )
+    return result, plan
+
+
+def fetch_with_plan(
+    spec: ScrapeSpec,
+    plan: list[_PlannedEpisode],
+    *,
+    session: requests.Session | None = None,
+    rate_limit: TokenBucket | None = None,
+    replay_fetcher: ReplayFetcher | None = None,
+    run_id: str,
+    progress_every: int = 10,
+    flush_every: int = 200,
+    workers: int = 1,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
+) -> ScrapeResult:
+    """Phase 1 で確定した plan を受け取り Phase 2 のみ実行する。"""
+
+    if not spec.modes:
+        raise ValueError("spec.modes must be non-empty")
+    if progress_every <= 0:
+        raise ValueError(f"progress_every must be positive, got {progress_every}")
+    if flush_every <= 0:
+        raise ValueError(f"flush_every must be positive, got {flush_every}")
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
+    if checkpoint_every < 0:
+        raise ValueError(
+            f"checkpoint_every must be non-negative, got {checkpoint_every}"
+        )
+
+    owns_session = session is None
+    session = session or client.build_session()
+    rate_limit = rate_limit or _default_rate_limit()
+    replay_fetcher = replay_fetcher or client.get_episode_replay
+
+    seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
+    acc = _Accumulator()
+    records_written = 0
+    replays_written = 0
+    try:
+        records_written, replays_written = _fetch_all(
+            session=session,
+            spec=spec,
+            plan=plan,
+            seen_ids=seen_ids,
+            acc=acc,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+            progress_every=progress_every,
+            flush_every=flush_every,
+            workers=workers,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
+        )
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
+    except KeyboardInterrupt:
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
+        raise
+    finally:
+        if owns_session:
+            session.close()
+
+    return ScrapeResult(
+        run_id=run_id,
+        teams_scanned=0,
+        teams_without_submission=0,
+        episodes_considered=len(plan),
+        episodes_skipped_existing=0,
+        episodes_skipped_failed=0,
+        episodes_skipped_mode=0,
+        episodes_planned=len(plan),
+        episodes_fetched=acc.episodes_fetched,
+        episodes_failed=acc.episodes_failed,
+        records_written=records_written,
+        replays_written=replays_written,
+        dry_run=spec.dry_run,
+    )
+
+
+def serialize_plan(plan: list[_PlannedEpisode]) -> list[dict[str, Any]]:
+    """JSON 化可能な plan 表現。`save_plan` / `load_plan` で永続化に使う。"""
+
+    return [
+        {
+            "episode_id": p.episode_id,
+            "raw": p.raw,
+            "team_id_by_submission": {
+                str(k): v for k, v in p.team_id_by_submission.items()
+            },
+            "team_rank_by_id": {str(k): v for k, v in p.team_rank_by_id.items()},
+        }
+        for p in plan
+    ]
+
+
+def deserialize_plan(payload: list[dict[str, Any]]) -> list[_PlannedEpisode]:
+    return [
+        _PlannedEpisode(
+            episode_id=int(item["episode_id"]),
+            raw=item["raw"],
+            team_id_by_submission={
+                int(k): int(v) for k, v in item["team_id_by_submission"].items()
+            },
+            team_rank_by_id={
+                int(k): int(v) for k, v in (item.get("team_rank_by_id") or {}).items()
+            },
+        )
+        for item in payload
+    ]
+
+
+def run(
+    spec: ScrapeSpec,
+    *,
+    session: requests.Session | None = None,
+    rate_limit: TokenBucket | None = None,
+    leaderboard_fetcher: LeaderboardFetcher | None = None,
+    team_fetcher: TeamFetcher | None = None,
+    episodes_lister: EpisodesLister | None = None,
+    replay_fetcher: ReplayFetcher | None = None,
+    run_id: str | None = None,
+    progress_every: int = 10,
+    flush_every: int = 200,
+    workers: int = 1,
+    checkpoint_every: int = 0,
+    on_checkpoint: CheckpointCallback | None = None,
+) -> ScrapeResult:
+    """Scrape Kaggle episodes according to `spec` and persist records."""
+
+    if spec.top <= 0:
+        raise ValueError(f"spec.top must be positive, got {spec.top}")
+    if not spec.modes:
+        raise ValueError("spec.modes must be non-empty")
+    if progress_every <= 0:
+        raise ValueError(f"progress_every must be positive, got {progress_every}")
+    if flush_every <= 0:
+        raise ValueError(f"flush_every must be positive, got {flush_every}")
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
+    if checkpoint_every < 0:
+        raise ValueError(
+            f"checkpoint_every must be non-negative, got {checkpoint_every}"
+        )
+
+    owns_session = session is None
+    session = session or client.build_session()
+    rate_limit = rate_limit or _default_rate_limit()
+    leaderboard_fetcher = leaderboard_fetcher or leaderboard.fetch
+    team_fetcher = team_fetcher or client.get_team
+    episodes_lister = episodes_lister or client.list_episodes_for_submission
     replay_fetcher = replay_fetcher or client.get_episode_replay
     run_id = run_id or f"kaggle_{uuid.uuid4().hex[:8]}"
 
     seen_ids = state.existing_episode_ids(spec.data_root, modes=spec.modes)
     acc = _Accumulator()
-    teams = leaderboard_fetcher(spec.top)
+    plan: list[_PlannedEpisode] = []
+    records_written = 0
+    replays_written = 0
 
     try:
-        for team in teams:
-            acc.teams_scanned += 1
-            with rate_limit.acquire():
-                submission_id = _lookup_submission_id(
-                    session, team.team_id, team_fetcher
-                )
-            if submission_id is None:
-                acc.teams_without_submission += 1
-                continue
-            with rate_limit.acquire():
-                try:
-                    listing = episodes_lister(session, submission_id)
-                except client.KaggleEpisodeError as exc:
-                    logger.warning(
-                        "list_episodes_for_submission failed for %s: %s",
-                        submission_id,
-                        exc,
-                    )
-                    continue
-            raw_episodes = (
-                listing.get("episodes") if isinstance(listing, dict) else None
-            )
-            episodes: list[Any] = raw_episodes if isinstance(raw_episodes, list) else []
-            team_id_by_submission = records.extract_submission_team_map(listing)
-            fetched_for_team = 0
-            for raw in episodes:
-                if not isinstance(raw, dict):
-                    continue
-                if (
-                    spec.limit_per_team is not None
-                    and fetched_for_team >= spec.limit_per_team
-                ):
-                    break
-                before_fetched = acc.episodes_fetched
-                _process_episode(
-                    session=session,
-                    raw=raw,
-                    spec=spec,
-                    seen_ids=seen_ids,
-                    acc=acc,
-                    run_id=run_id,
-                    rate_limit=rate_limit,
-                    replay_fetcher=replay_fetcher,
-                    team_id_by_submission=team_id_by_submission,
-                )
-                if acc.episodes_fetched > before_fetched:
-                    fetched_for_team += 1
-        records_written, replays_written = _flush(acc, spec)
+        plan = _plan(
+            session=session,
+            spec=spec,
+            seen_ids=seen_ids,
+            acc=acc,
+            rate_limit=rate_limit,
+            leaderboard_fetcher=leaderboard_fetcher,
+            team_fetcher=team_fetcher,
+            episodes_lister=episodes_lister,
+        )
+        records_written, replays_written = _fetch_all(
+            session=session,
+            spec=spec,
+            plan=plan,
+            seen_ids=seen_ids,
+            acc=acc,
+            run_id=run_id,
+            rate_limit=rate_limit,
+            replay_fetcher=replay_fetcher,
+            progress_every=progress_every,
+            flush_every=flush_every,
+            workers=workers,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
+        )
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
     except KeyboardInterrupt:
-        records_written, replays_written = _flush(acc, spec)
+        tail_records, tail_replays = _flush(acc, spec)
+        records_written += tail_records
+        replays_written += tail_replays
         raise
     finally:
         if owns_session:
@@ -261,6 +792,7 @@ def run(
         episodes_skipped_existing=acc.episodes_skipped_existing,
         episodes_skipped_failed=acc.episodes_skipped_failed,
         episodes_skipped_mode=acc.episodes_skipped_mode,
+        episodes_planned=len(plan),
         episodes_fetched=acc.episodes_fetched,
         episodes_failed=acc.episodes_failed,
         records_written=records_written,

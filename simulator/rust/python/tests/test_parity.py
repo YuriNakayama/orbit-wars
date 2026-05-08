@@ -8,8 +8,7 @@ and comet spawning. The Rust facade delegates generation-touching turns
 back to Python (see `_facade.py`), so a passing test here guarantees:
 
   1. Both backends start from the same planets/comets given the same seed
-     (because both call into the same `random` global state via the upstream
-     Python `generate_planets` / `generate_comet_paths`).
+     (because generation uses the upstream deterministic seed/RNG contract).
   2. The Rust per-step physics agrees with Python bit-exactly on
      non-spawn turns.
   3. Comet spawn events fire on both sides at exactly the same turns.
@@ -80,12 +79,8 @@ def _assert_fleets_equal(a: list[list[Any]], b: list[list[Any]]) -> None:
 def _build_env(backend: str, seed: int, num_agents: int) -> Any:
     """Construct an env with the given backend.
 
-    The upstream `generate_planets` / `generate_comet_paths` consume Python's
-    *global* `random` state, so we have to reset that state immediately
-    before each `make`/`reset`/`step` that might trigger generation. The
-    parity harness in `_run_two_envs` snapshots and restores the global
-    state across the two `env.step()` calls so both backends draw from the
-    same RNG cursor at every turn.
+    Generation is delegated to the vendored Python simulator on bootstrap
+    and uses the upstream deterministic seed/RNG contract.
     """
     orbit_wars_rust.set_backend(backend)
     env = make("orbit_wars", configuration={"seed": seed})
@@ -93,54 +88,21 @@ def _build_env(backend: str, seed: int, num_agents: int) -> Any:
     return env
 
 
-class _SyncedRandom:
-    """Context manager that snapshots Python's global random state before
-    `env.step()` and restores it for the second backend, so both consume the
-    same RNG draws during initial generation / comet spawn."""
-
-    def __init__(self) -> None:
-        self._snapshot: tuple[Any, ...] | None = None
-
-    def snapshot(self) -> None:
-        self._snapshot = random.getstate()
-
-    def restore(self) -> None:
-        assert self._snapshot is not None, "snapshot before restore"
-        random.setstate(self._snapshot)
-
-
 def _step_pair(
     env_py: Any,
     env_rs: Any,
     actions: list[list[list[Any]]],
-    rng_sync: _SyncedRandom,
 ) -> None:
-    """Step both envs with the same RNG cursor.
-
-    Python global random is mutated by `generate_planets` (turn 0) and
-    `generate_comet_paths` (turns 49/149/...). The Rust facade delegates
-    those turns back to Python, so both backends pull from `random.*`. To
-    keep them aligned we snapshot before the Python env steps and restore
-    before the Rust env steps.
-    """
-    rng_sync.snapshot()
+    """Step both envs with identical actions."""
     env_py.step(actions)
-    rng_sync.restore()
     env_rs.step(actions)
 
 
-def _seeded_envs(seed: int, num_agents: int) -> tuple[Any, Any, _SyncedRandom]:
-    """Build matched envs: same RNG seed, same first init draw."""
-    random.seed(seed)
+def _seeded_envs(seed: int, num_agents: int) -> tuple[Any, Any]:
+    """Build matched envs with the same deterministic simulator seed."""
     env_py = _build_env("python", seed, num_agents)
-    rng_sync = _SyncedRandom()
-    # Python env consumed entropy during reset; reseed and create the rust
-    # env so it sees a fresh stream — but BOTH `step(0)` (which generates
-    # planets) must see the same `random` state. Reseed once more here.
-    random.seed(seed)
     env_rs = _build_env("rust", seed, num_agents)
-    random.seed(seed)
-    return env_py, env_rs, rng_sync
+    return env_py, env_rs
 
 
 def _scripted_actions(seed: int, num_agents: int, turn: int, planets: list[list[Any]]) -> list[list[list[Any]]]:
@@ -178,10 +140,10 @@ def _compare_step(
 def test_parity_noop_short(seed: int) -> None:
     """30-turn parity over noop actions — fast smoke test (covers comet
     spawn at step 50 if it falls inside the window)."""
-    env_py, env_rs, rng_sync = _seeded_envs(seed, num_agents=2)
+    env_py, env_rs = _seeded_envs(seed, num_agents=2)
 
     for turn in range(1, 31):
-        _step_pair(env_py, env_rs, [[], []], rng_sync)
+        _step_pair(env_py, env_rs, [[], []])
         if env_py.done or env_rs.done:
             break
         _compare_step(env_py, env_rs, turn, seed)
@@ -192,14 +154,14 @@ def test_parity_random_actions_with_first_comet(seed: int) -> None:
     """60-turn parity with deterministic random actions. Covers the first
     comet spawn at step 50, which the previous test missed because the
     Rust interpreter never fired it."""
-    env_py, env_rs, rng_sync = _seeded_envs(seed, num_agents=2)
+    env_py, env_rs = _seeded_envs(seed, num_agents=2)
 
     for turn in range(1, 61):
         py_obs = env_py.steps[-1][0]["observation"]
         py_planets = py_obs["planets"] if isinstance(py_obs, dict) else py_obs.planets
         actions = _scripted_actions(seed, 2, turn, py_planets)
 
-        _step_pair(env_py, env_rs, actions, rng_sync)
+        _step_pair(env_py, env_rs, actions)
         if env_py.done or env_rs.done:
             break
         _compare_step(env_py, env_rs, turn, seed)
@@ -209,12 +171,12 @@ def test_parity_comet_spawn_events() -> None:
     """Direct check that the Rust backend fires the same comet spawn events
     as Python. Targets the previously-undetected gap where the Rust
     interpreter had no comet generation path at all."""
-    env_py, env_rs, rng_sync = _seeded_envs(seed=0, num_agents=2)
+    env_py, env_rs = _seeded_envs(seed=0, num_agents=2)
 
     events: dict[str, list[tuple[int, list[int]]]] = {"python": [], "rust": []}
     prev_cids: dict[str, set[int]] = {"python": set(), "rust": set()}
     for _ in range(500):
-        _step_pair(env_py, env_rs, [[], []], rng_sync)
+        _step_pair(env_py, env_rs, [[], []])
         if env_py.done or env_rs.done:
             break
         for label, env in (("python", env_py), ("rust", env_rs)):
@@ -239,14 +201,14 @@ def test_parity_comet_spawn_events() -> None:
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_parity_full_episode(seed: int) -> None:
     """500-turn full-episode parity. Slow; nightly only."""
-    env_py, env_rs, rng_sync = _seeded_envs(seed, num_agents=2)
+    env_py, env_rs = _seeded_envs(seed, num_agents=2)
 
     for turn in range(1, 501):
         py_obs = env_py.steps[-1][0]["observation"]
         py_planets = py_obs["planets"] if isinstance(py_obs, dict) else py_obs.planets
         actions = _scripted_actions(seed, 2, turn, py_planets)
 
-        _step_pair(env_py, env_rs, actions, rng_sync)
+        _step_pair(env_py, env_rs, actions)
         if env_py.done or env_rs.done:
             break
         _compare_step(env_py, env_rs, turn, seed)
@@ -284,17 +246,11 @@ def test_parity_run_episode_vs_env_run(seed: int) -> None:
     only skips per-step framework bookkeeping (deepcopy/structify/overage
     tracking) — the actual planet/fleet trajectory must be identical.
     """
-    import random as _random
-
-    _random.seed(seed)
     env_legacy = _build_env("rust", seed, num_agents=2)
-    _random.seed(seed)
-    env_legacy.run(["random", "random"])
+    env_legacy.run(["starter", "starter"])
 
-    _random.seed(seed)
     env_batch = _build_env("rust", seed, num_agents=2)
-    _random.seed(seed)
-    orbit_wars_rust.run_episode(env_batch, ["random", "random"])
+    orbit_wars_rust.run_episode(env_batch, ["starter", "starter"])
 
     assert len(env_legacy.steps) == len(env_batch.steps), (
         f"step count differs: legacy={len(env_legacy.steps)} batch={len(env_batch.steps)}"
@@ -313,14 +269,14 @@ def test_parity_run_episode_vs_env_run(seed: int) -> None:
 @pytest.mark.parametrize("seed", [0, 1])
 def test_parity_4p_full_episode(seed: int) -> None:
     """4-player FFA full episode parity."""
-    env_py, env_rs, rng_sync = _seeded_envs(seed, num_agents=4)
+    env_py, env_rs = _seeded_envs(seed, num_agents=4)
 
     for turn in range(1, 501):
         py_obs = env_py.steps[-1][0]["observation"]
         py_planets = py_obs["planets"] if isinstance(py_obs, dict) else py_obs.planets
         actions = _scripted_actions(seed, 4, turn, py_planets)
 
-        _step_pair(env_py, env_rs, actions, rng_sync)
+        _step_pair(env_py, env_rs, actions)
         if env_py.done or env_rs.done:
             break
         _compare_step(env_py, env_rs, turn, seed)
