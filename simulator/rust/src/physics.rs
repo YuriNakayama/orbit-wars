@@ -165,6 +165,7 @@ pub fn compute_planet_paths(state: &mut OrbitWarsState) -> (Vec<PlanetPath>, Vec
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for slot in 0..state.planets.len() {
         let planet_id = state.planets[slot].id;
         if planet_id < 0 || (planet_id as usize) >= is_comet.len() || is_comet[planet_id as usize] {
