@@ -105,7 +105,7 @@ def _replay_response(episode_id: int) -> dict[str, Any]:
 
 
 def test_run_records_carry_team_rank(tmp_path: Path) -> None:
-    """leaderboard_fetcher の rank が MatchRecord.agent_kaggle_meta.team_rank に伝わる。"""
+    """leaderboard rank が agent_kaggle_meta.team_rank に伝わる。"""
 
     from dataset.storage import loader
 

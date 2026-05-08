@@ -257,7 +257,7 @@ def test_scrape_fetch_runs_finalize_cmd_on_failure(
     captured: dict[str, object] = {}
 
     def fake_subprocess_run(
-        cmd: object, *, check: bool, shell: bool, env: dict[str, str]
+        cmd: str, *, check: bool, shell: bool, env: dict[str, str]
     ) -> subprocess.CompletedProcess[bytes]:
         captured["cmd"] = cmd
         captured["outcome"] = env.get("FINALIZE_OUTCOME")

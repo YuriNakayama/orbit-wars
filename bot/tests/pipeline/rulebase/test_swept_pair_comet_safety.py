@@ -6,13 +6,24 @@ from importlib import import_module
 
 import pytest
 
-RULEBASE_CASES = ["case1", "case2", "case3", "case4", "case5", "case6", "case8", "case9"]
+RULEBASE_CASES = [
+    "case1",
+    "case2",
+    "case3",
+    "case4",
+    "case5",
+    "case6",
+    "case8",
+    "case9",
+]
 
 
 @pytest.mark.parametrize("case", RULEBASE_CASES)
 def test_fleet_crosses_other_comet_uses_swept_pair_collision(case: str) -> None:
     safety = import_module(f"pipeline.rulebase.{case}.baseline.core.safety")
-    comets = [{"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}]
+    comets = [
+        {"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}
+    ]
 
     crosses = safety.fleet_crosses_other_comet(
         launch_x=5.0,

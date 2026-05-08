@@ -8,7 +8,16 @@ from types import ModuleType
 
 import pytest
 
-IMITATION_CASES = ["case1", "case2", "case3", "case4", "case5", "case6", "case7", "case8"]
+IMITATION_CASES = [
+    "case1",
+    "case2",
+    "case3",
+    "case4",
+    "case5",
+    "case6",
+    "case7",
+    "case8",
+]
 
 
 @pytest.mark.parametrize("case", IMITATION_CASES)
@@ -18,6 +27,7 @@ def test_fleet_crosses_other_comet_uses_swept_pair_collision(case: str) -> None:
     package = ModuleType(package_name)
     package.__path__ = [str(policy_dir)]
     import sys
+
     sys.modules[package_name] = package
     spec = importlib.util.spec_from_file_location(
         f"{package_name}.safety", policy_dir / "safety.py"
@@ -26,7 +36,9 @@ def test_fleet_crosses_other_comet_uses_swept_pair_collision(case: str) -> None:
     safety = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = safety
     spec.loader.exec_module(safety)
-    comets = [{"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}]
+    comets = [
+        {"planet_ids": [7], "paths": [[[0.0, 0.0], [10.0, 0.0]]], "path_index": 0}
+    ]
 
     crosses = safety.fleet_crosses_other_comet(
         launch_x=5.0,
