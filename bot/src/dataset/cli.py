@@ -318,6 +318,14 @@ def kaggle_scrape_fetch(
         "data/lake/kaggle_episodes/matches.dvc && dvc push'). Receives "
         "CHECKPOINT_IDX/CHECKPOINT_TOTAL env vars.",
     ),
+    finalize_cmd: str = typer.Option(
+        "",
+        "--finalize-cmd",
+        help="Shell command run in finally block (success / failure / "
+        "Ctrl-C / SIGTERM)。途中失敗時もそれまでに永続化した分を S3 へ "
+        "push 等する用途。FINALIZE_OUTCOME env (success/failure/interrupted) "
+        "を受け取る。",
+    ),
 ) -> None:
     """Phase 2 (fetch) のみ実行。plan-in が指す JSON から取得対象を読む。"""
 
@@ -355,20 +363,34 @@ def kaggle_scrape_fetch(
                     f"with code {result.returncode}; continuing[/yellow]"
                 )
 
-    result = scraper.fetch_with_plan(
-        spec,
-        plan,
-        rate_limit=rate_limit,
-        run_id=str(payload["run_id"]),
-        progress_every=progress_every,
-        flush_every=flush_every,
-        workers=workers,
-        checkpoint_every=checkpoint_every,
-        on_checkpoint=on_checkpoint,
-    )
-    _render_scrape_summary(result)
-    if dvc_add and result.records_written > 0:
-        _dvc_add_matches(data_root)
+    outcome = "failure"
+    try:
+        result = scraper.fetch_with_plan(
+            spec,
+            plan,
+            rate_limit=rate_limit,
+            run_id=str(payload["run_id"]),
+            progress_every=progress_every,
+            flush_every=flush_every,
+            workers=workers,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
+        )
+        outcome = "success"
+        _render_scrape_summary(result)
+        if dvc_add and result.records_written > 0:
+            _dvc_add_matches(data_root)
+    except KeyboardInterrupt:
+        outcome = "interrupted"
+        raise
+    finally:
+        if finalize_cmd:
+            console.print(f"[cyan]finalize ({outcome}): running: {finalize_cmd}[/cyan]")
+            env = {**os.environ, "FINALIZE_OUTCOME": outcome}
+            try:
+                subprocess.run(finalize_cmd, check=False, shell=True, env=env)
+            except Exception as exc:  # noqa: BLE001 — finalize must not mask original error
+                console.print(f"[yellow]finalize_cmd raised: {exc}[/yellow]")
 
 
 @kaggle_app.command("scrape")

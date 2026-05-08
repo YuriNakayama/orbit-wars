@@ -56,36 +56,11 @@ jobs:
         run: uv sync --all-extras --dev
         working-directory: bot
 
-      - name: DVC pull existing kaggle episodes
-        # `--project bot` は uv に bot の venv を使わせるだけで cwd は repo root のまま。
-        # `--directory bot` を使うと cwd が bot/ になり DVC が bot/data/... を
-        # 探してしまうため (`workspace not found` + `matches.dvc does not exist`) NG。
-        run: uv run --project bot dvc pull data/lake/kaggle_episodes/matches.dvc
-
-      - name: Scrape phase 1 (plan)
+      - name: Scrape (dev/scrape)
+        # ローカルでも同じスクリプトが使える形に統一。dev/scrape 内で
+        # plan → fetch → finalize (DVC commit + push) が完結する。
         run: |
-          # SCRAPE_LIMIT_PER_TEAM=0 → omit the flag so the CLI default (None=all) applies.
-          limit_args=()
-          if [ "${SCRAPE_LIMIT_PER_TEAM}" -gt 0 ]; then
-            limit_args=(--limit-per-team "${SCRAPE_LIMIT_PER_TEAM}")
-          fi
-          uv run --project bot python -m dataset kaggle scrape-plan \
-            --plan-out /tmp/scrape_plan.json \
-            --top "${SCRAPE_TOP}" \
-            --modes "${SCRAPE_MODES}" \
-            "${limit_args[@]}" \
-            2>&1 | tee /tmp/scrape_plan.log
-
-      - name: Scrape phase 2 (fetch)
-        run: |
-          uv run --project bot python -m dataset kaggle scrape-fetch \
-            --plan-in /tmp/scrape_plan.json \
-            --workers 6 \
-            --rate-capacity 45 \
-            --rate-window 60 \
-            --checkpoint-every 1000 \
-            --checkpoint-cmd "uv run --project bot dvc commit -f --no-relink data/lake/kaggle_episodes/matches.dvc && uv run --project bot dvc push" \
-            2>&1 | tee /tmp/scrape_fetch.log
+          dev/scrape 2>&1 | tee /tmp/scrape.log
 
       - name: DVC commit kaggle episodes
         # cancel/timeout 時も periodic flush 済みの matches/ を救出するため
@@ -140,8 +115,7 @@ jobs:
         with:
           name: kaggle-scrape-log
           path: |
-            /tmp/scrape_plan.log
-            /tmp/scrape_fetch.log
+            /tmp/scrape.log
             /tmp/scrape_plan.json
           if-no-files-found: ignore
           retention-days: 30
