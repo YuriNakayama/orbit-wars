@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -36,6 +37,7 @@ from pipeline.imitation.case9.training.dataset import (
     CaseFourDataset,
     collate,
 )
+from pipeline.imitation.case9.training.epoch_metrics import EpochMetricAccumulator
 from pipeline.imitation.case9.training.losses import (
     LossWeights,
     compute_candidate_ships_loss,
@@ -357,6 +359,7 @@ def _run_epoch(
     grad_clip_max_norm: float = 0.0,
     on_step: Callable[[], None] | None = None,
     head_mode: str = "candidate",
+    metrics_max_samples: int = 500_000,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -365,10 +368,12 @@ def _run_epoch(
     started = time.monotonic()
     n_total = len(loader)
     grad_ctx = torch.enable_grad if is_train else torch.no_grad
+    metric_acc = EpochMetricAccumulator(max_samples=metrics_max_samples)
     with grad_ctx():
         for batch in loader:
             features = _to_batch_features(batch, device)
             output = model(features)
+            metric_acc.update(head_mode, output, batch)
             total_loss, metrics = _compute_loss_dispatch(
                 head_mode, output, batch, loss_weights, device
             )
@@ -420,7 +425,15 @@ def _run_epoch(
                 )
 
     n_batches = max(n_batches, 1)
-    return {k: v / n_batches for k, v in totals.items()}
+    averaged = {k: v / n_batches for k, v in totals.items()}
+    averaged.update(metric_acc.compute())
+    return averaged
+
+
+def _json_metric(value: float) -> float | None:
+    if not math.isfinite(value):
+        return None
+    return round(float(value), 6)
 
 
 def _stamp(msg: str) -> None:
@@ -534,6 +547,8 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         lr=float(train_cfg["lr"]),
         weight_decay=float(train_cfg.get("weight_decay", 0.0)),
     )
+    epoch_metrics_max_samples = int(train_cfg.get("epoch_metrics_max_samples", 500_000))
+    _stamp(f"epoch_metrics_max_samples={epoch_metrics_max_samples}")
 
     epochs = int(train_cfg["epochs"])
     _stamp(f"building scheduler epochs={epochs} cfg={train_cfg.get('scheduler')!r}")
@@ -665,6 +680,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             grad_clip_max_norm=grad_clip_max_norm,
             on_step=ema_step,
             head_mode=head_mode,
+            metrics_max_samples=epoch_metrics_max_samples,
         )
         # iter4: val は EMA weights で評価 (live model は dropout が train-time
         # 振る舞いになっていなくても、AveragedModel(model) は同じ structure を
@@ -679,6 +695,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             epoch=epoch,
             phase="val",
             head_mode=head_mode,
+            metrics_max_samples=epoch_metrics_max_samples,
         )
         current_lr = float(optimizer.param_groups[0]["lr"])
         avg_grad_norm = (
@@ -767,6 +784,13 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                     log_row[f"train_{k}"] = round(train_metrics[k], 4)
                 if k in val_metrics:
                     log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        for prefix, metrics in (("train", train_metrics), ("val", val_metrics)):
+            for key, value in metrics.items():
+                if key in {"total", "grad_norm"}:
+                    continue
+                out_key = f"{prefix}_{key}"
+                if out_key not in log_row:
+                    log_row[out_key] = _json_metric(value)
 
         candidate_value = _select_metric_value(val_metrics, best_metric_name)
         improved = (

@@ -23,6 +23,7 @@ dependencies = [
     "orbit-wars-vendor",
     "runpod>=1.7.0",
     "psutil>=6.0.0",
+    "scikit-learn>=1.8.0",
 ]
 
 [tool.uv.sources]
@@ -39,7 +40,6 @@ build-backend = "hatchling.build"
 dev = [
     { include-group = "lint" },
     { include-group = "env" },
-    "scikit-learn>=1.8.0",
 ]
 lint = [
     "mypy>=1.15.0",

@@ -2528,6 +2528,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "runpod" },
+    { name = "scikit-learn" },
     { name = "torch" },
     { name = "typer" },
     { name = "vastai" },
@@ -2542,7 +2543,6 @@ dev = [
     { name = "pytest-coverage" },
     { name = "pytest-xdist" },
     { name = "ruff" },
-    { name = "scikit-learn" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -2574,6 +2574,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "runpod", specifier = ">=1.7.0" },
+    { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "torch", specifier = ">=2.3.0,<2.7" },
     { name = "typer", specifier = ">=0.15.2" },
     { name = "vastai", specifier = ">=0.3.0" },
@@ -2588,7 +2589,6 @@ dev = [
     { name = "pytest-coverage", specifier = ">=0.0" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "ruff", specifier = ">=0.8.4" },
-    { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
     { name = "types-requests", specifier = ">=2.32.0.20250913" },
 ]

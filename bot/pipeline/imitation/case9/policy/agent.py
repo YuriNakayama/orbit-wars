@@ -58,16 +58,58 @@ _MODEL: Case9Policy | None = None
 _HISTORY: HistoryState = HistoryState()
 
 
-def _load_model() -> Case9Policy:
-    cfg = ModelConfig(
-        planet_in_dim=PLANET_FEAT_DIM,
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _infer_config_from_state(state: dict[str, torch.Tensor]) -> ModelConfig:
+    in_proj = state.get("backbone.in_proj.weight")
+    hidden = int(in_proj.shape[0]) if in_proj is not None else 192
+    planet_in_dim = int(in_proj.shape[1]) if in_proj is not None else PLANET_FEAT_DIM
+    inducing = state.get("backbone.encoder.0.inducing")
+    inducing_points = int(inducing.shape[1]) if inducing is not None else 24
+    encoder_layers = 1 + max(
+        (
+            int(k.split(".")[2])
+            for k in state
+            if k.startswith("backbone.encoder.") and k.split(".")[2].isdigit()
+        ),
+        default=3,
+    )
+    return ModelConfig(
+        planet_in_dim=planet_in_dim,
         global_in_dim=GLOBAL_FEAT_DIM,
+        hidden=hidden,
+        attn_heads=_env_int("IL_CASE9_ATTN_HEADS", 8 if hidden >= 192 else 4),
+        inducing_points=inducing_points,
+        encoder_layers=encoder_layers,
         head_mode=_HEAD_MODE,
     )
-    model = Case9Policy(cfg)
+
+
+def _load_model() -> Case9Policy:
     if _DEFAULT_WEIGHTS.exists():
         state = torch.load(_DEFAULT_WEIGHTS, map_location="cpu", weights_only=True)
+        cfg = _infer_config_from_state(state)
+        model = Case9Policy(cfg)
         model.load_state_dict(state, strict=False)
+    else:
+        cfg = ModelConfig(
+            planet_in_dim=PLANET_FEAT_DIM,
+            global_in_dim=GLOBAL_FEAT_DIM,
+            hidden=192,
+            attn_heads=8,
+            inducing_points=24,
+            encoder_layers=4,
+            head_mode=_HEAD_MODE,
+        )
+        model = Case9Policy(cfg)
     model.eval()
     return model
 

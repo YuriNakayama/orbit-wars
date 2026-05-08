@@ -15,6 +15,7 @@ This module is pure and stateless — fed by the featurizer.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,8 +67,13 @@ def _is_rotating(p: _P) -> bool:
 
 
 def fixed_ship_count(src: _P, tgt: _P) -> int:
-    """Notebook rule: ships = max(target.ships + 1, 20)."""
-    return max(tgt.ships + 1, 20)
+    """Minimum launch count used by the inference candidate mask."""
+    raw = os.environ.get("IL_CASE9_MIN_SHIP_FLOOR")
+    try:
+        floor = int(raw) if raw is not None else 5
+    except ValueError:
+        floor = 5
+    return max(1, floor)
 
 
 def _shot_crosses_sun(src: _P, angle: float, tgt: _P) -> bool:

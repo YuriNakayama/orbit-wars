@@ -17,6 +17,7 @@ Common safety filters (case5 由来) are applied to every variant.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import torch
@@ -38,6 +39,42 @@ SHIPS_BUCKETS = (5, 15, 30, 60)
 NO_OP_TEMPLATE_ID = NUM_TEMPLATES - 1
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _rank_fire_slots(logits: torch.Tensor, noop_idx: int, margin: float) -> list[int]:
+    argmax = int(logits.argmax(dim=-1).item())
+    fire_logits = logits.clone()
+    fire_logits[noop_idx] = -1e9
+    fire_idx = int(fire_logits.argmax(dim=-1).item())
+    if argmax == noop_idx and float(fire_logits[fire_idx].item()) < (
+        float(logits[noop_idx].item()) + margin
+    ):
+        return []
+    return [
+        int(slot)
+        for slot in fire_logits.argsort(dim=-1, descending=True).tolist()
+        if int(slot) != noop_idx
+    ]
+
+
 def _build_planet(row: list[Any]) -> Planet:
     return Planet(
         id=int(row[0]),
@@ -51,7 +88,14 @@ def _build_planet(row: list[Any]) -> Planet:
 
 
 def _fixed_ship_count(target_ships: int) -> int:
-    return max(target_ships + 1, 20)
+    return max(1, _env_int("IL_CASE9_MIN_SHIP_FLOOR", 5))
+
+
+def _scale_ship_count(ships: int) -> int:
+    scale = _env_float("IL_CASE9_SHIP_SCALE", 1.0)
+    if scale >= 1.0:
+        return ships
+    return max(1, int(math.ceil(ships * max(scale, 0.01))))
 
 
 def _safety_planet(p: Planet) -> SafetyPlanet:
@@ -133,8 +177,17 @@ def _emit_action(
         need = max(0, target.ships + 1 - committed.get(target.id, 0))
         if need <= 0:
             return None
-        if ships > need * 2:
-            ships = max(need, 1)
+        attack_mult = max(1.0, _env_float("IL_CASE9_ATTACK_NEED_MULT", 1.0))
+        attack_bonus = max(0, _env_int("IL_CASE9_ATTACK_NEED_BONUS", 0))
+        desired = max(need, int(math.ceil(need * attack_mult)) + attack_bonus)
+        if ships < desired:
+            ships = desired
+        overcommit_mult = max(1.0, _env_float("IL_CASE9_ATTACK_OVERCOMMIT_MULT", 2.0))
+        overcommit_limit = max(desired, int(math.ceil(desired * overcommit_mult)))
+        if ships > overcommit_limit:
+            ships = max(desired, 1)
+        if ships > src.ships:
+            ships = src.ships
     else:
         if committed.get(target.id, 0) > target.ships * 2:
             return None
@@ -229,7 +282,7 @@ def _decode_candidate(
     T = max(float(temperature), 1e-6)
     assert output.candidate_logits is not None
     cand_logits = output.candidate_logits[0] / T
-    slot_argmax = cand_logits.argmax(dim=-1)
+    fire_margin = _env_float("IL_CASE9_CAND_FIRE_MARGIN", -0.50)
     if use_learned_ships:
         assert output.ships_logits is not None
         ships_argmax = output.ships_logits[0].argmax(dim=-1)  # (P,) bucket idx
@@ -252,42 +305,44 @@ def _decode_candidate(
 
     for src_pid in snapshot.my_planet_ids:
         slot = snapshot.planet_ids.index(src_pid)
-        cand_slot = int(slot_argmax[slot].item())
-        if cand_slot == 0 or cand_slot < 0 or cand_slot >= CAND_K:
-            continue
-        if not bool(candidate_mask[slot, cand_slot].item()):
-            continue
-        target_pid = int(candidate_pid[slot, cand_slot].item())
-        if target_pid < 0:
-            continue
         src = pid_to_planet.get(src_pid)
-        target = pid_to_planet.get(target_pid)
-        if src is None or target is None:
+        if src is None:
             continue
-        rule_floor = _fixed_ship_count(target.ships)
-        if rule_floor > src.ships:
-            continue
-        if use_learned_ships:
-            bucket = int(ships_argmax[slot].item())
-            bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-            ships = max(rule_floor, SHIPS_BUCKETS[bucket])
-        else:
-            pred_ships = int(round(float(ship_pred[slot].item())))
-            ships = max(rule_floor, pred_ships)
-        action = _emit_action(
-            src,
-            target,
-            ships,
-            initial_by_id,
-            ang_vel,
-            comets,
-            comet_ids,
-            step,
-            committed,
-            player,
-        )
-        if action is not None:
-            actions.append(action)
+        for cand_slot in _rank_fire_slots(cand_logits[slot], 0, fire_margin):
+            if cand_slot <= 0 or cand_slot >= CAND_K:
+                continue
+            if not bool(candidate_mask[slot, cand_slot].item()):
+                continue
+            target_pid = int(candidate_pid[slot, cand_slot].item())
+            target = pid_to_planet.get(target_pid)
+            if target is None:
+                continue
+            rule_floor = _fixed_ship_count(target.ships)
+            if rule_floor > src.ships:
+                continue
+            if use_learned_ships:
+                bucket = int(ships_argmax[slot].item())
+                bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
+                ships = max(rule_floor, SHIPS_BUCKETS[bucket])
+            else:
+                pred_ships = int(round(float(ship_pred[slot].item())))
+                ships = max(rule_floor, pred_ships)
+            ships = _scale_ship_count(ships)
+            action = _emit_action(
+                src,
+                target,
+                ships,
+                initial_by_id,
+                ang_vel,
+                comets,
+                comet_ids,
+                step,
+                committed,
+                player,
+            )
+            if action is not None:
+                actions.append(action)
+                break
     return actions
 
 
@@ -297,8 +352,8 @@ def _decode_three_head(
     obs: dict[str, Any],
     template_ctx: torch.Tensor,
     temperature: float,
-    from_threshold: float = 0.5,
 ) -> list[list[int | float]]:
+    del template_ctx
     T = max(float(temperature), 1e-6)
     assert output.from_logits is not None
     assert output.target_logits is not None
@@ -307,7 +362,7 @@ def _decode_three_head(
     target_logits = output.target_logits[0] / T
     ships_argmax = output.ships_logits[0].argmax(dim=-1)
     from_prob = torch.sigmoid(from_logits)
-    target_argmax = target_logits.argmax(dim=-1)
+    from_threshold = _env_float("IL_CASE9_THREE_FROM_THRESHOLD", 0.5)
 
     (
         pid_to_planet,
@@ -327,34 +382,42 @@ def _decode_three_head(
         slot = snapshot.planet_ids.index(src_pid)
         if float(from_prob[slot].item()) < from_threshold:
             continue
-        tid = int(target_argmax[slot].item())
-        if tid == NO_OP_TEMPLATE_ID:
-            continue
-        target_pid = resolve_template(tid, list(raw_planets[slot]), raw_planets, player)
-        if target_pid is None:
-            continue
         src = pid_to_planet.get(src_pid)
-        target = pid_to_planet.get(int(target_pid))
-        if src is None or target is None:
+        if src is None:
             continue
-        bucket = int(ships_argmax[slot].item())
-        bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-        rule_floor = _fixed_ship_count(target.ships)
-        ships = max(rule_floor, SHIPS_BUCKETS[bucket])
-        action = _emit_action(
-            src,
-            target,
-            ships,
-            initial_by_id,
-            ang_vel,
-            comets,
-            comet_ids,
-            step,
-            committed,
-            player,
-        )
-        if action is not None:
-            actions.append(action)
+        for tid in target_logits[slot].argsort(dim=-1, descending=True).tolist():
+            tid = int(tid)
+            if tid == NO_OP_TEMPLATE_ID:
+                continue
+            target_pid = resolve_template(
+                tid, list(raw_planets[slot]), raw_planets, player
+            )
+            if target_pid is None:
+                continue
+            target = pid_to_planet.get(int(target_pid))
+            if target is None:
+                continue
+            bucket = int(ships_argmax[slot].item())
+            bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
+            rule_floor = _fixed_ship_count(target.ships)
+            if rule_floor > src.ships:
+                continue
+            ships = _scale_ship_count(max(rule_floor, SHIPS_BUCKETS[bucket]))
+            action = _emit_action(
+                src,
+                target,
+                ships,
+                initial_by_id,
+                ang_vel,
+                comets,
+                comet_ids,
+                step,
+                committed,
+                player,
+            )
+            if action is not None:
+                actions.append(action)
+                break
     return actions
 
 
@@ -369,7 +432,7 @@ def _decode_template_ships(
     assert output.ships_logits is not None
     target_logits = output.target_logits[0] / T
     ships_argmax = output.ships_logits[0].argmax(dim=-1)
-    target_argmax = target_logits.argmax(dim=-1)
+    fire_margin = _env_float("IL_CASE9_TEMPLATE_FIRE_MARGIN", -999.0)
 
     (
         pid_to_planet,
@@ -387,34 +450,41 @@ def _decode_template_ships(
 
     for src_pid in snapshot.my_planet_ids:
         slot = snapshot.planet_ids.index(src_pid)
-        tid = int(target_argmax[slot].item())
-        if tid == NO_OP_TEMPLATE_ID:
-            continue
-        target_pid = resolve_template(tid, list(raw_planets[slot]), raw_planets, player)
-        if target_pid is None:
-            continue
         src = pid_to_planet.get(src_pid)
-        target = pid_to_planet.get(int(target_pid))
-        if src is None or target is None:
+        if src is None:
             continue
-        bucket = int(ships_argmax[slot].item())
-        bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-        rule_floor = _fixed_ship_count(target.ships)
-        ships = max(rule_floor, SHIPS_BUCKETS[bucket])
-        action = _emit_action(
-            src,
-            target,
-            ships,
-            initial_by_id,
-            ang_vel,
-            comets,
-            comet_ids,
-            step,
-            committed,
-            player,
-        )
-        if action is not None:
-            actions.append(action)
+        for tid in _rank_fire_slots(
+            target_logits[slot], NO_OP_TEMPLATE_ID, fire_margin
+        ):
+            target_pid = resolve_template(
+                tid, list(raw_planets[slot]), raw_planets, player
+            )
+            if target_pid is None:
+                continue
+            target = pid_to_planet.get(int(target_pid))
+            if target is None:
+                continue
+            bucket = int(ships_argmax[slot].item())
+            bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
+            rule_floor = _fixed_ship_count(target.ships)
+            if rule_floor > src.ships:
+                continue
+            ships = _scale_ship_count(max(rule_floor, SHIPS_BUCKETS[bucket]))
+            action = _emit_action(
+                src,
+                target,
+                ships,
+                initial_by_id,
+                ang_vel,
+                comets,
+                comet_ids,
+                step,
+                committed,
+                player,
+            )
+            if action is not None:
+                actions.append(action)
+                break
     return actions
 
 
