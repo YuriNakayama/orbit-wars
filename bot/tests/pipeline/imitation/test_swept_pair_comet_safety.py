@@ -20,9 +20,12 @@ IMITATION_CASES = [
 ]
 
 
+BOT_ROOT = Path(__file__).resolve().parents[3]  # bot/
+
+
 @pytest.mark.parametrize("case", IMITATION_CASES)
 def test_fleet_crosses_other_comet_uses_swept_pair_collision(case: str) -> None:
-    policy_dir = Path("bot") / "pipeline" / "imitation" / case / "policy"
+    policy_dir = BOT_ROOT / "pipeline" / "imitation" / case / "policy"
     package_name = f"_test_imitation_{case}_policy"
     package = ModuleType(package_name)
     package.__path__ = [str(policy_dir)]
