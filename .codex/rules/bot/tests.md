@@ -5,7 +5,7 @@ paths:
 
 # Bot Test Rules (`bot/tests/**`)
 
-Pytest conventions for the bot test suite. General Python rules (type hints, logging, naming) live in `.claude/rules/python.md`.
+Pytest conventions for the bot test suite. General Python rules (type hints, logging, naming) follow the repository Python rules.
 
 ## Frameworks
 
