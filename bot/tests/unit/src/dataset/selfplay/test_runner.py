@@ -60,4 +60,3 @@ def test_make_match_specs_uses_sequential_seeds(tmp_path: Path) -> None:
     assert [m.seed for m in match_specs] == [0, 1, 2]
     assert all(m.run_id == "run_abc" for m in match_specs)
     assert all(m.mode == "1v1" for m in match_specs)
-

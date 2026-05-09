@@ -98,4 +98,3 @@ def test_wrap_with_timing_records_elapsed() -> None:
 def test_wrap_with_timing_passes_string_through() -> None:
     result = executor._wrap_with_timing("random", [])
     assert result == "random"
-

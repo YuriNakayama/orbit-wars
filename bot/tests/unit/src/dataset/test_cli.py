@@ -26,4 +26,3 @@ def test_list_cmd_empty_data_root_prints_no_matches(tmp_path: Path) -> None:
     result = runner.invoke(app, ["list", "--data-root", str(tmp_path)])
     assert result.exit_code == 0
     assert "no matches" in result.stdout
-

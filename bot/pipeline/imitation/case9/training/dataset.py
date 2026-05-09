@@ -235,7 +235,6 @@ class CaseFourDataset(Dataset[Sample]):
         weights = raw / max(mean_raw, 1e-12)
         return torch.tensor(weights, dtype=torch.float32)
 
-
     def class_weight_on_templates_including_noop(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
