@@ -1,6 +1,6 @@
 # imitation/case10 template_ships fair-scaled variant.
 # Conditions: Set Transformer hidden=192 / ISABx4 / heads=8 / inducing=24,
-# case10 clean featurizer (P=41/G=20; case8 clean + timeline), 45 epochs,
+# case10 clean featurizer (P=41/G=20; case8 clean + timeline), 50 epochs,
 # batch=512, warmup+cosine, class weights + focal/minority handling.
 seed: 0
 
@@ -31,7 +31,7 @@ model:
 train:
   case: case10
   batch_size: 512
-  epochs: 45
+  epochs: 50
   lr: 3.0e-4
   weight_decay: 1.0e-4
   num_workers: 0
@@ -48,7 +48,7 @@ train:
     focal_gamma: 2.0
   scheduler:
     type: cosine_warmup
-    t_max: 45
+    t_max: 50
     eta_min: 1.0e-5
     warmup_epochs: 3
     warmup_start_factor: 0.1

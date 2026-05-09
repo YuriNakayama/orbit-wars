@@ -75,21 +75,30 @@ class BatchedSample:
     is_noop: torch.Tensor
 
 
-def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
-    """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
-    numpy buffer **without** materialising a Python list.
-
-    `combine_chunks()` consolidates into one ListArray; nested `flatten()`
-    drills past list nesting until we reach a primitive array; that primitive
-    array's `.to_numpy(zero_copy_only=False)` gives a single numpy buffer.
-
-    Returns a writable copy so downstream `torch.from_numpy` accepts it and
-    column-masking (mask_planet_cols / mask_global_cols) can mutate.
-    """
-    arr: pa.Array = col.combine_chunks()
+def _flatten_arrow_array(arr: pa.Array) -> pa.Array:
     while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
         arr = arr.flatten()
-    return np.array(arr.to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
+    return arr
+
+
+def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
+    """Flatten a chunked list column to numpy without Arrow combine_chunks().
+
+    Large case10 parquet files can exceed the 32-bit offset limit of Arrow
+    ListArray when `combine_chunks()` is called. Flatten each row-group chunk
+    independently, then concatenate numpy buffers. This preserves the exact
+    flattened values while avoiding offset overflow.
+    """
+    arrays = [
+        np.asarray(
+            _flatten_arrow_array(chunk).to_numpy(zero_copy_only=False),
+            dtype=dtype,
+        )
+        for chunk in col.chunks
+    ]
+    if not arrays:
+        return np.empty(0, dtype=dtype)
+    return np.concatenate(arrays).astype(dtype, copy=True)
 
 
 def _take(table_box: list[pa.Table], name: str, dtype: np.dtype) -> np.ndarray:
@@ -234,7 +243,6 @@ class CaseTenDataset(Dataset[Sample]):
         mean_raw = float(raw[present_mask].mean())
         weights = raw / max(mean_raw, 1e-12)
         return torch.tensor(weights, dtype=torch.float32)
-
 
     def class_weight_on_templates_including_noop(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
