@@ -496,10 +496,7 @@ def compute_template_ships_loss(
         )
         with torch.no_grad():
             ships_acc = float(
-                (ships_logits_sel.argmax(dim=-1) == ships_labels)
-                .float()
-                .mean()
-                .item()
+                (ships_logits_sel.argmax(dim=-1) == ships_labels).float().mean().item()
             )
             fire_count = int(ships_valid.sum().item())
     else:

@@ -13,8 +13,8 @@ import logging
 from dataclasses import asdict, dataclass
 
 import typer
-from kaggle_environments import make
 
+from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
 from pipeline.imitation.case0.policy.agent import agent
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,8 @@ class SmokeResult:
 
 
 def run_smoke() -> SmokeResult:
-    env = make("orbit_wars", debug=False)
-    env.run([agent, "random"])
+    env = make_orbit_wars_env(debug=False)
+    run_orbit_wars_episode(env, [agent, "random"])
     return SmokeResult(completed=True, num_steps=len(env.steps))
 
 

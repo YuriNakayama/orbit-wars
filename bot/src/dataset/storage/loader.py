@@ -41,12 +41,13 @@ def load_replay_payload(match_id: str, data_root: Path) -> dict[str, Any]:
 
 
 def load_replay(match_id: str, data_root: Path) -> Any:
-    """Reconstruct a kaggle_environments Environment from a stored replay."""
-    from kaggle_environments import make
+    """Reconstruct an Orbit Wars Environment from a stored replay."""
+    from env.orbit_wars import make_orbit_wars_env
 
     payload = load_replay_payload(match_id, data_root=data_root)
-    return make(
-        payload.get("name", "orbit_wars"),
+    if payload.get("name", "orbit_wars") != "orbit_wars":
+        raise ValueError("only orbit_wars replays are supported")
+    return make_orbit_wars_env(
         configuration=payload.get("configuration", {}),
         steps=payload.get("steps", []),
     )

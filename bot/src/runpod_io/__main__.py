@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from runpod_io.cli import app
+from runpod_io.cli.app import app
 
 if __name__ == "__main__":
     app()

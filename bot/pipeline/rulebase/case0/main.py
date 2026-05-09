@@ -16,9 +16,17 @@ Key concepts demonstrated:
 """
 
 import math
-from typing import Any
+from typing import Any, NamedTuple
 
-from kaggle_environments.envs.orbit_wars.orbit_wars import Planet
+
+class Planet(NamedTuple):
+    id: int
+    owner: int
+    x: float
+    y: float
+    radius: float
+    ships: int
+    production: int
 
 
 def agent(obs: Any) -> list[list[Any]]:

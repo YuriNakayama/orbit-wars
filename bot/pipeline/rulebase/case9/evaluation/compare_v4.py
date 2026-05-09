@@ -23,8 +23,7 @@ class EpisodeStats:
 
 def _run_one(args: tuple[int, int, bool]) -> tuple[int, int, int | None, int]:
     """Worker entry: (v9_seat, seed, no_anti) -> (v9_seat, seed, winner, turns)."""
-    import kaggle_environments
-
+    from env.orbit_wars import make_orbit_wars_env
     from pipeline.rulebase.case4.baseline import agent as agent_v4
     from pipeline.rulebase.case9.baseline import agent as agent_v9
     from pipeline.rulebase.case9.baseline.core import config as cfg
@@ -34,9 +33,7 @@ def _run_one(args: tuple[int, int, bool]) -> tuple[int, int, int | None, int]:
         cfg.ANTI_PING_PONG_ENABLED = False
 
     agents = [agent_v9, agent_v4] if v9_seat == 0 else [agent_v4, agent_v9]
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": seed}
-    )
+    env = make_orbit_wars_env(agents=2, seed=seed)
     turn = 0
     while not env.done:
         obs_by_player = [step_info["observation"] for step_info in env.steps[-1]]

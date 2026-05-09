@@ -64,13 +64,13 @@ def _load_agent(case: str):  # type: ignore[no-untyped-def]
 
 
 def _run_episode(case: str, seed: int) -> list[TurnStats]:
-    import kaggle_environments
+    from env.orbit_wars import make_orbit_wars_env
 
     ag = _load_agent(case)
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": seed}
-    )
-    env.run([ag, ag])
+    env = make_orbit_wars_env(agents=2, seed=seed)
+    from env.orbit_wars import run_orbit_wars_episode
+
+    run_orbit_wars_episode(env, [ag, ag])
 
     rows: list[TurnStats] = []
     for turn_idx, step in enumerate(env.steps):

@@ -33,21 +33,12 @@ class EpisodeStats:
 
 
 def _run_episode(v7_seat: int, seed: int) -> EpisodeStats:
-    # Side-effect import: registers the Rust-backed `orbit_wars` interpreter
-    # before `make("orbit_wars", ...)` resolves the env name.
-    try:
-        import orbit_wars_rust  # noqa: F401
-    except ModuleNotFoundError:
-        pass
-    import kaggle_environments
-
+    from env.orbit_wars import make_orbit_wars_env
     from pipeline.rulebase.case6.baseline import agent as agent_v6
     from pipeline.rulebase.case7.baseline import agent as agent_v7
 
     agents = [agent_v7, agent_v6] if v7_seat == 0 else [agent_v6, agent_v7]
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": seed}
-    )
+    env = make_orbit_wars_env(agents=2, seed=seed)
     peaks_by_owner_fleet: dict[tuple[int, int], int] = {}
     turn = 0
     while not env.done:
