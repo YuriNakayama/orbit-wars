@@ -7,6 +7,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from dataset.cli import app
+from dataset.storage import loader
 
 
 def test_run_cmd_with_random_agents_succeeds(tmp_path: Path) -> None:
@@ -29,4 +30,4 @@ def test_run_cmd_with_random_agents_succeeds(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, result.stdout
-    assert "Summary" in result.stdout
+    assert loader.list_matches(data_root=tmp_path, mode="1v1", limit=10).height == 1

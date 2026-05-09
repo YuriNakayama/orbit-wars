@@ -26,6 +26,8 @@ def _skip_if_weights_incompatible() -> None:
     }
     try:
         agent(probe_obs)
+    except FileNotFoundError as e:
+        pytest.skip(f"weights.pt is not available in this worktree: {e}")
     except RuntimeError as e:
         if "size mismatch" in str(e) or "Missing key" in str(e):
             pytest.skip(f"weights.pt incompatible with current architecture: {e}")

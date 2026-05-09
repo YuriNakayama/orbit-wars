@@ -18,7 +18,7 @@ from vast.instance import (
 
 # テンプレ実体は bot/src/vast/onstart.sh.tmpl
 # (this file: bot/tests/src/vast/test_instance.py → parents[3] = bot/)
-TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "src/vast/onstart.sh.tmpl"
+TEMPLATE_PATH = Path(__file__).resolve().parents[4] / "src/vast/onstart.sh.tmpl"
 
 
 def _valid_kwargs() -> dict[str, str]:

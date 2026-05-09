@@ -62,7 +62,7 @@ def test_agent_returns_valid_action_shape() -> None:
 def test_license_file_exists() -> None:
     """Apache 2.0 attribution must be shipped with the case5 baseline."""
     license_path = (
-        Path(__file__).parent.parent.parent.parent.parent
+        Path(__file__).resolve().parents[5]
         / "pipeline"
         / "rulebase"
         / "case5"

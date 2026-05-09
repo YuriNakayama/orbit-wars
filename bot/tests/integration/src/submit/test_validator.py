@@ -9,7 +9,7 @@ import pytest
 from submit.validator import ValidationError, dry_run
 
 # this file: bot/tests/src/submit/test_validator.py → parents[3] = bot/
-CASE0 = Path(__file__).resolve().parents[3] / "pipeline" / "rulebase" / "case0"
+CASE0 = Path(__file__).resolve().parents[4] / "pipeline" / "rulebase" / "case0"
 
 
 pytestmark = pytest.mark.slow
