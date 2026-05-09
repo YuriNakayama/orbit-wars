@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from pipeline.rulebase.case5.baseline import agent
+
+AgentFn = Any
+typed_agent = cast(AgentFn, agent)
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 SNAPSHOT_OBS = SNAPSHOT_DIR / "obs_seed0_turn10.json"
@@ -22,7 +26,7 @@ def test_agent_snapshot_first_turn_action() -> None:
         )
     obs = json.loads(SNAPSHOT_OBS.read_text(encoding="utf-8"))
     expected = json.loads(SNAPSHOT_ACTION.read_text(encoding="utf-8"))
-    actual = agent(obs)
+    actual = typed_agent(obs)
     assert actual == expected
 
 
@@ -48,7 +52,7 @@ def test_agent_returns_valid_action_shape() -> None:
         "comets": [],
         "comet_planet_ids": [],
     }
-    actions = agent(obs)
+    actions = typed_agent(obs)
     assert isinstance(actions, list)
     for move in actions:
         assert isinstance(move, list) and len(move) == 3

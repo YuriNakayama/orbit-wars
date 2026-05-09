@@ -9,6 +9,22 @@ from typing import Any
 
 from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
 
+__all__ = [
+    "assert_agent_runs_against_random_to_done",
+    "assert_done_or_inactive",
+    "assert_no_fleet_enters_sun_zone",
+    "avg_peak_over_seeds",
+    "fire_one_fleet",
+    "fleet_by_id",
+    "make_initialized_orbit_env",
+    "make_orbit_env",
+    "max_observed_ships_per_fleet",
+    "noop_agent",
+    "planet_by_id",
+    "run_orbit_wars_episode",
+    "walk_fleets",
+]
+
 AgentFn = Callable[[dict[str, Any]], list[list[int | float]]]
 NoopFn = Callable[[object], list[list[int | float]]]
 

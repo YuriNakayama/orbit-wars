@@ -11,7 +11,8 @@ from unittest.mock import MagicMock
 import pytest
 from typer.testing import CliRunner
 
-from runpod_io.cli.app import _verify_commit_pushed, app
+from runpod_io.cli.app import app
+from runpod_io.git import verify_commit_pushed as _verify_commit_pushed
 from runpod_io.runpod.offers import Offer
 
 runner = CliRunner()

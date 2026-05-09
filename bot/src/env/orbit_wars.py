@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from utils.repo_root import find_repo_root
 
@@ -60,4 +60,4 @@ def make_orbit_wars_env(
 def run_orbit_wars_episode(env: Any, agents: Sequence[Any]) -> list[Any]:
     """Run one episode with the in-repo simulator implementation."""
     simulator = _load_simulator()
-    return simulator.run_episode(env, list(agents))
+    return cast(list[Any], simulator.run_episode(env, list(agents)))
