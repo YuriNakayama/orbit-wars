@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import json
 import logging
 import math
 import os
@@ -38,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import orjson
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -62,6 +62,7 @@ UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
 FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
+DEFAULT_PREPROCESS_WORKERS = 24
 SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100% (case7 流)
 
 
@@ -97,6 +98,11 @@ def _repo_root() -> Path:
 def _abspath(rel: str | Path) -> Path:
     p = Path(rel)
     return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
+def _load_replay_json(replay_path: Path) -> dict[str, Any]:
+    with gzip.open(replay_path, "rb") as f:
+        return orjson.loads(f.read())
 
 
 def _build_planet(row: list[Any]) -> Planet:
@@ -179,6 +185,7 @@ def _build_frame(
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
     planets = [_build_planet(row) for row in raw_planets]
     by_id = {p.id: p for p in planets}
+    raw_by_id = {int(row[0]): row for row in raw_planets}
     initial_planets = [_build_planet(row) for row in (obs.get("initial_planets") or [])]
     initial_by_id = {p.id: p for p in initial_planets}
     ang_vel = float(obs.get("angular_velocity", 0.0) or 0.0)
@@ -228,9 +235,7 @@ def _build_frame(
             cand_slot_per_src[slot] = UNUSED_LABEL
             outside += 1
         else:
-            tgt_row = next(
-                (row for row in raw_planets if int(row[0]) == int(target_pid)), None
-            )
+            tgt_row = raw_by_id.get(int(target_pid))
             if tgt_row is None:
                 target_template = T_NO_OP
             else:
@@ -281,8 +286,7 @@ def _iter_episode_frames(
     replay_path: Path,
     player_slots: list[int],
 ) -> tuple[list[dict[str, Any]], int, int]:
-    with gzip.open(replay_path, "rt") as f:
-        data = json.load(f)
+    data = _load_replay_json(replay_path)
     steps = data.get("steps", [])
     out: list[dict[str, Any]] = []
     histories: dict[int, HistoryState] = {slot: HistoryState() for slot in player_slots}
@@ -429,8 +433,7 @@ def _turn_count_in_range(
 ) -> bool:
     if not replay_path.exists():
         return False
-    with gzip.open(replay_path, "rt") as f:
-        data = json.load(f)
+    data = _load_replay_json(replay_path)
     turns = len(data.get("steps", []))
     if turn_min is not None and turns < turn_min:
         return False
@@ -608,14 +611,15 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     if workers_env is not None:
         max_workers = max(0, int(workers_env))
     else:
-        max_workers = max(1, (os.cpu_count() or 2) - 1)
+        max_workers = max(1, min(DEFAULT_PREPROCESS_WORKERS, (os.cpu_count() or 2) - 1))
     # inflight cap = 4x workers — bounds memory of pending future results
     inflight_cap = max(4, max_workers * 4)
     logger.info(
-        "preprocess case10 parallel: workers=%d inflight_cap=%d (override via "
-        "ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
+        "preprocess case10 parallel: workers=%d inflight_cap=%d (default_cap=%d; "
+        "override via ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
         max_workers,
         inflight_cap,
+        DEFAULT_PREPROCESS_WORKERS,
     )
 
     def _consume_result(result: _EpisodeResult) -> None:
