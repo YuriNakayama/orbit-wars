@@ -221,3 +221,48 @@ stages:
       - bot/pipeline/imitation/case9/configs/il_case9_candidate_ships.yaml
     outs:
       - bot/pipeline/imitation/case9/policy/weights_candidate_ships.pt
+
+  preprocess_imitation_case10:
+    cmd: uv run --directory bot python -m pipeline.imitation.case10.training.preprocess --config pipeline/imitation/case10/configs/il_case10_candidate.yaml
+    deps:
+      - data/lake/kaggle_episodes/matches
+      - bot/pipeline/imitation/case10/training/preprocess.py
+      - bot/pipeline/imitation/case10/policy/featurizer.py
+      - bot/pipeline/imitation/case10/policy/timeline.py
+      - bot/pipeline/imitation/case10/policy/geometry.py
+      - bot/pipeline/imitation/case10/policy/templates.py
+      - bot/pipeline/imitation/case10/policy/candidates.py
+      - bot/pipeline/imitation/case10/configs/il_case10_candidate.yaml
+    outs:
+      - data/mart/imitation/case10/train.parquet
+      - data/mart/imitation/case10/val.parquet
+
+  train_imitation_case10_candidate:
+    cmd: uv run --directory bot python -m pipeline.imitation.case10.training.train --config pipeline/imitation/case10/configs/il_case10_candidate.yaml
+    deps:
+      - data/mart/imitation/case10/train.parquet
+      - data/mart/imitation/case10/val.parquet
+      - bot/pipeline/imitation/case10/training/train.py
+      - bot/pipeline/imitation/case10/training/losses.py
+      - bot/pipeline/imitation/case10/training/dataset.py
+      - bot/pipeline/imitation/case10/training/epoch_metrics.py
+      - bot/pipeline/imitation/case10/policy/model.py
+      - bot/pipeline/imitation/case10/policy/heads
+      - bot/pipeline/imitation/case10/configs/il_case10_candidate.yaml
+    outs:
+      - bot/pipeline/imitation/case10/policy/weights_candidate_ships.pt
+
+  train_imitation_case10_template:
+    cmd: uv run --directory bot python -m pipeline.imitation.case10.training.train --config pipeline/imitation/case10/configs/il_case10_template.yaml
+    deps:
+      - data/mart/imitation/case10/train.parquet
+      - data/mart/imitation/case10/val.parquet
+      - bot/pipeline/imitation/case10/training/train.py
+      - bot/pipeline/imitation/case10/training/losses.py
+      - bot/pipeline/imitation/case10/training/dataset.py
+      - bot/pipeline/imitation/case10/training/epoch_metrics.py
+      - bot/pipeline/imitation/case10/policy/model.py
+      - bot/pipeline/imitation/case10/policy/heads
+      - bot/pipeline/imitation/case10/configs/il_case10_template.yaml
+    outs:
+      - bot/pipeline/imitation/case10/policy/weights_template_ships.pt

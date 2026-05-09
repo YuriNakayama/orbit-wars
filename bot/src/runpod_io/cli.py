@@ -201,6 +201,34 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/imitation/case9/policy/weights_dual.pt",
     },
+    "case10_candidate": {
+        "stage": "train_imitation_case10_candidate",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case10/configs/il_case10_candidate.yaml"
+        ),
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config pipeline/imitation/case10/configs/il_case10_candidate.yaml"
+        ),
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/weights_candidate_ships.pt"
+        ),
+    },
+    "case10_template": {
+        "stage": "train_imitation_case10_template",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case10/configs/il_case10_template.yaml"
+        ),
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config pipeline/imitation/case10/configs/il_case10_template.yaml"
+        ),
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/weights_template_ships.pt"
+        ),
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
@@ -227,6 +255,8 @@ def _case_subdir(case: str) -> str:
     """
     if case.startswith("case9_"):
         return "case9"
+    if case.startswith("case10_"):
+        return "case10"
     return case
 
 
@@ -660,7 +690,7 @@ def train(
         stage=defaults["stage"],
         branch=branch,
         repo_url=repo_url,
-        case=case,
+        case=_case_subdir(case),
         train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
