@@ -51,10 +51,10 @@ def assert_done_or_inactive(env: Any) -> None:
     assert all(status in DONE_STATUSES for status in statuses)
 
 
-def assert_agent_runs_1v1_to_done(agent: AgentFn, *, seed: int = 0) -> None:
-    """Run an agent against itself in 1v1 and assert terminal statuses."""
+def assert_agent_runs_against_random_to_done(agent: AgentFn, *, seed: int = 0) -> None:
+    """Run an agent against the fixed random opponent and assert terminal statuses."""
     env = make_orbit_env(seed=seed, agents=2)
-    run_orbit_wars_episode(env, [agent, agent])
+    run_orbit_wars_episode(env, [agent, "random"])
     assert_done_or_inactive(env)
 
 
@@ -122,16 +122,27 @@ def fire_one_fleet(
     return obs_after, max(int(fleet[0]) for fleet in fleets)
 
 
+def _random_action(env: Any, seat: int) -> Any:
+    random_agent = env.agents.get("random")
+    if random_agent is None:
+        return "random"
+    obs = env.steps[-1][seat]["observation"]
+    try:
+        return random_agent(obs, env.configuration)
+    except TypeError:
+        return random_agent(obs)
+
+
 def max_observed_ships_per_fleet(
     agent: AgentFn, *, seed: int, max_turns: int = 80
 ) -> dict[int, int]:
-    """Run single-sided self-play and record each friendly fleet's peak ships."""
+    """Run the agent against a fixed random opponent and record friendly peaks."""
     env = make_orbit_env(seed=seed, agents=2)
     peaks: dict[int, int] = {}
     for _ in range(max_turns):
         if env.done:
             break
-        env.step([agent(env.steps[-1][0]["observation"]), []])
+        env.step([agent(env.steps[-1][0]["observation"]), _random_action(env, 1)])
         fleets = env.steps[-1][0]["observation"].get("fleets", [])
         for fleet in fleets:
             fid, owner, _x, _y, _angle, _from_pid, ships = fleet

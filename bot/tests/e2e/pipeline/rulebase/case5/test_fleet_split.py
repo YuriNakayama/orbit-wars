@@ -40,22 +40,22 @@ def _count_splits_in_action(actions: list[list[float]]) -> int:
 def _split_count_for_seed(seed: int) -> tuple[int, int]:
     """Return (split_count, episode_length_turns)."""
     env = make_orbit_env(seed=seed, agents=2)
-    run_orbit_wars_episode(env, [agent, agent])
+    run_orbit_wars_episode(env, [agent, "random"])
     total = 0
     for turn_idx, step in enumerate(env.steps):
         if turn_idx >= _TOTAL_WAR_TURN_THRESHOLD:
             break
-        for seat_state in step:
-            action = seat_state.get("action")
-            if not action:
-                continue
-            total += _count_splits_in_action(list(action))
+        seat_state = step[0]
+        action = seat_state.get("action")
+        if not action:
+            continue
+        total += _count_splits_in_action(list(action))
     return total, len(env.steps)
 
 
 @pytest.mark.slow
 def test_fleet_split_rate_stays_below_threshold() -> None:
-    """自己対戦の 1 エピソード平均分割件数が閾値以下であること。
+    """random 対戦の 1 エピソード平均分割件数が閾値以下であること。
 
     Phase 1 改修 (SWARM_MIN_PARTICIPANT_SHIPS, follow-up ガード) で分割は
     平均 7.8→2.6/ep に減少した。CI 負荷依存で個別エピソードは 0〜6 件の

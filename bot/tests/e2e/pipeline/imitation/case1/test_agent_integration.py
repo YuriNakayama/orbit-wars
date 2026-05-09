@@ -43,10 +43,10 @@ def test_agent_runs_full_episode_vs_random() -> None:
 
 
 @pytest.mark.slow
-def test_agent_runs_full_episode_self_play() -> None:
+def test_agent_runs_full_episode_against_random_second_seed() -> None:
     _skip_if_weights_incompatible()
-    env = make_orbit_env(debug=True)
-    run_orbit_wars_episode(env, [agent, agent])
+    env = make_orbit_env(seed=1, debug=True)
+    run_orbit_wars_episode(env, [agent, "random"])
     statuses = [s["status"] for s in env.state]
     for status in statuses:
         assert status in DONE_STATUSES, f"unexpected status: {status}"

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from pipeline.rulebase.case7.baseline import agent
-from tests.e2e.pipeline.util import assert_agent_runs_1v1_to_done
+from tests.e2e.pipeline.util import assert_agent_runs_against_random_to_done
 
 
-def test_agent_runs_1v1_to_done() -> None:
-    assert_agent_runs_1v1_to_done(agent)
+def test_agent_runs_against_random_to_done() -> None:
+    assert_agent_runs_against_random_to_done(agent)
