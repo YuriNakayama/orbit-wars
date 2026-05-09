@@ -1,6 +1,6 @@
 """Snapshot capture/write helpers shared by per-case `evaluation/snapshot_update.py`.
 
-The kaggle_environments `orbit_wars` engine is only partially deterministic
+The local Orbit Wars simulator can still vary with seed/configuration
 (episode length varies across identical-seed runs), so snapshots cover a single
 representative observation. Each case calls `capture_observation` to grab the
 obs at (seed, turn), runs its own `agent(obs)` to compute the action, then
@@ -16,11 +16,9 @@ from typing import Any
 
 def capture_observation(seed: int, turn: int, *, agents: int = 2) -> dict[str, Any]:
     """Reset orbit_wars and step `turn + 1` no-op turns; return the latest obs."""
-    import kaggle_environments
+    from env.orbit_wars import make_orbit_wars_env
 
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": agents, "seed": seed}
-    )
+    env = make_orbit_wars_env(agents=agents, seed=seed)
     no_op_actions: list[list[Any]] = [[] for _ in range(agents)]
     for _ in range(turn + 1):
         env.step(no_op_actions)

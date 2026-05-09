@@ -22,15 +22,12 @@ class EpisodeStats:
 
 
 def _run_episode(v4_seat: int, seed: int) -> EpisodeStats:
-    import kaggle_environments
-
+    from env.orbit_wars import make_orbit_wars_env
     from pipeline.rulebase.case2.baseline import agent as agent_v2
     from pipeline.rulebase.case4.baseline import agent as agent_v4
 
     agents = [agent_v4, agent_v2] if v4_seat == 0 else [agent_v2, agent_v4]
-    env = kaggle_environments.make(
-        "orbit_wars", configuration={"agents": 2, "seed": seed}
-    )
+    env = make_orbit_wars_env(agents=2, seed=seed)
     peaks_by_owner_fleet: dict[tuple[int, int], int] = {}
     turn = 0
     while not env.done:

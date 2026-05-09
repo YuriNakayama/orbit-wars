@@ -54,25 +54,20 @@ def dry_run(case_dir: Path, *, turns: int | None = None) -> dict[str, Any]:
     module = _load_agent_module(main_py)
     agent_fn = cast(Any, module.agent)
 
-    try:
-        from kaggle_environments import make
-    except ImportError as exc:
-        raise ValidationError(
-            "kaggle_environments が import できません。`uv sync` を実行してください。"
-        ) from exc
+    from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
 
     configuration: dict[str, Any] = {}
     if turns is not None:
         configuration["episodeSteps"] = turns
 
-    env = make("orbit_wars", configuration=configuration, debug=True)
+    env = make_orbit_wars_env(configuration=configuration, debug=True)
 
     start = time.perf_counter()
     try:
-        env.run([agent_fn, "random"])
+        run_orbit_wars_episode(env, [agent_fn, "random"])
     except Exception as exc:
         raise ValidationError(
-            f"env.run で例外が発生しました: {exc}\n{traceback.format_exc()}"
+            f"simulator 実行で例外が発生しました: {exc}\n{traceback.format_exc()}"
         ) from exc
     elapsed = time.perf_counter() - start
 
