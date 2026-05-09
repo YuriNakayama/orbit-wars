@@ -536,7 +536,12 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         max_episodes,
     )
 
-    index = pl.read_parquet(index_path)
+    # The Kaggle episode index is a partitioned parquet dataset collected over
+    # multiple scraper runs.  Newer partitions can contain extra metadata
+    # columns (for example `agent_0_team_rank`) that older partitions do not
+    # have.  Use scan_parquet with extra_columns="ignore" so the shared schema
+    # remains readable on RunPod.
+    index = pl.scan_parquet(index_path, extra_columns="ignore").collect()
     filtered, cutoff = _filter_index(
         index,
         modes,
