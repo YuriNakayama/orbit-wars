@@ -62,7 +62,6 @@ UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
 FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
-DEFAULT_PREPROCESS_WORKERS = 24
 SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100% (case7 流)
 
 
@@ -611,15 +610,14 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     if workers_env is not None:
         max_workers = max(0, int(workers_env))
     else:
-        max_workers = max(1, min(DEFAULT_PREPROCESS_WORKERS, (os.cpu_count() or 2) - 1))
+        max_workers = max(1, (os.cpu_count() or 2) - 1)
     # inflight cap = 4x workers — bounds memory of pending future results
     inflight_cap = max(4, max_workers * 4)
     logger.info(
-        "preprocess case10 parallel: workers=%d inflight_cap=%d (default_cap=%d; "
-        "override via ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
+        "preprocess case10 parallel: workers=%d inflight_cap=%d (override via "
+        "ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
         max_workers,
         inflight_cap,
-        DEFAULT_PREPROCESS_WORKERS,
     )
 
     def _consume_result(result: _EpisodeResult) -> None:
