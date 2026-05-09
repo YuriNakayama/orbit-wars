@@ -9,30 +9,32 @@ from pathlib import Path
 import pytest
 
 from runpod_io.auth import AwsCreds
-from runpod_io.offers import Offer
+from runpod_io.runpod.offers import Offer
 
 
 @pytest.fixture
 def mock_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "runpod_io.cli.load_aws_creds",
+        "runpod_io.cli.app.load_aws_creds",
         lambda profile=None: AwsCreds(
             access_key_id="AKIA",
             secret_access_key="secret",
             region="ap-northeast-1",
         ),
     )
-    monkeypatch.setattr("runpod_io.cli.load_runpod_api_key", lambda: "RUNPOD_KEY_FAKE")
+    monkeypatch.setattr(
+        "runpod_io.cli.app.load_runpod_api_key", lambda: "RUNPOD_KEY_FAKE"
+    )
 
 
 @pytest.fixture
 def mock_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "runpod_io.cli._git_remote_url",
+        "runpod_io.cli.app._git_remote_url",
         lambda: "https://github.com/YuriNakayama/orbit-wars.git",
     )
-    monkeypatch.setattr("runpod_io.cli._git_current_branch", lambda: "feature-test")
-    monkeypatch.setattr("runpod_io.cli._verify_commit_pushed", lambda _sha: None)
+    monkeypatch.setattr("runpod_io.cli.app._git_current_branch", lambda: "feature-test")
+    monkeypatch.setattr("runpod_io.cli.app._verify_commit_pushed", lambda _sha: None)
 
 
 @pytest.fixture

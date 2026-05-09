@@ -1,16 +1,14 @@
 """RunPod 上の GPU 学習を起動・管理するためのローカル CLI 基盤。
 
-vast パッケージ (`bot/src/vast/`) と並走し、`bot/src/runpod_io/` を
-独立 mirror 実装として配置する。RunPod 公式 SDK の module 名 `runpod` と
-衝突するのを避けるため、内部パッケージ名は `runpod_io` とし、SDK は各
-モジュールで `import runpod as runpod_sdk` の alias 経由で読む規約。
+RunPod 公式 SDK の module 名 ``runpod`` と衝突するのを避けるため、内部
+パッケージ名は ``runpod_io`` とし、SDK は ``import runpod as runpod_sdk`` の
+alias 経由で読む規約。
 
-Public API:
-    - auth: AWS credentials と RUNPOD_API_KEY のローカル loader
-    - run_meta: vast.run_meta から re-export + RunPod 用 helper
-    - offers: runpod.get_gpus + runpod.get_gpu の薄いラッパ
-    - instance: onstart テンプレ render と create_pod
-    - volumes: network volume CRUD (GraphQL 直叩き含む)
-    - cost: run.json 集計と markdown レポート (RunPod run のみ filter)
-    - cli: typer ベースのサブコマンド (train/pull/promote/cost-report/volume)
+Current layout:
+    - cli: Typer command wiring and command implementations
+    - config: training case registry and path helpers
+    - runpod: RunPod SDK / API adapters
+    - execution: onstart template, S3 progress, watcher, run summaries
+    - artifacts: launch metadata, run metadata, cost reports
+    - auth / git / notify: small cross-cutting helpers
 """

@@ -156,7 +156,7 @@ max-complexity = 5
 "src/submit/__main__.py" = ["B008"]  # typer は引数デフォルトで Option を呼ぶのが標準
 "src/dataset/cli.py" = ["B008"]  # typer の慣習
 "src/vast/cli.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
-"src/runpod_io/cli.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
+"src/runpod_io/cli/app.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
 "pipeline/rulebase/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]
@@ -265,6 +265,8 @@ addopts = [
     '--cov=src',
     '--log-cli-level=INFO',
     '-p no:cacheprovider',
+    '-n=auto',
+    '--dist=worksteal',
     '-ra',
 ]
 testpaths = ['tests']
