@@ -1,4 +1,4 @@
-"""Fixtures for self-play e2e tests."""
+"""Fixtures for self-play integration tests."""
 
 from __future__ import annotations
 

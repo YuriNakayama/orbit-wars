@@ -1,4 +1,4 @@
-"""Self-play CLI e2e tests."""
+"""Self-play CLI integration tests."""
 
 from __future__ import annotations
 

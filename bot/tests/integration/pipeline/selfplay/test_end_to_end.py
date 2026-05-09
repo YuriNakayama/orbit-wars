@@ -1,4 +1,4 @@
-"""End-to-end CLI → recorder → loader → replay reconstruction."""
+"""Self-play CLI → recorder → loader → replay reconstruction smoke test."""
 
 from __future__ import annotations
 
