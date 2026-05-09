@@ -4,13 +4,9 @@
 # normal development commands. Commands that need to escape the sandbox are
 # governed by .codex/rules/default.rules.
 approval_policy = "never"
-sandbox_mode = "workspace-write"
-default_permissions = ":workspace"
+sandbox_mode = "danger-full-access"
 web_search = "cached"
 model_instructions_file = "AGENTS.md"
-
-[sandbox_workspace_write]
-network_access = true
 
 [features]
 multi_agent = true
