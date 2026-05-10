@@ -96,14 +96,14 @@ def _resolve_run_dir(cfg: dict[str, Any]) -> Path:
 def _mark_progress(step: str) -> None:
     """Best-effort progress marker.
 
-    Calls runpod_io.progress.write_progress_marker when running on a pod
+    Calls runpod_io.execution.progress.write_progress_marker when running on a pod
     (RUNPOD_POD_ID env set). Locally we just log.
     """
     logger.info(json.dumps({"event": "progress", "step": step}))
     if not os.environ.get("RUNPOD_POD_ID"):
         return
     try:
-        from runpod_io.progress import write_progress_marker
+        from runpod_io.execution.progress import write_progress_marker
 
         write_progress_marker(step)
     except Exception as exc:  # noqa: BLE001 — never let logging break training

@@ -1,7 +1,7 @@
 """Single-match worker: runs one orbit_wars match and returns a record.
 
 Top-level functions only (pickle-friendly for multiprocessing).
-kaggle_environments is imported lazily inside the worker so that each
+The in-repo simulator is imported lazily inside the worker so that each
 spawned process owns its own engine state.
 """
 
@@ -92,19 +92,11 @@ def _wrap_with_timing(agent: Any, timings: list[float]) -> Any:
 
 def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
     """Run a single match and return (record_dict, gzipped_replay_or_none)."""
-    # Side-effect import: registers the Rust-backed `orbit_wars` interpreter
-    # before `make("orbit_wars", ...)` resolves the env name. Each forked
-    # worker re-runs this so the backend is selected per-process.
-    # Rust backend が未 build の環境では Python simulator にフォールバック。
-    try:
-        import orbit_wars_rust  # noqa: F401
-    except ModuleNotFoundError:
-        pass
-    from kaggle_environments import make
+    from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
 
     num_agents = len(spec.agents)
     config: dict[str, Any] = {"agents": num_agents, "seed": spec.seed}
-    env = make("orbit_wars", configuration=config)
+    env = make_orbit_wars_env(configuration=config)
 
     timings_per_agent: list[list[float]] = [[] for _ in range(num_agents)]
     resolved_agents: list[Any] = [resolve(a.name) for a in spec.agents]
@@ -115,7 +107,7 @@ def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
 
     started_at = dt.datetime.now(dt.UTC).isoformat()
     t0 = time.perf_counter()
-    env.run(wrapped)
+    run_orbit_wars_episode(env, wrapped)
     elapsed_sec = time.perf_counter() - t0
 
     final_state = env.steps[-1] if env.steps else []

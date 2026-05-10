@@ -50,7 +50,7 @@ def list_agents() -> list[str]:
 
 
 def resolve(name: str) -> AgentCallable | str:
-    """Return a callable or a kaggle_environments built-in name string."""
+    """Return a callable or a the local simulator built-in name string."""
     if name not in AGENT_REGISTRY:
         raise KeyError(f"unknown agent: {name!r} (known: {list_agents()})")
     target = AGENT_REGISTRY[name]

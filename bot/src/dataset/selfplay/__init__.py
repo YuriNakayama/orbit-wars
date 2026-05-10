@@ -1,4 +1,4 @@
-"""Local self-play: run agents in `kaggle_environments` and emit MatchRecords."""
+"""Local self-play: run agents in `the local simulator` and emit MatchRecords."""
 
 from __future__ import annotations
 

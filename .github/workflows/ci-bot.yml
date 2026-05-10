@@ -85,9 +85,9 @@ jobs:
       # 2 vCPU)、`--no-cov` で coverage 計算を省略 (CI では shape pass を
       # 見るだけで十分)。
       #
-      # `-m "not slow and not integration"` で重い test を除外:
+      # `-m "not slow and not integration and not e2e"` で重い test を除外:
       #   - slow: benchmark / fuzz / 1 試合完走系
-      #   - integration: agent end-to-end (`env.run([agent, agent])`) や
+      #   - integration/e2e: agent end-to-end (`env.run([agent, agent])`) や
       #     dataset/executor の self-play loop。local の `dev/test-bot`
       #     ではマーカー付きでも実行され、CI では fast slice のみ動く。
       #
@@ -97,7 +97,7 @@ jobs:
       #   * src/vast/test_cli.py — .dvc fixture absent in CI
       - name: Pytest (bot, parallel + fast slice)
         run: |
-          uv run pytest tests -m "not slow and not integration" -n auto --no-cov \
+          uv run pytest tests -m "not slow and not integration and not e2e" -n auto --no-cov \
             --ignore=tests/pipeline/imitation/case1/test_agent_snapshot.py \
             --ignore=tests/pipeline/imitation/case3/test_fleet_arrival.py \
             --ignore=tests/src/vast/test_cli.py
