@@ -40,6 +40,7 @@ class LossWeights:
     three_ships_w: float = 0.5
     three_pos_weight: float = 5.0
     template_w: float = 1.0
+    target_w: float = 1.0  # per_planet head の (P+1)-class CE 重み
     # iter3: cand_loss_type="focal" で focal loss、"ce" (default) で従来 CE。
     # focal は label imbalance に頑健 (easy examples を down-weight)、
     # FL(p_t) = -α_t (1 - p_t)^γ log(p_t) (Lin et al., 2017).
@@ -512,6 +513,100 @@ def compute_template_ships_loss(
         template_noop_acc=template_noop_acc,
         template_fire_acc=template_fire_acc,
         ships_acc=ships_acc,
+        fire_count=fire_count,
+    )
+
+
+@dataclass(frozen=True)
+class PerPlanetLossReport:
+    total: torch.Tensor
+    target_loss: torch.Tensor
+    ship_loss: torch.Tensor
+    target_acc: float
+    target_noop_acc: float
+    target_fire_acc: float
+    ship_mae: float
+    fire_count: int
+
+
+def compute_per_planet_loss(
+    output: PolicyOutput,
+    target_pid_per_src: torch.Tensor,  # (B, P) int64; planet slot or no_op_idx
+    ship_pred_label: torch.Tensor,  # (B, P) float; log1p(ships); -1 = unused
+    my_planet_mask: torch.Tensor,  # (B, P) bool
+    weights: LossWeights,
+    no_op_idx: int,
+) -> PerPlanetLossReport:
+    """per_planet (P+1)-class CE + ships SmoothL1 regression.
+
+    `target_pid_per_src` encodes the destination slot index in 0..P-1, or
+    `no_op_idx` (== P) when the source did not fire. Loss is computed only on
+    rows where my_planet_mask is True (active source planets).
+
+    `ship_pred_label` is `log1p(ships)` for fired sources, -1 for unused.
+    """
+    device = my_planet_mask.device
+    zero = torch.zeros((), device=device)
+
+    assert output.per_planet_logits is not None
+
+    if not my_planet_mask.any():
+        return PerPlanetLossReport(
+            total=zero,
+            target_loss=zero,
+            ship_loss=zero,
+            target_acc=0.0,
+            target_noop_acc=0.0,
+            target_fire_acc=0.0,
+            ship_mae=0.0,
+            fire_count=0,
+        )
+
+    b_idx, s_idx = my_planet_mask.nonzero(as_tuple=True)
+    sel_logits = output.per_planet_logits[b_idx, s_idx]  # (N, P+1)
+    sel_labels = target_pid_per_src[b_idx, s_idx]  # (N,)
+
+    target_loss = nn.functional.cross_entropy(
+        sel_logits,
+        sel_labels,
+        label_smoothing=weights.label_smoothing,
+    )
+    with torch.no_grad():
+        pred = sel_logits.argmax(dim=-1)
+        match = (pred == sel_labels).float()
+        target_acc = float(match.mean().item())
+        is_noop = sel_labels == no_op_idx
+        is_fire = ~is_noop
+        n_noop = int(is_noop.sum().item())
+        n_fire = int(is_fire.sum().item())
+        target_noop_acc = float(match[is_noop].mean().item()) if n_noop > 0 else 0.0
+        target_fire_acc = float(match[is_fire].mean().item()) if n_fire > 0 else 0.0
+
+    ship_loss = zero
+    ship_mae = 0.0
+    fire_count = 0
+    ship_valid = my_planet_mask & (ship_pred_label >= 0.0)
+    if ship_valid.any():
+        assert output.ship_pred is not None
+        sb_idx, ss_idx = ship_valid.nonzero(as_tuple=True)
+        ship_pred_sel = output.ship_pred[sb_idx, ss_idx]
+        ship_target_sel = ship_pred_label[sb_idx, ss_idx].to(ship_pred_sel.dtype)
+        ship_loss = nn.functional.smooth_l1_loss(
+            ship_pred_sel, ship_target_sel, reduction="mean"
+        )
+        with torch.no_grad():
+            ship_mae = float((ship_pred_sel - ship_target_sel).abs().mean().item())
+            fire_count = int(ship_valid.sum().item())
+
+    total = weights.target_w * target_loss + weights.ship_w * ship_loss
+    return PerPlanetLossReport(
+        total=total,
+        target_loss=target_loss.detach(),
+        ship_loss=ship_loss.detach() if isinstance(ship_loss, torch.Tensor) else zero,
+        target_acc=target_acc,
+        target_noop_acc=target_noop_acc,
+        target_fire_acc=target_fire_acc,
+        ship_mae=ship_mae,
         fire_count=fire_count,
     )
 

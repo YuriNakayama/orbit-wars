@@ -488,6 +488,79 @@ def _decode_template_ships(
     return actions
 
 
+def _decode_per_planet(
+    output: PolicyOutput,
+    snapshot: WorldSnapshot,
+    obs: dict[str, Any],
+    temperature: float,
+) -> list[list[int | float]]:
+    """per_planet head decoder.
+
+    per_planet_logits: (1, P, P+1) — last index is no-op sentinel.
+    ship_pred:         (1, P)     — log1p(ships) regression output.
+
+    Per source planet: argmax over (P+1) targets. If argmax == no-op, no fire.
+    Otherwise the argmax index identifies the destination planet slot in
+    `snapshot.planet_ids`. Ships count is `expm1(ship_pred[slot])`, clamped
+    to a minimum floor and to src.ships.
+    """
+    T = max(float(temperature), 1e-6)
+    assert output.per_planet_logits is not None
+    assert output.ship_pred is not None
+    pp_logits = output.per_planet_logits[0] / T  # (P, P+1)
+    ship_pred = output.ship_pred[0]  # (P,) log1p space
+    no_op_idx = pp_logits.shape[-1] - 1
+    fire_margin = _env_float("IL_CASE9_PP_FIRE_MARGIN", -999.0)
+
+    (
+        pid_to_planet,
+        initial_by_id,
+        ang_vel,
+        comets,
+        comet_ids,
+        step,
+        incoming_friendly,
+    ) = _common_obs_state(obs, snapshot)
+    committed = dict(incoming_friendly)
+    actions: list[list[int | float]] = []
+    player = snapshot.player
+
+    for src_pid in snapshot.my_planet_ids:
+        slot = snapshot.planet_ids.index(src_pid)
+        src = pid_to_planet.get(src_pid)
+        if src is None:
+            continue
+        for tgt_slot in _rank_fire_slots(pp_logits[slot], no_op_idx, fire_margin):
+            if tgt_slot < 0 or tgt_slot >= len(snapshot.planet_ids):
+                continue
+            target_pid = snapshot.planet_ids[tgt_slot]
+            target = pid_to_planet.get(int(target_pid))
+            if target is None or target.id == src.id:
+                continue
+            rule_floor = _fixed_ship_count(target.ships)
+            if rule_floor > src.ships:
+                continue
+            log_pred = float(ship_pred[slot].item())
+            pred_ships = int(round(math.expm1(max(0.0, log_pred))))
+            ships = _scale_ship_count(max(rule_floor, max(1, pred_ships)))
+            action = _emit_action(
+                src,
+                target,
+                ships,
+                initial_by_id,
+                ang_vel,
+                comets,
+                comet_ids,
+                step,
+                committed,
+                player,
+            )
+            if action is not None:
+                actions.append(action)
+                break
+    return actions
+
+
 def decode(
     output: PolicyOutput,
     snapshot: WorldSnapshot,
@@ -524,6 +597,8 @@ def decode(
         return _decode_three_head(output, snapshot, obs, template_ctx, temperature)
     if head_mode == "template_ships":
         return _decode_template_ships(output, snapshot, obs, temperature)
+    if head_mode == "per_planet":
+        return _decode_per_planet(output, snapshot, obs, temperature)
     raise ValueError(f"unknown head_mode={head_mode!r}")
 
 

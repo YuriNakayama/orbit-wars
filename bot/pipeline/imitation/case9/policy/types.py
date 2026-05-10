@@ -51,6 +51,8 @@ class PolicyOutput:
     ship_pred: torch.Tensor | None = (
         None  # (B, P) — case8-style ship regression (optional)
     )
+    # (B, P, P+1) — per_planet head: last index is no-op sentinel
+    per_planet_logits: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)

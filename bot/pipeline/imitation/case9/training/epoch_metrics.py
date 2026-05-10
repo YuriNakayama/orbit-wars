@@ -62,6 +62,8 @@ class EpochMetricAccumulator:
             self._update_candidate_ships(output, batch, my)
         elif head_mode == "template_ships":
             self._update_template_ships(output, batch, my)
+        elif head_mode == "per_planet":
+            self._update_per_planet(output, batch, my)
         elif head_mode == "dual":
             self._update_three_head(output, batch, my)
         else:
@@ -150,6 +152,27 @@ class EpochMetricAccumulator:
         )
         self._add_multi("decision", labels, probs)
         self._update_ships(output, batch, my, use_bucket=False)
+
+    def _update_per_planet(
+        self,
+        output: PolicyOutput,
+        batch: BatchedSample,
+        my: torch.Tensor,
+    ) -> None:
+        if output.per_planet_logits is None:
+            return
+        # last index of (P+1) is the no-op sentinel.
+        no_op_idx = int(output.per_planet_logits.shape[-1]) - 1
+        if not my.any():
+            return
+        probs = _to_numpy(torch.softmax(output.per_planet_logits[my], dim=-1))
+        labels = _to_numpy(batch.target_pid_per_src[my]).astype(np.int64)
+        self._add_binary(
+            "fire",
+            (labels != no_op_idx).astype(np.int64),
+            1.0 - probs[:, no_op_idx],
+        )
+        self._add_multi("decision", labels, probs)
 
     def _update_candidate_decision(
         self,

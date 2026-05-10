@@ -125,6 +125,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/imitation/case9/policy/weights_dual.pt",
     },
+    "case9_per_planet": {
+        "stage": "train_imitation_case9_per_planet",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_per_planet.yaml"
+        ),
+        "preprocess_cmd": (
+            "pipeline.imitation.case9.training.preprocess "
+            "--config pipeline/imitation/case9/configs/il_case9_per_planet.yaml"
+        ),
+        "canonical_weights": (
+            "bot/pipeline/imitation/case9/policy/weights_per_planet.pt"
+        ),
+    },
     "case10_candidate": {
         "stage": "train_imitation_case10_candidate",
         "train_module": "pipeline.imitation.case10.training.train",
