@@ -167,6 +167,70 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "bot/pipeline/imitation/case10/policy/weights_template_ships.pt"
         ),
     },
+    # case10 data_volume_sweep iter1 (5 sweep points). All share the same
+    # base mart (built once) and apply train_top_submission_limit in-memory
+    # via index_filter. preprocess_cmd is empty: dvc pull supplies the mart
+    # and the *_index.parquet files; no per-pod preprocess needed.
+    "case10_sweep_top20": {
+        "stage": "train_imitation_case10_sweep_top20",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top20.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top20.pt"
+        ),
+    },
+    "case10_sweep_top40": {
+        "stage": "train_imitation_case10_sweep_top40",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top40.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top40.pt"
+        ),
+    },
+    "case10_sweep_top80": {
+        "stage": "train_imitation_case10_sweep_top80",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top80.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top80.pt"
+        ),
+    },
+    "case10_sweep_top160": {
+        "stage": "train_imitation_case10_sweep_top160",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top160.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top160.pt"
+        ),
+    },
+    "case10_sweep_topall": {
+        "stage": "train_imitation_case10_sweep_topall",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_topall.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_topall.pt"
+        ),
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
