@@ -535,7 +535,23 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         top_team_rank,
     )
 
-    index = pl.read_parquet(index_path)
+    # Hive-partitioned index parquet has heterogeneous schemas across files —
+    # the older files predate `agent_*_team_rank`. `polars.scan_parquet` locks
+    # the union schema to the first file it sees, which drops `team_rank`
+    # entirely. Use `pyarrow.dataset` instead: it unifies schemas across all
+    # discovered files, filling missing columns with NULL.
+    import pyarrow.dataset as pa_ds
+
+    parquet_files: list[str] = []
+    for dirpath, _dirs, files in os.walk(str(index_path)):
+        for fname in files:
+            if fname.endswith(".parquet"):
+                parquet_files.append(os.path.join(dirpath, fname))
+    if not parquet_files:
+        raise RuntimeError(f"no parquet files found under {index_path}")
+    arrow_table = pa_ds.dataset(parquet_files, format="parquet").to_table()
+    index = pl.from_arrow(arrow_table)
+    assert isinstance(index, pl.DataFrame)
     filtered, cutoff = _filter_index(index, modes, rating_quantile)
     episodes_total = filtered.height
     if max_episodes is not None:

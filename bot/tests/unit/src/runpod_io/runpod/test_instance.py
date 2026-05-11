@@ -143,14 +143,15 @@ def test_create_pod_passes_expected_kwargs() -> None:
     assert kwargs["docker_args"].startswith("bash -c '")
     # /start.sh background 起動が含まれる (sshd 起動維持のため)
     assert "/start.sh" in kwargs["docker_args"]
-    assert "base64 -d | bash" in kwargs["docker_args"]
-    # base64 部分を decode して onstart_script が正しく埋め込まれていること
+    assert "base64 -d | gunzip | bash" in kwargs["docker_args"]
+    # gzip+base64 で onstart_script が正しく埋め込まれていること
     import base64
+    import gzip
     import re
 
-    m = re.search(r"echo (\S+) \| base64 -d \| bash", kwargs["docker_args"])
+    m = re.search(r"echo (\S+) \| base64 -d \| gunzip \| bash", kwargs["docker_args"])
     assert m is not None
-    decoded = base64.b64decode(m.group(1)).decode("utf-8")
+    decoded = gzip.decompress(base64.b64decode(m.group(1))).decode("utf-8")
     assert decoded == "#!/bin/bash\necho hi\n"
     assert kwargs["env"] == {"FOO": "bar"}
     assert kwargs["network_volume_id"] == "vol-1"
