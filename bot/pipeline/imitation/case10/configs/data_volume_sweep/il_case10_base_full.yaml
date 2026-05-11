@@ -1,0 +1,18 @@
+# Base mart for case10 data_volume_sweep.
+# 1v1, turn 50-400, draw excluded, all submissions (no top_K), loser_swap=true.
+# Generated ONCE; in-memory top_K filter applied at train time via dataset.py.
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case10/base/train.parquet
+  out_val: data/mart/imitation/case10/base/val.parquet
+  rating_quantile: 0.0
+  top_submission_limit: null
+  turn_min: 50
+  turn_max: 400
+  val_split: 0.10
+  modes: ["1v1"]
+  loser_swap: true
+  max_episodes: null

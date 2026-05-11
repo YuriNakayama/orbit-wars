@@ -38,6 +38,9 @@ from pipeline.imitation.case10.training.dataset import (
     collate,
 )
 from pipeline.imitation.case10.training.epoch_metrics import EpochMetricAccumulator
+from pipeline.imitation.case10.training.index_filter import (
+    compute_keep_row_indices,
+)
 from pipeline.imitation.case10.training.losses import (
     LossWeights,
     compute_candidate_ships_loss,
@@ -389,11 +392,46 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     ablation_cfg = data_cfg.get("ablation", {}) or {}
     mask_planet_cols = list(ablation_cfg.get("planet_cols", []) or [])
     mask_global_cols = list(ablation_cfg.get("global_cols", []) or [])
+
+    # Side-index filter (case10 data_volume_sweep): when train_top_submission_limit
+    # / use_loser_swap / etc. are set, resolve them via the row-aligned
+    # *_index.parquet emitted by preprocess and pass keep_row_indices to the
+    # Dataset. When all filters are absent (default), keep_row_indices=None and
+    # the Dataset loads the full mart unchanged.
+    train_top_K = data_cfg.get("train_top_submission_limit")
+    use_loser_swap = data_cfg.get("use_loser_swap")
+    train_keep: np.ndarray | None = None
+    val_keep: np.ndarray | None = None
+    if train_top_K is not None or use_loser_swap is not None:
+        filter_kwargs = {
+            "top_submission_limit": (
+                int(train_top_K) if train_top_K is not None else None
+            ),
+            "use_loser_swap": (
+                bool(use_loser_swap) if use_loser_swap is not None else True
+            ),
+        }
+        _stamp(
+            f"computing index filter: top_K={filter_kwargs['top_submission_limit']} "
+            f"use_loser_swap={filter_kwargs['use_loser_swap']}"
+        )
+        train_keep = compute_keep_row_indices(
+            _abspath(data_cfg["out_train"]), **filter_kwargs
+        )
+        val_keep = compute_keep_row_indices(
+            _abspath(data_cfg["out_val"]), **filter_kwargs
+        )
+        _stamp(
+            f"index filter applied: train kept={len(train_keep)} "
+            f"val kept={len(val_keep)}"
+        )
+
     _stamp(f"loading train_ds from {data_cfg['out_train']}")
     train_ds = CaseTenDataset(
         _abspath(data_cfg["out_train"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
+        keep_row_indices=train_keep,
     )
     _stamp(f"train_ds loaded len={len(train_ds)}")
     _stamp(f"loading val_ds from {data_cfg['out_val']}")
@@ -401,6 +439,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         _abspath(data_cfg["out_val"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
+        keep_row_indices=val_keep,
     )
     _stamp(f"val_ds loaded len={len(val_ds)}")
 

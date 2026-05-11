@@ -11,7 +11,7 @@ data:
   out_val: data/mart/imitation/case10/val.parquet
   rating_quantile: 0.50
   top_submission_limit: 80
-  turn_min: 80
+  turn_min: 50
   turn_max: 400
   val_split: 0.10
   modes: ["1v1"]
