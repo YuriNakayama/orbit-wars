@@ -162,6 +162,72 @@ def _player_slots(row: dict[str, Any], num_slots: int) -> list[int]:
     return list(range(num_slots))
 
 
+def _swap_owner_01(owner: int) -> int:
+    if owner == 0:
+        return 1
+    if owner == 1:
+        return 0
+    return owner
+
+
+def _swap_obs_players(obs: dict[str, Any], winner_slot: int) -> dict[str, Any]:
+    """Return a new obs where player 0 / player 1 ownership is swapped.
+
+    Used by loser_swap=true: the original loser-slot frame is rewritten so the
+    winner appears as ``obs.player = winner_slot`` while the board state is
+    relabeled accordingly. Planets/fleets owned by 0 become 1 and vice versa;
+    neutral (-1) is preserved.
+    """
+    new_planets: list[list[Any]] = []
+    for row in obs.get("planets") or []:
+        nr = list(row)
+        nr[1] = _swap_owner_01(int(nr[1]))
+        new_planets.append(nr)
+    new_fleets: list[list[Any]] = []
+    for row in obs.get("fleets") or []:
+        nr = list(row)
+        nr[1] = _swap_owner_01(int(nr[1]))
+        new_fleets.append(nr)
+    new_initial: list[list[Any]] = []
+    for row in obs.get("initial_planets") or []:
+        nr = list(row)
+        nr[1] = _swap_owner_01(int(nr[1]))
+        new_initial.append(nr)
+    return {
+        **obs,
+        "player": winner_slot,
+        "planets": new_planets,
+        "fleets": new_fleets,
+        "initial_planets": new_initial,
+    }
+
+
+def _episode_meta_fields(rec: dict[str, Any]) -> dict[str, Any]:
+    """Static (per-episode) fields written into the side index.parquet."""
+    turn_count = rec.get("turns")
+    if turn_count is None:
+        turn_count = -1
+    p0_sub = rec.get("agent_0_submission_id")
+    p1_sub = rec.get("agent_1_submission_id")
+    p0_mu = rec.get("agent_0_rating_mu")
+    p1_mu = rec.get("agent_1_rating_mu")
+    return {
+        "turn_count": int(turn_count),
+        "mode": str(rec.get("mode", "")),
+        "p0_submission_id": str(p0_sub) if p0_sub is not None else "",
+        "p1_submission_id": str(p1_sub) if p1_sub is not None else "",
+        "p0_rating_mu": float(p0_mu) if p0_mu is not None else 0.0,
+        "p1_rating_mu": float(p1_mu) if p1_mu is not None else 0.0,
+    }
+
+
+def _swap_action_target(action: list[Any]) -> list[Any]:
+    """Action shape is [from_pid, angle, ships] — planet ids are stable across
+    the swap (only ownership labels change), so the action list is unchanged.
+    """
+    return list(action)
+
+
 def _build_frame(
     obs: dict[str, Any],
     action_list: list[list[Any]],
@@ -284,13 +350,28 @@ def _build_frame(
 def _iter_episode_frames(
     replay_path: Path,
     player_slots: list[int],
-) -> tuple[list[dict[str, Any]], int, int]:
+    *,
+    loser_swap: bool = False,
+    winner_slot: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
+    """Iterate replay frames and emit (frame_rows, frame_metas, fired, outside).
+
+    With ``loser_swap=true`` and a known ``winner_slot``, the loser slot's frame
+    is rewritten via :func:`_swap_obs_players` so the board is relabeled to the
+    winner's perspective and the winner's action at the same step is used as
+    the supervision label. Frame count is unchanged (1 ep -> 2 samples).
+
+    The returned ``frame_metas`` list is row-aligned with ``frame_rows`` and
+    captures (player_slot, source_slot, is_loser_view, step_idx).
+    """
     data = _load_replay_json(replay_path)
     steps = data.get("steps", [])
-    out: list[dict[str, Any]] = []
+    out_rows: list[dict[str, Any]] = []
+    out_metas: list[dict[str, Any]] = []
     histories: dict[int, HistoryState] = {slot: HistoryState() for slot in player_slots}
     fired_total = 0
     outside_total = 0
+    apply_swap = loser_swap and winner_slot is not None
 
     for step_idx, step in enumerate(steps):
         for slot in player_slots:
@@ -309,21 +390,45 @@ def _iter_episode_frames(
             if obs.get("player") is None:
                 obs = {**obs, "player": slot}
 
+            is_loser_view = False
+            view_slot = slot
+            if apply_swap and slot != winner_slot:
+                # Loser slot frame: swap board ownership and use winner's
+                # action so the model learns counterfactual "what the winner
+                # would have done from this losing position".
+                obs = _swap_obs_players(obs, winner_slot)
+                planets = obs.get("planets") or []
+                wd = step[winner_slot] if winner_slot < len(step) else {}
+                action_list = _swap_action_target(wd.get("action") or [])
+                is_loser_view = True
+                view_slot = winner_slot
+
             history = histories[slot]
             built = _build_frame(obs, action_list, planets, history)
             if built is not None:
                 row, fired, outside = built
-                out.append(row)
+                out_rows.append(row)
+                out_metas.append(
+                    {
+                        "player_slot": int(view_slot),
+                        "source_slot": int(slot),
+                        "is_loser_view": bool(is_loser_view),
+                        "step_idx": int(step_idx),
+                    }
+                )
                 fired_total += fired
                 outside_total += outside
             featurizer.update_history(history, obs, action_list)
-    return out, fired_total, outside_total
+    return out_rows, out_metas, fired_total, outside_total
 
 
 @dataclass(frozen=True)
 class _EpisodeResult:
     bucket: str  # "train" | "val"
     frames: list[dict[str, Any]]
+    metas: list[dict[str, Any]]  # row-aligned with `frames`
+    match_id: str
+    winner_slot: int  # -1 when unknown / draw
     fired: int
     outside: int
     skip_reason: str | None  # None | "no_slots" | "no_replay" | "no_frames"
@@ -334,30 +439,69 @@ def _process_episode(
     base_dir: Path,
     val_split: float,
     num_player_slots: int,
+    *,
+    loser_swap: bool = False,
 ) -> _EpisodeResult:
     """Worker: process one episode record into frames.
 
     Pure function (importable / picklable). Returns a single result.
     """
+    match_id = str(rec.get("match_id", ""))
+    winner_raw = rec.get("winner")
+    winner_slot = int(winner_raw) if winner_raw is not None else -1
     if num_player_slots == 0 or rec.get("draw"):
         return _EpisodeResult(
-            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
+            bucket="",
+            frames=[],
+            metas=[],
+            match_id=match_id,
+            winner_slot=winner_slot,
+            fired=0,
+            outside=0,
+            skip_reason="no_slots",
         )
     slots = list(range(num_player_slots))
     rp = rec.get("replay_path") or ""
     replay_path = (base_dir / rp).resolve() if rp else None
     if replay_path is None or not replay_path.exists():
         return _EpisodeResult(
-            bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
+            bucket="",
+            frames=[],
+            metas=[],
+            match_id=match_id,
+            winner_slot=winner_slot,
+            fired=0,
+            outside=0,
+            skip_reason="no_replay",
         )
-    frames, fired, outside = _iter_episode_frames(replay_path, slots)
+    swap_arg = loser_swap and winner_slot in (0, 1)
+    frames, metas, fired, outside = _iter_episode_frames(
+        replay_path,
+        slots,
+        loser_swap=swap_arg,
+        winner_slot=winner_slot if swap_arg else None,
+    )
     if not frames:
         return _EpisodeResult(
-            bucket="", frames=[], fired=fired, outside=outside, skip_reason="no_frames"
+            bucket="",
+            frames=[],
+            metas=[],
+            match_id=match_id,
+            winner_slot=winner_slot,
+            fired=fired,
+            outside=outside,
+            skip_reason="no_frames",
         )
-    bucket = _split_episode(str(rec["match_id"]), val_split)
+    bucket = _split_episode(match_id, val_split)
     return _EpisodeResult(
-        bucket=bucket, frames=frames, fired=fired, outside=outside, skip_reason=None
+        bucket=bucket,
+        frames=frames,
+        metas=metas,
+        match_id=match_id,
+        winner_slot=winner_slot,
+        fired=fired,
+        outside=outside,
+        skip_reason=None,
     )
 
 
@@ -441,6 +585,32 @@ def _turn_count_in_range(
     return True
 
 
+def _index_arrow_schema() -> pa.Schema:
+    """Side index schema, row-aligned with the mart parquet.
+
+    Each row in train.parquet / val.parquet has one matching row here whose
+    ``row_idx`` equals the position in the mart file. Captures upstream
+    metadata so other analyses can re-filter without re-running preprocess.
+    """
+    return pa.schema(
+        [
+            pa.field("row_idx", pa.int64()),
+            pa.field("match_id", pa.string()),
+            pa.field("player_slot", pa.int32()),
+            pa.field("source_slot", pa.int32()),
+            pa.field("winner_slot", pa.int32()),
+            pa.field("is_loser_view", pa.bool_()),
+            pa.field("step_idx", pa.int32()),
+            pa.field("turn_count", pa.int32()),
+            pa.field("mode", pa.string()),
+            pa.field("p0_submission_id", pa.string()),
+            pa.field("p1_submission_id", pa.string()),
+            pa.field("p0_rating_mu", pa.float32()),
+            pa.field("p1_rating_mu", pa.float32()),
+        ]
+    )
+
+
 def _arrow_schema() -> pa.Schema:
     return pa.schema(
         [
@@ -473,12 +643,19 @@ class StreamingParquetWriter:
     underlying ParquetWriter. ``rows_written`` reports the cumulative count.
     """
 
-    def __init__(self, path: Path, flush_every: int = FLUSH_EVERY_FRAMES) -> None:
+    def __init__(
+        self,
+        path: Path,
+        flush_every: int = FLUSH_EVERY_FRAMES,
+        *,
+        schema: pa.Schema | None = None,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._flush_every = flush_every
+        self._schema = schema if schema is not None else _arrow_schema()
         self._buf: list[dict[str, Any]] = []
-        self._writer = pq.ParquetWriter(str(path), _arrow_schema(), compression="zstd")
+        self._writer = pq.ParquetWriter(str(path), self._schema, compression="zstd")
         self.rows_written = 0
 
     def append(self, row: dict[str, Any]) -> None:
@@ -489,7 +666,7 @@ class StreamingParquetWriter:
     def _flush(self) -> None:
         if not self._buf:
             return
-        table = pa.Table.from_pylist(self._buf, schema=_arrow_schema())
+        table = pa.Table.from_pylist(self._buf, schema=self._schema)
         self._writer.write_table(table)
         self.rows_written += len(self._buf)
         self._buf.clear()
@@ -516,8 +693,11 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     top_submission_limit = data_cfg.get("top_submission_limit")
     turn_min = data_cfg.get("turn_min")
     turn_max = data_cfg.get("turn_max")
+    loser_swap = bool(data_cfg.get("loser_swap", False))
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
+    out_train_index = out_train.with_name(out_train.stem + "_index.parquet")
+    out_val_index = out_val.with_name(out_val.stem + "_index.parquet")
     index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
 
@@ -570,6 +750,12 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 
     train_writer = StreamingParquetWriter(out_train)
     val_writer = StreamingParquetWriter(out_val)
+    train_index_writer = StreamingParquetWriter(
+        out_train_index, schema=_index_arrow_schema()
+    )
+    val_index_writer = StreamingParquetWriter(
+        out_val_index, schema=_index_arrow_schema()
+    )
 
     started_at = time.monotonic()
     kept = 0
@@ -620,6 +806,10 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         inflight_cap,
     )
 
+    rec_by_match: dict[str, dict[str, Any]] = {
+        str(r["match_id"]): r for r in rows
+    }
+
     def _consume_result(result: _EpisodeResult) -> None:
         nonlocal kept, fired_total, outside_total
         nonlocal skipped_no_slots, skipped_no_replay, skipped_no_frames
@@ -635,8 +825,24 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             outside_total += result.outside
             return
         writer = val_writer if result.bucket == "val" else train_writer
-        for frame in result.frames:
+        index_writer = val_index_writer if result.bucket == "val" else train_index_writer
+        rec = rec_by_match.get(result.match_id, {})
+        meta_static = _episode_meta_fields(rec)
+        for frame, meta in zip(result.frames, result.metas, strict=True):
+            row_idx = writer.rows_written + len(writer._buf)  # noqa: SLF001
             writer.append(frame)
+            index_writer.append(
+                {
+                    "row_idx": int(row_idx),
+                    "match_id": result.match_id,
+                    "player_slot": int(meta["player_slot"]),
+                    "source_slot": int(meta["source_slot"]),
+                    "winner_slot": int(result.winner_slot),
+                    "is_loser_view": bool(meta["is_loser_view"]),
+                    "step_idx": int(meta["step_idx"]),
+                    **meta_static,
+                }
+            )
         kept += 1
         fired_total += result.fired
         outside_total += result.outside
@@ -647,7 +853,11 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             for processed, rec in enumerate(rows, start=1):
                 try:
                     result = _process_episode(
-                        rec, base_dir, val_split, _num_player_slots(rec, modes)
+                        rec,
+                        base_dir,
+                        val_split,
+                        _num_player_slots(rec, modes),
+                        loser_swap=loser_swap,
                     )
                     _consume_result(result)
                 finally:
@@ -669,6 +879,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
+                        loser_swap=loser_swap,
                     )
                     inflight[fut] = idx
                     return True
@@ -712,14 +923,29 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         close_started = time.monotonic()
         n_train = train_writer.close()
         n_val = val_writer.close()
+        n_train_idx = train_index_writer.close()
+        n_val_idx = val_index_writer.close()
+        if n_train_idx != n_train or n_val_idx != n_val:
+            logger.warning(
+                "preprocess case10 index/mart row mismatch: "
+                "train mart=%d index=%d / val mart=%d index=%d",
+                n_train,
+                n_train_idx,
+                n_val,
+                n_val_idx,
+            )
         logger.info(
             "preprocess case10 parquet finalized: train=%d val=%d close_elapsed=%.1fs "
-            "out_train=%s out_val=%s",
+            "out_train=%s out_val=%s out_train_index=%s out_val_index=%s "
+            "loser_swap=%s",
             n_train,
             n_val,
             time.monotonic() - close_started,
             out_train,
             out_val,
+            out_train_index,
+            out_val_index,
+            loser_swap,
         )
 
     report = PreprocessReport(

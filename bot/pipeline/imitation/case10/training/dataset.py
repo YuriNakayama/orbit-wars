@@ -101,23 +101,45 @@ def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
     return np.concatenate(arrays).astype(dtype, copy=True)
 
 
-def _take(table_box: list[pa.Table], name: str, dtype: np.dtype) -> np.ndarray:
+def _take(
+    table_box: list[pa.Table],
+    name: str,
+    dtype: np.dtype,
+    *,
+    full_n: int = 0,
+    keep_idx: np.ndarray | None = None,
+) -> np.ndarray:
     """Convert a list-typed column to numpy, then drop it from the table to
     free its arrow buffer. The table is held in a single-element list so this
-    helper can mutate it in place."""
+    helper can mutate it in place.
+
+    When ``keep_idx`` is provided, the column is reshaped to ``(full_n, -1)``
+    and rows are sliced before being flattened again. This keeps the
+    keep_row_indices feature working without going through pyarrow.take(),
+    which overflows on 5M-row list-typed columns.
+    """
     arr = _list_to_numpy(table_box[0][name], dtype)
     table_box[0] = table_box[0].drop_columns([name])
+    if keep_idx is not None and full_n > 0 and arr.size > 0:
+        per_row = arr.size // full_n
+        arr = arr.reshape(full_n, per_row)[keep_idx].reshape(-1)
     return arr
 
 
 def _take_primitive(
-    table_box: list[pa.Table], name: str, dtype: np.dtype
+    table_box: list[pa.Table],
+    name: str,
+    dtype: np.dtype,
+    *,
+    keep_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """Like `_take` but for primitive (non-list) columns."""
     arr = np.array(
         table_box[0][name].to_numpy(zero_copy_only=False), dtype=dtype, copy=True
     )
     table_box[0] = table_box[0].drop_columns([name])
+    if keep_idx is not None:
+        arr = arr[keep_idx]
     return arr
 
 
@@ -134,26 +156,46 @@ class CaseTenDataset(Dataset[Sample]):
         parquet_path: Path | str,
         mask_planet_cols: list[int] | None = None,
         mask_global_cols: list[int] | None = None,
+        keep_row_indices: np.ndarray | None = None,
     ) -> None:
         # Drop columns from the arrow Table one at a time after converting to
         # numpy: peak RAM is then ~ (largest column copy) + (table - that
         # column), not (full table + all numpy copies). The largest column
         # is `candidate_feats` at ~6 GB for 300k rows.
+        # NOTE: do NOT call `pa.Table.take` on this table — list-typed columns
+        # exceed the 32-bit offset limit when concatenated. Instead, slice each
+        # column at the numpy stage (post `_list_to_numpy`) using
+        # ``self._keep_idx``. When keep_row_indices is None we keep the full
+        # row range; otherwise this becomes a fancy index applied per column.
+        keep_idx = (
+            np.asarray(keep_row_indices, dtype=np.int64)
+            if keep_row_indices is not None
+            else None
+        )
+        self._keep_idx = keep_idx
         tbl: list[pa.Table] = [pq.read_table(str(parquet_path))]
-        n = tbl[0].num_rows
+        full_n = tbl[0].num_rows
+        n = int(keep_idx.size) if keep_idx is not None else full_n
         has_ship_label = "ship_label_per_src" in tbl[0].schema.names
+        take_kw = {"full_n": full_n, "keep_idx": keep_idx}
 
-        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32))
+        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32), **take_kw)
         if n > 0:
             self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
         else:
             self._planet_feat_dim = PLANET_FEAT_DIM
-        self._planet_feats = planet_arr.reshape(n, MAX_PLANETS, self._planet_feat_dim)
+        # Store in fp16 (recast in __getitem__) to halve RAM. The training
+        # loop already runs the forward in fp32 so accuracy is preserved.
+        planet_feats_f32 = planet_arr.reshape(
+            n, MAX_PLANETS, self._planet_feat_dim
+        )
         for col in mask_planet_cols or []:
             if 0 <= col < self._planet_feat_dim:
-                self._planet_feats[:, :, col] = 0.0
+                planet_feats_f32[:, :, col] = 0.0
+        self._planet_feats = planet_feats_f32.astype(np.float16, copy=False)
+        del planet_feats_f32
 
-        global_arr = _take(tbl, "global_feats", np.dtype(np.float32))
+        global_arr = _take(tbl, "global_feats", np.dtype(np.float32), **take_kw)
         if n > 0:
             self._global_feat_dim = int(global_arr.size // n)
         else:
@@ -163,66 +205,73 @@ class CaseTenDataset(Dataset[Sample]):
             if 0 <= col < self._global_feat_dim:
                 self._global_feats[:, col] = 0.0
 
-        self._planet_mask = _take(tbl, "planet_mask", np.dtype(np.bool_)).reshape(
-            n, MAX_PLANETS
-        )
-        self._my_planet_mask = _take(tbl, "my_planet_mask", np.dtype(np.bool_)).reshape(
-            n, MAX_PLANETS
-        )
-        self._target_mask = _take(tbl, "target_mask", np.dtype(np.bool_)).reshape(
-            n, MAX_PLANETS
-        )
+        self._planet_mask = _take(
+            tbl, "planet_mask", np.dtype(np.bool_), **take_kw
+        ).reshape(n, MAX_PLANETS)
+        self._my_planet_mask = _take(
+            tbl, "my_planet_mask", np.dtype(np.bool_), **take_kw
+        ).reshape(n, MAX_PLANETS)
+        self._target_mask = _take(
+            tbl, "target_mask", np.dtype(np.bool_), **take_kw
+        ).reshape(n, MAX_PLANETS)
         if "template_ctx" in tbl[0].schema.names:
             self._template_ctx = _take(
-                tbl, "template_ctx", np.dtype(np.float32)
+                tbl, "template_ctx", np.dtype(np.float32), **take_kw
             ).reshape(n, MAX_PLANETS, TEMPLATE_CTX_DIM)
         else:
             self._template_ctx = np.zeros(
                 (n, MAX_PLANETS, TEMPLATE_CTX_DIM), dtype=np.float32
             )
-        self._candidate_feats = _take(
-            tbl, "candidate_feats", np.dtype(np.float32)
+        # candidate_feats is the largest list-typed column (~15 GB at 5M rows
+        # in fp32). Store in fp16 to halve in-memory footprint; cast back to
+        # fp32 in __getitem__ where downstream model expects float.
+        cand_feats_f32 = _take(
+            tbl, "candidate_feats", np.dtype(np.float32), **take_kw
         ).reshape(n, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
-        self._candidate_mask = _take(tbl, "candidate_mask", np.dtype(np.bool_)).reshape(
-            n, MAX_PLANETS, CAND_K
-        )
-        self._candidate_pid = _take(tbl, "candidate_pid", np.dtype(np.int64)).reshape(
-            n, MAX_PLANETS, CAND_K
-        )
+        self._candidate_feats = cand_feats_f32.astype(np.float16, copy=False)
+        del cand_feats_f32
+        self._candidate_mask = _take(
+            tbl, "candidate_mask", np.dtype(np.bool_), **take_kw
+        ).reshape(n, MAX_PLANETS, CAND_K)
+        self._candidate_pid = _take(
+            tbl, "candidate_pid", np.dtype(np.int64), **take_kw
+        ).reshape(n, MAX_PLANETS, CAND_K)
         self._cand_slot_per_src = _take(
-            tbl, "cand_slot_per_src", np.dtype(np.int64)
+            tbl, "cand_slot_per_src", np.dtype(np.int64), **take_kw
         ).reshape(n, MAX_PLANETS)
         if has_ship_label:
             self._ship_label_per_src = _take(
-                tbl, "ship_label_per_src", np.dtype(np.int64)
+                tbl, "ship_label_per_src", np.dtype(np.int64), **take_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._ship_label_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
         if "ships_bucket_per_src" in tbl[0].schema.names:
             self._ships_bucket_per_src = _take(
-                tbl, "ships_bucket_per_src", np.dtype(np.int64)
+                tbl, "ships_bucket_per_src", np.dtype(np.int64), **take_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._ships_bucket_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
         if "from_multihot" in tbl[0].schema.names:
             self._from_multihot = _take(
-                tbl, "from_multihot", np.dtype(np.bool_)
+                tbl, "from_multihot", np.dtype(np.bool_), **take_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._from_multihot = np.zeros((n, MAX_PLANETS), dtype=np.bool_)
         if "target_per_src" in tbl[0].schema.names:
             self._target_per_src = _take(
-                tbl, "target_per_src", np.dtype(np.int64)
+                tbl, "target_per_src", np.dtype(np.int64), **take_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._target_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
         if "ships_per_src" in tbl[0].schema.names:
             self._ships_per_src = _take(
-                tbl, "ships_per_src", np.dtype(np.int64)
+                tbl, "ships_per_src", np.dtype(np.int64), **take_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._ships_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
-        self._is_noop = _take_primitive(tbl, "is_noop", np.dtype(np.bool_))
+        self._is_noop = _take_primitive(
+            tbl, "is_noop", np.dtype(np.bool_), keep_idx=keep_idx
+        )
         self._n = n
 
         del tbl
@@ -289,13 +338,17 @@ class CaseTenDataset(Dataset[Sample]):
         if idx < 0 or idx >= self._n:
             raise IndexError(idx)
         return Sample(
-            planet_feats=torch.from_numpy(self._planet_feats[idx]),
+            planet_feats=torch.from_numpy(
+                self._planet_feats[idx].astype(np.float32, copy=False)
+            ),
             global_feats=torch.from_numpy(self._global_feats[idx]),
             planet_mask=torch.from_numpy(self._planet_mask[idx]),
             my_planet_mask=torch.from_numpy(self._my_planet_mask[idx]),
             target_mask=torch.from_numpy(self._target_mask[idx]),
             template_ctx=torch.from_numpy(self._template_ctx[idx]),
-            candidate_feats=torch.from_numpy(self._candidate_feats[idx]),
+            candidate_feats=torch.from_numpy(
+                self._candidate_feats[idx].astype(np.float32, copy=False)
+            ),
             candidate_mask=torch.from_numpy(self._candidate_mask[idx]),
             candidate_pid=torch.from_numpy(self._candidate_pid[idx]),
             cand_slot_per_src=torch.from_numpy(self._cand_slot_per_src[idx]),
