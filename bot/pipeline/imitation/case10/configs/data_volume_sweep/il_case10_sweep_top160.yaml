@@ -7,8 +7,8 @@ seed: 0
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
   replay_dir: data/lake/kaggle_episodes/matches/replays
-  out_train: data/mart/imitation/case10/base/train.parquet
-  out_val: data/mart/imitation/case10/base/val.parquet
+  out_train: data/mart/imitation/case10/train.parquet
+  out_val: data/mart/imitation/case10/val.parquet
   rating_quantile: 0.0
   top_submission_limit: null
   turn_min: 50

@@ -9,12 +9,16 @@ data:
   replay_dir: data/lake/kaggle_episodes/matches/replays
   out_train: data/mart/imitation/case10/train.parquet
   out_val: data/mart/imitation/case10/val.parquet
-  rating_quantile: 0.50
-  top_submission_limit: 80
+  # data_volume_sweep base mart: keep all submissions (top_K applied at train
+  # time via index_filter), include short games (turn 50+), and emit
+  # winner-perspective frames so swap on/off can be A/B'd in-memory.
+  rating_quantile: 0.0
+  top_submission_limit: null
   turn_min: 50
   turn_max: 400
   val_split: 0.10
   modes: ["1v1"]
+  loser_swap: true
   max_episodes: null
 
 model:

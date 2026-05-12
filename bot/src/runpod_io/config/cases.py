@@ -178,11 +178,9 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top20.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case10.training.preprocess "
-            "--config "
-            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
-        ),
+        # preprocess は事前に専用 pod で base mart を生成 + DVC push 済。
+        # 各 sweep pod は dvc pull のみで mart を取得して preprocess を skip。
+        "preprocess_cmd": "",
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top20.pt"
         ),
@@ -194,11 +192,9 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top40.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case10.training.preprocess "
-            "--config "
-            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
-        ),
+        # preprocess は事前に専用 pod で base mart を生成 + DVC push 済。
+        # 各 sweep pod は dvc pull のみで mart を取得して preprocess を skip。
+        "preprocess_cmd": "",
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top40.pt"
         ),
@@ -210,11 +206,9 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top80.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case10.training.preprocess "
-            "--config "
-            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
-        ),
+        # preprocess は事前に専用 pod で base mart を生成 + DVC push 済。
+        # 各 sweep pod は dvc pull のみで mart を取得して preprocess を skip。
+        "preprocess_cmd": "",
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top80.pt"
         ),
@@ -226,11 +220,9 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top160.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case10.training.preprocess "
-            "--config "
-            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
-        ),
+        # preprocess は事前に専用 pod で base mart を生成 + DVC push 済。
+        # 各 sweep pod は dvc pull のみで mart を取得して preprocess を skip。
+        "preprocess_cmd": "",
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top160.pt"
         ),
@@ -242,14 +234,28 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_topall.yaml"
         ),
+        # preprocess は事前に専用 pod で base mart を生成 + DVC push 済。
+        # 各 sweep pod は dvc pull のみで mart を取得して preprocess を skip。
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_topall.pt"
+        ),
+    },
+    # case10_base_preprocess: produce the shared base mart in a dedicated
+    # pod and DVC-push it. Reuses the case0 dummy train so the onstart
+    # pipeline still has a valid train step; the actual deliverable is the
+    # mart parquets uploaded via the standard 70_artifacts_and_dvc.sh path
+    # (which dvc-pushes both the run_dir and the touched data/mart entries).
+    "case10_base_preprocess": {
+        "stage": "train_imitation_case10_base_preprocess",
+        "train_module": "pipeline.imitation.case0.training.train",
+        "config_arg": "--config pipeline/imitation/case0/configs/smoke.yaml",
         "preprocess_cmd": (
             "pipeline.imitation.case10.training.preprocess "
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
         ),
-        "canonical_weights": (
-            "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_topall.pt"
-        ),
+        "canonical_weights": "",
     },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
