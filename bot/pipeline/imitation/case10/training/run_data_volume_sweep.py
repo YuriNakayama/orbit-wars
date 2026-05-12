@@ -48,13 +48,16 @@ TEMPLATE_CFG = Path("pipeline/imitation/case10/configs/il_case10_template.yaml")
 DEFAULT_HEAD_MODE = "template_ships"
 
 # (tag, train_top_submission_limit, use_loser_swap)
+# iter1 sweep was originally top20/40/80/160/all (5 points). On 2026-05-12
+# the 13 GB base mart couldn't be DVC-pushed reliably (signature expiry and
+# SSL EOF mid-upload) and topall/top160 exceeded local RAM at load time, so
+# the scope was reduced to top20/40/80; top80 doubles as the H5 reference
+# point in the adoption rule (see hypotheses.md).
 ITER_POINTS: dict[int, list[tuple[str, int | None, bool]]] = {
     1: [
         ("top20", 20, True),
         ("top40", 40, True),
         ("top80", 80, True),
-        ("top160", 160, True),
-        ("topall", None, True),
     ],
     2: [
         ("top80_swap_on", 80, True),

@@ -27,8 +27,17 @@
 
 | iter | 仮説 | 取得する data point | 出力チャート | 意思決定 |
 |------|------|---------------------|--------------|---------|
-| 1 | **H1: top_K sweep で精度・速度の頭打ち点が存在** | top_K ∈ {20, 40, 80, 160, all} の **5 点** すべて | chart 1: x=top_K (log) / 左 y=val_loss・val_template_fire_acc・40戦勝率 / 右 y=total wall-clock / 判定基準帯 (H5±閾値) を破線で重ねる | **採用 top_K の決定** |
+| 1 | **H1: top_K sweep で精度・速度の頭打ち点が存在** | top_K ∈ {20, 40, 80} の **3 点** (top80 = 暫定基準点) | chart 1: x=top_K (log) / 左 y=val_loss・val_template_fire_acc・40戦勝率 / 右 y=total wall-clock / 判定基準帯 (top80±閾値) を破線で重ねる | **採用 top_K の決定** |
 | 2 | **H2: loser_swap=true は val 指標 / 勝率を改善** | top80 固定で swap=on / swap=off の **2 点** | chart 2: 棒グラフ (val_loss / val_template_fire_acc / 40戦勝率) を swap on vs off で並置 | **loser_swap の採否** |
+
+### iter1 のスコープ縮小 (2026-05-12 改訂)
+
+当初は top_K ∈ {20, 40, 80, 160, all} の 5 点を予定。しかし mart 全件 (~5M frames、~13 GB) のローカル `pq.read_table` で 24-32 GB ホスト RAM を超え OOM、 RunPod 側の DVC push (~14 GB) が上り帯域不安定により signature expire / SSL EOF で繰り返し fail し、5/12 までに 4 回の試行でも完走せず。残時間と sunk cost ($4+) を踏まえ、**iter1 は top20/40/80 の 3 点に縮小**。
+
+意思決定への影響:
+- H5 (= top_K=null 全件) 基準点は不在となるため、**top80 を暫定基準点として採用**
+- top80 は case10 既定 = 元々の「リファレンス点」、 後続 case はそのまま top80 を base dataset として扱える
+- 「top80 以上で頭打ちするか」を確認する材料は失う → 後続 case の必要に応じて別途検証
 
 ## 共通フィルタ (両 iter 共通)
 
@@ -58,27 +67,26 @@ case10 template_ships variant を主軸に、以下を**固定**:
 
 **可変軸は `data.top_submission_limit` のみ**。
 
-### 取得する data point (5 点)
+### 取得する data point (3 点、 改訂後)
 
 | point | top_submission_limit | 期待 episode 数 |
 |-------|----------------------|-----------------|
 | top20 | 20                   | ~310            |
 | top40 | 40                   | ~620            |
-| top80 | 80 (case10 既定相当) | 1,224           |
-| top160 | 160                 | ~2,400          |
-| all (基準点) | null (上限なし) | lake 全件 (rating_quantile=0.50 で絞った後) |
+| **top80 (暫定基準点)** | 80 (case10 既定相当) | 1,224 |
 
-→ **iter1 完了 = この 5 点すべての train + 40戦評価が揃った時点**。途中で打ち切らない。
+→ **iter1 完了 = この 3 点すべての train + 40戦評価が揃った時点**。
+→ top160 / topall は本実験スコープ外。 後続 case で 必要時に追加検証。
 
-### 採否判定基準 (実験用 dataset 選択)
+### 採否判定基準 (実験用 dataset 選択、 改訂後)
 
-H5 (top_K=all) を **基準点** とし、以下 3 条件を**すべて**満たす最小 top_K を「実験用 dataset」として採用する:
+**top80 (= case10 既定)** を**暫定基準点**とし、以下 3 条件を**すべて**満たす最小 top_K を「実験用 dataset」として採用する:
 
 | 指標 | 閾値 | 根拠 |
 |---|---|---|
-| `best val_template_fire_acc` | all 比 **−1.0pp 以内** | 学習信号は seed 再現性高く、後続 case の施策順位付けに直結 |
-| `best val_loss` | all 比 **+2.0% 以内** | 同上 |
-| 40 戦勝率 | all 比 **−10pp 以内** | n=40 では noise floor が広い (memory `project_imitation_case1_phase3`)、参考扱い。±10pp は経験則 |
+| `best val_template_fire_acc` | top80 比 **−1.0pp 以内** | 学習信号は seed 再現性高く、後続 case の施策順位付けに直結 |
+| `best val_loss` | top80 比 **+2.0% 以内** | 同上 |
+| 40 戦勝率 | top80 比 **−10pp 以内** | n=40 では noise floor が広い (memory `project_imitation_case1_phase3`)、参考扱い。±10pp は経験則 |
 
 **最終決定の優先順位**: val_loss / val_template_fire_acc → 40戦勝率 → wall-clock。
 val 指標を主軸とする理由は、(1) 40戦勝率は seed variance が ±10pp 級で個別 point の勝率差から data 量効果を分離できないこと、(2) val 指標は seed=0 固定で再現性が高いこと、の 2 点。
