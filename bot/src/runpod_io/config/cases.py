@@ -131,10 +131,10 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "config_arg": (
             "--config pipeline/imitation/case9/configs/il_case9_per_planet.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case9.training.preprocess "
-            "--config pipeline/imitation/case9/configs/il_case9_per_planet.yaml"
-        ),
+        # mart は事前に local で preprocess + DVC push 済 (7GB + 745MB)。
+        # pod 側は dvc pull のみで mart を取得し、preprocess を再実行しない
+        # (約 50 分節約 + stall watcher 回避)。
+        "preprocess_cmd": "",
         "canonical_weights": (
             "bot/pipeline/imitation/case9/policy/weights_per_planet.pt"
         ),
