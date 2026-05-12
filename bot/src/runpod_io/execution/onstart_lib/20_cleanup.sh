@@ -23,14 +23,15 @@ mark() {
 }
 mark "00_container_started"
 
-# Hard timeout safety net: trap が壊れても 4h で pod を強制 remove する。
-# 旧 2h timeout は case10 base mart preprocess (lake pull 30min + preprocess
-# 96min ~= 2h きっかり) の最後 1-2 分で pod kill されたため 4h に緩和。
+# Hard timeout safety net: trap が壊れても 8h で pod を強制 remove する。
+# 2026-05-12 観測: case10 base mart preprocess は host CPU 数や IO で
+# 大きくばらつき (1.04-3.31 ep/s)、worker=11 cap でも host 性能次第で
+# 完走 + dvc commit + push に 4h+ 必要なケースがある。8h に余裕を持たせる。
 # remove 前に log を S3 へ最終 snapshot として書き出す (cleanup_destroy が
 # 呼ばれない経路の救済 — 例えば `runpodctl remove pod` を外部から叩かれて
 # bash に SIGKILL が届いた場合や、kernel panic 等)。
 (
-  sleep 14400
+  sleep 28800
   if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
     aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
   fi

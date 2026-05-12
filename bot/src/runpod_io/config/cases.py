@@ -241,6 +241,25 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_topall.pt"
         ),
     },
+    # case10: data_volume_sweep recovery entry — the `<CASE>` placeholder in
+    # onstart_lib expands to the registry key verbatim (not case_subdir), so
+    # we need a registry key whose name matches the on-disk mart subdir
+    # `data/mart/imitation/case10/` for the skip-preprocess path to work
+    # after a base_preprocess pod left the mart on /persist but couldn't
+    # DVC-push it (mart_dvc_persist looked at the wrong subdir and skipped).
+    # preprocess_cmd="" so 50_preprocess.sh entirely skips that
+    # block; train runs the template_ships head against the existing mart.
+    "case10": {
+        "stage": "train_imitation_case10",
+        "train_module": "pipeline.imitation.case10.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case10/configs/il_case10_template.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": (
+            "bot/pipeline/imitation/case10/policy/weights_template_ships.pt"
+        ),
+    },
     # case10_base_preprocess: produce the shared base mart in a dedicated
     # pod and DVC-push it. Reuses the case0 dummy train so the onstart
     # pipeline still has a valid train step; the actual deliverable is the
