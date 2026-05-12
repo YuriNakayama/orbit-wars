@@ -80,30 +80,42 @@ class BatchedSample:
     is_noop: torch.Tensor
 
 
+def _flatten_arrow_array(arr: pa.Array) -> pa.Array:
+    while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
+        arr = arr.flatten()
+    return arr
+
+
 def _list_to_numpy(
     col: pa.ChunkedArray, dtype: np.dtype, *, writable: bool = False
 ) -> np.ndarray:
     """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
     numpy buffer.
 
-    `combine_chunks()` consolidates into one ListArray; nested `flatten()`
-    drills past list nesting until we reach a primitive array; that primitive
-    array's `.to_numpy(zero_copy_only=False)` gives a single numpy buffer.
+    pyarrow の `combine_chunks()` は int32 offset を使うため、入力列の合計が
+    2 GB を超えると `ArrowInvalid: offset overflow`。それを避けるため chunk
+    ごとに flatten + numpy 化し、結果を `np.concatenate` で 1 つの buffer に
+    結合する。candidate_feats / planet_feats など >2GB の big mart に対応。
 
-    `writable=False` (default) avoids the extra copy and uses the arrow buffer
-    directly as a numpy view — this halves peak RAM during dataset load. Set
-    `writable=True` when the caller needs to mutate the array (column masking
-    via mask_planet_cols / mask_global_cols).
+    `writable=False` (default) では各 chunk の view を最大限再利用し、
+    最終的な concatenate でのみ buffer 確保。`writable=True` は ablation
+    masking 用に numpy copy を強制する。
     """
-    arr: pa.Array = col.combine_chunks()
-    while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
-        arr = arr.flatten()
-    np_arr: np.ndarray = arr.to_numpy(zero_copy_only=False)
+    chunks = col.chunks if col.num_chunks > 0 else [col.combine_chunks()]
+    parts: list[np.ndarray] = []
+    for ch in chunks:
+        flat = _flatten_arrow_array(ch)
+        np_chunk: np.ndarray = flat.to_numpy(zero_copy_only=False)
+        if np_chunk.dtype != dtype:
+            np_chunk = np_chunk.astype(dtype, copy=False)
+        parts.append(np_chunk)
+    if len(parts) == 1:
+        np_arr = parts[0]
+    else:
+        np_arr = np.concatenate(parts)
     if writable:
         return np.array(np_arr, dtype=dtype, copy=True)
-    if np_arr.dtype != dtype:
-        return np.asarray(np_arr.astype(dtype, copy=False))
-    return np_arr
+    return np.asarray(np_arr)
 
 
 def _take(
