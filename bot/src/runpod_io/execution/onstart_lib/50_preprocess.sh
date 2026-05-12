@@ -51,6 +51,13 @@ if [ -n "<PREPROCESS_CMD>" ]; then
     # iter11: `uv run` 経由を排除 (race condition 回避)。cwd を bot に揃えて
     # .venv/bin/python を直接起動すれば uv は介在せず deps は固定。
     # preprocess の exit code を check して、 失敗時は train に進まず onstart fail。
+    #
+    # 2026-05-12 観測: RunPod host の CPU 数によっては自動 worker 数 (cpu-1)
+    # が 47 まで膨らみ、worker 間競合で rate が 3.31 ep/s → 1.04 ep/s に低下
+    # (~3x slowdown)。case10 base mart preprocess (~16k 1v1 episodes) で
+    # 確認。11 workers に固定して前回計測の安定 rate に揃える。
+    export ORBIT_WARS_PREPROCESS_WORKERS=11
+    echo "[onstart] preprocess workers cap: ORBIT_WARS_PREPROCESS_WORKERS=11"
     if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> ); then
       echo "[onstart] step=preprocess FAILED (exit code != 0)" >&2
       mark "55_preprocess_failed"
