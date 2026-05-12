@@ -178,7 +178,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top20.yaml"
         ),
-        "preprocess_cmd": "",
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
+        ),
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top20.pt"
         ),
@@ -190,7 +194,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top40.yaml"
         ),
-        "preprocess_cmd": "",
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
+        ),
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top40.pt"
         ),
@@ -202,7 +210,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top80.yaml"
         ),
-        "preprocess_cmd": "",
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
+        ),
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top80.pt"
         ),
@@ -214,7 +226,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_top160.yaml"
         ),
-        "preprocess_cmd": "",
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
+        ),
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_top160.pt"
         ),
@@ -226,7 +242,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "--config "
             "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_sweep_topall.yaml"
         ),
-        "preprocess_cmd": "",
+        "preprocess_cmd": (
+            "pipeline.imitation.case10.training.preprocess "
+            "--config "
+            "pipeline/imitation/case10/configs/data_volume_sweep/il_case10_base_full.yaml"
+        ),
         "canonical_weights": (
             "bot/pipeline/imitation/case10/policy/data_volume_sweep/weights_topall.pt"
         ),
