@@ -80,28 +80,39 @@ class BatchedSample:
     is_noop: torch.Tensor
 
 
-def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
+def _list_to_numpy(
+    col: pa.ChunkedArray, dtype: np.dtype, *, writable: bool = False
+) -> np.ndarray:
     """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
-    numpy buffer **without** materialising a Python list.
+    numpy buffer.
 
     `combine_chunks()` consolidates into one ListArray; nested `flatten()`
     drills past list nesting until we reach a primitive array; that primitive
     array's `.to_numpy(zero_copy_only=False)` gives a single numpy buffer.
 
-    Returns a writable copy so downstream `torch.from_numpy` accepts it and
-    column-masking (mask_planet_cols / mask_global_cols) can mutate.
+    `writable=False` (default) avoids the extra copy and uses the arrow buffer
+    directly as a numpy view — this halves peak RAM during dataset load. Set
+    `writable=True` when the caller needs to mutate the array (column masking
+    via mask_planet_cols / mask_global_cols).
     """
     arr: pa.Array = col.combine_chunks()
     while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
         arr = arr.flatten()
-    return np.array(arr.to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
+    np_arr: np.ndarray = arr.to_numpy(zero_copy_only=False)
+    if writable:
+        return np.array(np_arr, dtype=dtype, copy=True)
+    if np_arr.dtype != dtype:
+        return np.asarray(np_arr.astype(dtype, copy=False))
+    return np_arr
 
 
-def _take(table_box: list[pa.Table], name: str, dtype: np.dtype) -> np.ndarray:
+def _take(
+    table_box: list[pa.Table], name: str, dtype: np.dtype, *, writable: bool = False
+) -> np.ndarray:
     """Convert a list-typed column to numpy, then drop it from the table to
     free its arrow buffer. The table is held in a single-element list so this
     helper can mutate it in place."""
-    arr = _list_to_numpy(table_box[0][name], dtype)
+    arr = _list_to_numpy(table_box[0][name], dtype, writable=writable)
     table_box[0] = table_box[0].drop_columns([name])
     return arr
 
@@ -139,7 +150,12 @@ class CaseFourDataset(Dataset[Sample]):
         n = tbl[0].num_rows
         has_ship_label = "ship_label_per_src" in tbl[0].schema.names
 
-        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32))
+        # planet/global only need writable when ablation masking is applied.
+        need_writable_planet = bool(mask_planet_cols)
+        need_writable_global = bool(mask_global_cols)
+        planet_arr = _take(
+            tbl, "planet_feats", np.dtype(np.float32), writable=need_writable_planet
+        )
         if n > 0:
             self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
         else:
@@ -149,7 +165,9 @@ class CaseFourDataset(Dataset[Sample]):
             if 0 <= col < self._planet_feat_dim:
                 self._planet_feats[:, :, col] = 0.0
 
-        global_arr = _take(tbl, "global_feats", np.dtype(np.float32))
+        global_arr = _take(
+            tbl, "global_feats", np.dtype(np.float32), writable=need_writable_global
+        )
         if n > 0:
             self._global_feat_dim = int(global_arr.size // n)
         else:

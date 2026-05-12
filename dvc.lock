@@ -358,8 +358,8 @@ stages:
     deps:
     - path: bot/pipeline/imitation/case9/configs/il_case9_per_planet.yaml
       hash: md5
-      md5: a94adb0b25a3364d286da01b1c6086c1
-      size: 1801
+      md5: e6f6eb7f7390d2202d14edbcb56a2507
+      size: 2071
     - path: bot/pipeline/imitation/case9/policy/candidates.py
       hash: md5
       md5: 58f0334a0194bb6bd823c6de7b7cf88b
@@ -392,9 +392,9 @@ stages:
     outs:
     - path: data/mart/imitation/case9_per_planet/train.parquet
       hash: md5
-      md5: 040f3776c4610fa9f061244076213e2c
-      size: 6965113084
+      md5: 5f31daf830700cc5e9b29b28f4f46901
+      size: 3262143578
     - path: data/mart/imitation/case9_per_planet/val.parquet
       hash: md5
-      md5: 4fc41ecd3156317b39c75e6360f02376
-      size: 745271620
+      md5: cdda88a0be77fef56c87548d5ef008c8
+      size: 378244518

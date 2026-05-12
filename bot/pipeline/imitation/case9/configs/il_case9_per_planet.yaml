@@ -17,7 +17,10 @@ data:
   rating_quantile: 0.0
   val_split: 0.10
   modes: ["1v1"]
-  max_episodes: null
+  # 5000 episodes ≒ 12000 1v1 試合のうち上位 ~5000 を採用。winners + top80 で
+  # 落ちる分を見越して max_episodes は元データの ~30% で設定。これで train
+  # parquet を ~3.5GB に圧縮し、host RAM OOM (exit 137) を回避する。
+  max_episodes: 8000
   winners_only: true
   top_team_rank: 80
 
