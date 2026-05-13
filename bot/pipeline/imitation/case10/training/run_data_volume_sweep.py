@@ -40,8 +40,8 @@ import yaml
 logger = logging.getLogger(__name__)
 
 REPO_ROOT_FROM_BOT = Path("..").resolve()
-BASE_TRAIN = "data/mart/imitation/case10/base/train.parquet"
-BASE_VAL = "data/mart/imitation/case10/base/val.parquet"
+BASE_TRAIN = "data/mart/imitation/case10/train.parquet"
+BASE_VAL = "data/mart/imitation/case10/val.parquet"
 WEIGHTS_DIR = Path("pipeline/imitation/case10/policy/data_volume_sweep")
 SUMMARY_PATH = Path("data/output/experiment/case10_data_volume_sweep/summary.json")
 TEMPLATE_CFG = Path("pipeline/imitation/case10/configs/il_case10_template.yaml")

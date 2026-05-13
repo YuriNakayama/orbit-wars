@@ -69,7 +69,10 @@ def _repo_root() -> Path:
 
 def _abspath(rel: str | Path) -> Path:
     p = Path(rel)
-    return p if p.is_absolute() else (_repo_root() / p).resolve()
+    # Avoid resolve() — it follows symlinks (e.g. into the DVC cache hash
+    # dir) which breaks sibling-path conventions like `*_index.parquet`.
+    # `absolute()` returns an absolute path without resolving symlinks.
+    return p if p.is_absolute() else (_repo_root() / p).absolute()
 
 
 def _git_sha() -> str:

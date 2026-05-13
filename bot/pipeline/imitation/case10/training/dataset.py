@@ -126,6 +126,68 @@ def _take(
     return arr
 
 
+def _read_column_streaming(
+    pf: pq.ParquetFile,
+    column_name: str,
+    dtype: np.dtype,
+    *,
+    is_list: bool,
+    full_n: int,
+    keep_idx: np.ndarray | None,
+) -> np.ndarray:
+    """Read one column from a ParquetFile row-group-by-row-group.
+
+    RAM peak ≈ one row group's worth of that column (a few MB) plus the
+    accumulated output. For top80 with fp16 cand_feats this caps load at
+    ~8 GB instead of 30+ GB for the full-table arrow path.
+
+    ``keep_idx`` is a sorted ascending np.int64 array of row indices to keep
+    (in the same coordinate system as the original mart). The function maps
+    those indices into row-group-local coordinates and slices each group.
+
+    The returned array is flat (suitable for downstream `reshape`).
+    """
+    if keep_idx is None:
+        keep_per_row = None
+    else:
+        keep_per_row = np.asarray(keep_idx, dtype=np.int64)
+
+    out_chunks: list[np.ndarray] = []
+    cursor = 0  # running cumulative row index across already-seen groups
+    for rg_idx in range(pf.num_row_groups):
+        rg = pf.read_row_group(rg_idx, columns=[column_name])
+        rg_rows = rg.num_rows
+        col = rg.column(column_name)
+        if is_list:
+            arr = _list_to_numpy(col, dtype)
+            per_row = arr.size // rg_rows if rg_rows > 0 else 0
+            if per_row > 0:
+                arr = arr.reshape(rg_rows, per_row)
+        else:
+            arr = np.asarray(
+                col.to_numpy(zero_copy_only=False), dtype=dtype, copy=True
+            )
+        if keep_per_row is not None:
+            # row indices for this row group in [cursor, cursor+rg_rows)
+            lo, hi = cursor, cursor + rg_rows
+            mask_start = np.searchsorted(keep_per_row, lo, side="left")
+            mask_end = np.searchsorted(keep_per_row, hi, side="left")
+            local = keep_per_row[mask_start:mask_end] - lo
+            if local.size > 0:
+                arr = arr[local]
+            else:
+                arr = arr[:0]
+        out_chunks.append(arr if is_list else arr)
+        cursor += rg_rows
+        del rg, col
+    if not out_chunks:
+        return np.empty(0, dtype=dtype)
+    if is_list:
+        # each chunk is (n_keep_local, per_row); flatten to 1-D for caller
+        return np.concatenate(out_chunks, axis=0).reshape(-1)
+    return np.concatenate(out_chunks, axis=0)
+
+
 def _take_primitive(
     table_box: list[pa.Table],
     name: str,
@@ -158,28 +220,38 @@ class CaseTenDataset(Dataset[Sample]):
         mask_global_cols: list[int] | None = None,
         keep_row_indices: np.ndarray | None = None,
     ) -> None:
-        # Drop columns from the arrow Table one at a time after converting to
-        # numpy: peak RAM is then ~ (largest column copy) + (table - that
-        # column), not (full table + all numpy copies). The largest column
-        # is `candidate_feats` at ~6 GB for 300k rows.
-        # NOTE: do NOT call `pa.Table.take` on this table — list-typed columns
-        # exceed the 32-bit offset limit when concatenated. Instead, slice each
-        # column at the numpy stage (post `_list_to_numpy`) using
-        # ``self._keep_idx``. When keep_row_indices is None we keep the full
-        # row range; otherwise this becomes a fancy index applied per column.
+        # Row-group streaming load (2026-05-12 rewrite). The earlier
+        # `pq.read_table(...)` path peaked at ~30 GB for the 13 GB case10
+        # base mart even with keep_idx filtering (arrow keeps the entire
+        # table materialised). We now open the parquet metadata only and
+        # stream each column row-group-by-row-group, applying keep_idx in
+        # row-group-local coordinates. RAM peak ≈ largest output column.
         keep_idx = (
             np.asarray(keep_row_indices, dtype=np.int64)
             if keep_row_indices is not None
             else None
         )
+        # keep_idx must be sorted ascending for the row-group bisect logic.
+        if keep_idx is not None:
+            if not np.all(keep_idx[:-1] <= keep_idx[1:]):
+                keep_idx = np.sort(keep_idx)
         self._keep_idx = keep_idx
-        tbl: list[pa.Table] = [pq.read_table(str(parquet_path))]
-        full_n = tbl[0].num_rows
-        n = int(keep_idx.size) if keep_idx is not None else full_n
-        has_ship_label = "ship_label_per_src" in tbl[0].schema.names
-        take_kw = {"full_n": full_n, "keep_idx": keep_idx}
 
-        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32), **take_kw)
+        pf = pq.ParquetFile(str(parquet_path))
+        full_n = pf.metadata.num_rows
+        n = int(keep_idx.size) if keep_idx is not None else full_n
+        schema_names = set(pf.schema_arrow.names)
+        has_ship_label = "ship_label_per_src" in schema_names
+        stream_kw = {"full_n": full_n, "keep_idx": keep_idx}
+
+        # Provide a list-typed wrapper for backwards-compat helpers below
+        # that still reference `tbl[0].schema.names`. Build an empty Table
+        # with the schema so the .schema lookups keep working.
+        tbl: list[pa.Table] = [pa.Table.from_pylist([], schema=pf.schema_arrow)]
+
+        planet_arr = _read_column_streaming(
+            pf, "planet_feats", np.dtype(np.float32), is_list=True, **stream_kw
+        )
         if n > 0:
             self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
         else:
@@ -195,7 +267,9 @@ class CaseTenDataset(Dataset[Sample]):
         self._planet_feats = planet_feats_f32.astype(np.float16, copy=False)
         del planet_feats_f32
 
-        global_arr = _take(tbl, "global_feats", np.dtype(np.float32), **take_kw)
+        global_arr = _read_column_streaming(
+            pf, "global_feats", np.dtype(np.float32), is_list=True, **stream_kw
+        )
         if n > 0:
             self._global_feat_dim = int(global_arr.size // n)
         else:
@@ -205,18 +279,18 @@ class CaseTenDataset(Dataset[Sample]):
             if 0 <= col < self._global_feat_dim:
                 self._global_feats[:, col] = 0.0
 
-        self._planet_mask = _take(
-            tbl, "planet_mask", np.dtype(np.bool_), **take_kw
+        self._planet_mask = _read_column_streaming(
+            pf, "planet_mask", np.dtype(np.bool_), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS)
-        self._my_planet_mask = _take(
-            tbl, "my_planet_mask", np.dtype(np.bool_), **take_kw
+        self._my_planet_mask = _read_column_streaming(
+            pf, "my_planet_mask", np.dtype(np.bool_), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS)
-        self._target_mask = _take(
-            tbl, "target_mask", np.dtype(np.bool_), **take_kw
+        self._target_mask = _read_column_streaming(
+            pf, "target_mask", np.dtype(np.bool_), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS)
-        if "template_ctx" in tbl[0].schema.names:
-            self._template_ctx = _take(
-                tbl, "template_ctx", np.dtype(np.float32), **take_kw
+        if "template_ctx" in schema_names:
+            self._template_ctx = _read_column_streaming(
+                pf, "template_ctx", np.dtype(np.float32), is_list=True, **stream_kw
             ).reshape(n, MAX_PLANETS, TEMPLATE_CTX_DIM)
         else:
             self._template_ctx = np.zeros(
@@ -225,56 +299,60 @@ class CaseTenDataset(Dataset[Sample]):
         # candidate_feats is the largest list-typed column (~15 GB at 5M rows
         # in fp32). Store in fp16 to halve in-memory footprint; cast back to
         # fp32 in __getitem__ where downstream model expects float.
-        cand_feats_f32 = _take(
-            tbl, "candidate_feats", np.dtype(np.float32), **take_kw
+        cand_feats_f32 = _read_column_streaming(
+            pf, "candidate_feats", np.dtype(np.float32), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
         self._candidate_feats = cand_feats_f32.astype(np.float16, copy=False)
         del cand_feats_f32
-        self._candidate_mask = _take(
-            tbl, "candidate_mask", np.dtype(np.bool_), **take_kw
+        self._candidate_mask = _read_column_streaming(
+            pf, "candidate_mask", np.dtype(np.bool_), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS, CAND_K)
-        self._candidate_pid = _take(
-            tbl, "candidate_pid", np.dtype(np.int64), **take_kw
+        self._candidate_pid = _read_column_streaming(
+            pf, "candidate_pid", np.dtype(np.int64), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS, CAND_K)
-        self._cand_slot_per_src = _take(
-            tbl, "cand_slot_per_src", np.dtype(np.int64), **take_kw
+        self._cand_slot_per_src = _read_column_streaming(
+            pf, "cand_slot_per_src", np.dtype(np.int64), is_list=True, **stream_kw
         ).reshape(n, MAX_PLANETS)
         if has_ship_label:
-            self._ship_label_per_src = _take(
-                tbl, "ship_label_per_src", np.dtype(np.int64), **take_kw
+            self._ship_label_per_src = _read_column_streaming(
+                pf, "ship_label_per_src", np.dtype(np.int64), is_list=True, **stream_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._ship_label_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
-        if "ships_bucket_per_src" in tbl[0].schema.names:
-            self._ships_bucket_per_src = _take(
-                tbl, "ships_bucket_per_src", np.dtype(np.int64), **take_kw
+        if "ships_bucket_per_src" in schema_names:
+            self._ships_bucket_per_src = _read_column_streaming(
+                pf,
+                "ships_bucket_per_src",
+                np.dtype(np.int64),
+                is_list=True,
+                **stream_kw,
             ).reshape(n, MAX_PLANETS)
         else:
             self._ships_bucket_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
-        if "from_multihot" in tbl[0].schema.names:
-            self._from_multihot = _take(
-                tbl, "from_multihot", np.dtype(np.bool_), **take_kw
+        if "from_multihot" in schema_names:
+            self._from_multihot = _read_column_streaming(
+                pf, "from_multihot", np.dtype(np.bool_), is_list=True, **stream_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._from_multihot = np.zeros((n, MAX_PLANETS), dtype=np.bool_)
-        if "target_per_src" in tbl[0].schema.names:
-            self._target_per_src = _take(
-                tbl, "target_per_src", np.dtype(np.int64), **take_kw
+        if "target_per_src" in schema_names:
+            self._target_per_src = _read_column_streaming(
+                pf, "target_per_src", np.dtype(np.int64), is_list=True, **stream_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._target_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
-        if "ships_per_src" in tbl[0].schema.names:
-            self._ships_per_src = _take(
-                tbl, "ships_per_src", np.dtype(np.int64), **take_kw
+        if "ships_per_src" in schema_names:
+            self._ships_per_src = _read_column_streaming(
+                pf, "ships_per_src", np.dtype(np.int64), is_list=True, **stream_kw
             ).reshape(n, MAX_PLANETS)
         else:
             self._ships_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
-        self._is_noop = _take_primitive(
-            tbl, "is_noop", np.dtype(np.bool_), keep_idx=keep_idx
+        self._is_noop = _read_column_streaming(
+            pf, "is_noop", np.dtype(np.bool_), is_list=False, **stream_kw
         )
         self._n = n
 
-        del tbl
+        del tbl, pf
 
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
