@@ -642,7 +642,16 @@ def run_episode(env: Any, agents: list[Any]) -> list[Any]:
                     except (AttributeError, TypeError):
                         s["status"] = "DONE"
 
-        env.steps.append(env.state)
+        # Snapshot the current state before appending — env.state will be
+        # mutated by the next rust_step / action-stamping, and `env.steps` is
+        # expected to be a *frozen* history (upstream kaggle_environments
+        # uses `copy.deepcopy(env.state)`). Without this, every entry in
+        # env.steps ends up referencing the same final state, breaking
+        # replay save (`env.toJSON()`) and per-turn analysis. We use
+        # `copy.deepcopy` for full safety; if it becomes a hot spot, switch
+        # to a hand-rolled struct-only copy.
+        import copy
+        env.steps.append(copy.deepcopy(env.state))
 
     return env.steps
 
