@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT_FROM_BOT = Path("..").resolve()
 BASE_TRAIN = "data/mart/imitation/case10/train.parquet"
 BASE_VAL = "data/mart/imitation/case10/val.parquet"
-WEIGHTS_DIR = Path("pipeline/imitation/case10/policy/data_volume_sweep")
+WEIGHTS_DIR = Path("bot/pipeline/imitation/case10/policy/data_volume_sweep")
 SUMMARY_PATH = Path("data/output/experiment/case10_data_volume_sweep/summary.json")
 TEMPLATE_CFG = Path("pipeline/imitation/case10/configs/il_case10_template.yaml")
 DEFAULT_HEAD_MODE = "template_ships"
@@ -55,7 +55,6 @@ DEFAULT_HEAD_MODE = "template_ships"
 # point in the adoption rule (see hypotheses.md).
 ITER_POINTS: dict[int, list[tuple[str, int | None, bool]]] = {
     1: [
-        ("top20", 20, True),
         ("top40", 40, True),
         ("top80", 80, True),
     ],
