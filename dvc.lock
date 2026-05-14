@@ -347,10 +347,18 @@ stages:
       hash: md5
       md5: 2eb9dc7e568ede9261869f89f07c16b3
       size: 12909026019
+    - path: data/mart/imitation/case10/train_index.parquet
+      hash: md5
+      md5: 4308baa14bfe90ba008937ade8e29104
+      size: 18405674
     - path: data/mart/imitation/case10/val.parquet
       hash: md5
       md5: b46c56b7ba00de43c6ad3329f53349b0
       size: 1501613073
+    - path: data/mart/imitation/case10/val_index.parquet
+      hash: md5
+      md5: 7fd4eaf487dc6bbfa90788faf7c3c7ce
+      size: 2163723
   preprocess_imitation_case9_per_planet:
     cmd: uv run --directory bot python -m 
       pipeline.imitation.case9.training.preprocess --config 

@@ -266,6 +266,8 @@ stages:
     outs:
       - data/mart/imitation/case10/train.parquet
       - data/mart/imitation/case10/val.parquet
+      - data/mart/imitation/case10/train_index.parquet
+      - data/mart/imitation/case10/val_index.parquet
 
   train_imitation_case10_candidate:
     cmd: uv run --directory bot python -m pipeline.imitation.case10.training.train --config pipeline/imitation/case10/configs/il_case10_candidate.yaml
