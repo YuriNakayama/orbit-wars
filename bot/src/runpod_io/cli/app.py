@@ -804,6 +804,84 @@ def _ensure_runpod_key() -> None:
         raise typer.Exit(code=2) from exc
 
 
+@app.command("stock")
+def stock_cmd(
+    min_memory_gb: int = typer.Option(16, "--min-memory-gb"),
+    max_dph: float = typer.Option(10.0, "--max-dph", help="cap on uninterruptable price"),
+    gpu_count: int = typer.Option(1, "--gpu-count", help="quote price/stock for this count"),
+    include_no_stock: bool = typer.Option(
+        False, "--include-no-stock", help="show GPUs with stockStatus=null too"
+    ),
+) -> None:
+    """RunPod の GPU 型別 stock 状況 (High/Medium/Low/-) を一覧表示する。
+
+    Train pod が \"no instances available\" で繰り返し失敗するときに、どの GPU
+    型を `--gpu-name` に渡せば確保見込みが高いかを判断するための補助情報。
+    SDK の GraphQL `gpuTypes.lowestPrice.stockStatus` を直接叩く。
+    """
+    from rich.table import Table
+    from runpod.api.graphql import run_graphql_query
+
+    _ensure_runpod_key()
+    all_gpus = runpod_sdk.get_gpus()
+    rows: list[tuple[str, str, int, str, str, str]] = []
+    for entry in all_gpus:
+        mem = int(entry.get("memoryInGb") or 0)
+        if mem < min_memory_gb:
+            continue
+        gid = str(entry.get("id", ""))
+        query = (
+            "{ gpuTypes(input: {id: \"" + gid + "\"}) { "
+            "memoryInGb securePrice communityPrice "
+            "lowestPrice(input: {gpuCount: " + str(gpu_count) + "}) { "
+            "uninterruptablePrice stockStatus } } }"
+        )
+        try:
+            resp = run_graphql_query(query)
+        except Exception as exc:  # noqa: BLE001
+            rows.append(("ERR", gid, mem, "-", "-", str(exc)[:30]))
+            continue
+        entries = (resp.get("data") or {}).get("gpuTypes") or []
+        for e in entries:
+            lp = e.get("lowestPrice") or {}
+            stock = lp.get("stockStatus") or "-"
+            uninterruptable = lp.get("uninterruptablePrice")
+            if uninterruptable is not None and uninterruptable > max_dph:
+                continue
+            sec = e.get("securePrice")
+            comm = e.get("communityPrice")
+            rows.append(
+                (
+                    stock,
+                    gid,
+                    mem,
+                    f"{sec:.3f}" if sec is not None else "-",
+                    f"{comm:.3f}" if comm is not None else "-",
+                    f"{uninterruptable:.3f}" if uninterruptable is not None else "-",
+                )
+            )
+
+    if not include_no_stock:
+        rows = [r for r in rows if r[0] != "-"]
+
+    stock_order = {"High": 0, "Medium": 1, "Low": 2, "-": 3, "ERR": 4}
+    rows.sort(key=lambda r: (stock_order.get(r[0], 9), r[5] if r[5] != "-" else "z"))
+
+    table = Table(title=f"RunPod GPU stock (min_mem={min_memory_gb}GB, gpu_count={gpu_count})")
+    table.add_column("stock")
+    table.add_column("gpu")
+    table.add_column("mem", justify="right")
+    table.add_column("sec$/h", justify="right")
+    table.add_column("comm$/h", justify="right")
+    table.add_column("lowest$/h", justify="right")
+    for stock, gid, mem, sec, comm, low in rows:
+        color = {"High": "green", "Medium": "cyan", "Low": "yellow", "-": "dim", "ERR": "red"}.get(stock, "")
+        prefix = f"[{color}]" if color else ""
+        suffix = "[/]" if color else ""
+        table.add_row(f"{prefix}{stock}{suffix}", gid, str(mem), sec, comm, low)
+    console.print(table)
+
+
 @app.command("ps")
 def ps_cmd(
     case: str | None = typer.Option(

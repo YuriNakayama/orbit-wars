@@ -15,6 +15,7 @@
 #   dev/runpod watch <run_id> [--case caseN] [--poll-interval 30] [--max-wait 7200]
 #   dev/runpod pull <run_id> [--case caseN] [--from auto|dvc|s3]
 #   dev/runpod volume {list|search|create} [...]
+#   dev/runpod stock [--min-memory-gb 16] [--max-dph 10.0] [--gpu-count 1] [--include-no-stock]
 #
 # `--watch` (or `dev/runpod watch <run_id>`) polls S3 progress markers and pod
 # state until completion, then fires a desktop notification (macOS osascript /
