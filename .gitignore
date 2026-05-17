@@ -104,6 +104,11 @@ simulator/rust/target/
 # DVC-managed weights (formerly git-tracked)
 bot/pipeline/imitation/case1/policy/weights.pt
 bot/pipeline/imitation/case5/policy/weights.pt
+bot/pipeline/reinforce/case1/policy/weights.pt
+
+# Local eval artifacts (selfplay runner writes match index here when invoked
+# with default data_root). Real outputs go to data/mart/.
+bot/data/
 
 # Terraform vars (contain secrets)
 infra/**/terraform.tfvars

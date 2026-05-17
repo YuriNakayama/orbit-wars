@@ -286,6 +286,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case1: PPO + BC warm-start on case9 per_planet weights.
+    # `family` differentiates the on-disk run dir (data/output/models/reinforce/...).
+    "reinforce_case1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/train.yaml",
+        # BC weights are pulled via DVC by the standard 50_dvc_pull stage; no
+        # per-pod preprocess needed (RL collects rollouts in-process).
+        "preprocess_cmd": "",
+        "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
+    },
 }
 
 
@@ -297,16 +309,28 @@ def case_subdir(case: str) -> str:
     case9_dual) but they all share the same
     `data/output/models/imitation/case9/` tree on disk (same training
     pipeline, different head_mode). Strip the `_<variant>` suffix.
+
+    Reinforce cases use a `reinforce_<caseN>` prefix that maps to
+    `data/output/models/reinforce/<caseN>/`.
     """
     if case.startswith("case9_"):
         return "case9"
     if case.startswith("case10_"):
         return "case10"
+    if case.startswith("reinforce_"):
+        return case[len("reinforce_") :]
     return case
 
 
+def case_family(case: str) -> str:
+    """Return the top-level family directory for a registry key."""
+    defaults = CASE_DEFAULTS.get(case, {})
+    family = defaults.get("family", "imitation")
+    return family
+
+
 def runs_root_for(case: str) -> Path:
-    return Path(f"data/output/models/imitation/{case_subdir(case)}/runs")
+    return Path(f"data/output/models/{case_family(case)}/{case_subdir(case)}/runs")
 
 
 def case_defaults(case: str) -> dict[str, str]:
@@ -317,4 +341,10 @@ def case_defaults(case: str) -> dict[str, str]:
     return CASE_DEFAULTS[case]
 
 
-__all__ = ["CASE_DEFAULTS", "case_defaults", "case_subdir", "runs_root_for"]
+__all__ = [
+    "CASE_DEFAULTS",
+    "case_defaults",
+    "case_family",
+    "case_subdir",
+    "runs_root_for",
+]

@@ -42,6 +42,9 @@ from runpod_io.config.cases import (
     case_defaults as _case_defaults,
 )
 from runpod_io.config.cases import (
+    case_family as _case_family,
+)
+from runpod_io.config.cases import (
     case_subdir as _case_subdir,
 )
 from runpod_io.config.cases import (
@@ -482,6 +485,8 @@ def train(
         branch=branch,
         repo_url=repo_url,
         case=case,
+        case_family=_case_family(case),
+        case_subdir=_case_subdir(case),
         train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
@@ -501,6 +506,11 @@ def train(
         "ORBIT_WARS_GIT_SHA": commit_sha,
         "ORBIT_WARS_GIT_BRANCH": branch,
         "ORBIT_WARS_CASE": case,
+        # case_family / case_subdir を onstart shell に渡す。imitation case は
+        # family=imitation, subdir=<case> となり既存挙動を維持。reinforce 系は
+        # family=reinforce, subdir=<caseN> で別ツリーに persist / DVC pull する。
+        "ORBIT_WARS_CASE_FAMILY": _case_family(case),
+        "ORBIT_WARS_CASE_SUBDIR": _case_subdir(case),
         "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
     }
     # GIT_PAT は onstart の git push (.dvc メタコミット) で必要。.env か shell env
@@ -807,8 +817,12 @@ def _ensure_runpod_key() -> None:
 @app.command("stock")
 def stock_cmd(
     min_memory_gb: int = typer.Option(16, "--min-memory-gb"),
-    max_dph: float = typer.Option(10.0, "--max-dph", help="cap on uninterruptable price"),
-    gpu_count: int = typer.Option(1, "--gpu-count", help="quote price/stock for this count"),
+    max_dph: float = typer.Option(
+        10.0, "--max-dph", help="cap on uninterruptable price"
+    ),
+    gpu_count: int = typer.Option(
+        1, "--gpu-count", help="quote price/stock for this count"
+    ),
     include_no_stock: bool = typer.Option(
         False, "--include-no-stock", help="show GPUs with stockStatus=null too"
     ),
@@ -831,7 +845,7 @@ def stock_cmd(
             continue
         gid = str(entry.get("id", ""))
         query = (
-            "{ gpuTypes(input: {id: \"" + gid + "\"}) { "
+            '{ gpuTypes(input: {id: "' + gid + '"}) { '
             "memoryInGb securePrice communityPrice "
             "lowestPrice(input: {gpuCount: " + str(gpu_count) + "}) { "
             "uninterruptablePrice stockStatus } } }"
@@ -867,7 +881,9 @@ def stock_cmd(
     stock_order = {"High": 0, "Medium": 1, "Low": 2, "-": 3, "ERR": 4}
     rows.sort(key=lambda r: (stock_order.get(r[0], 9), r[5] if r[5] != "-" else "z"))
 
-    table = Table(title=f"RunPod GPU stock (min_mem={min_memory_gb}GB, gpu_count={gpu_count})")
+    table = Table(
+        title=f"RunPod GPU stock (min_mem={min_memory_gb}GB, gpu_count={gpu_count})"
+    )
     table.add_column("stock")
     table.add_column("gpu")
     table.add_column("mem", justify="right")
@@ -875,7 +891,13 @@ def stock_cmd(
     table.add_column("comm$/h", justify="right")
     table.add_column("lowest$/h", justify="right")
     for stock, gid, mem, sec, comm, low in rows:
-        color = {"High": "green", "Medium": "cyan", "Low": "yellow", "-": "dim", "ERR": "red"}.get(stock, "")
+        color = {
+            "High": "green",
+            "Medium": "cyan",
+            "Low": "yellow",
+            "-": "dim",
+            "ERR": "red",
+        }.get(stock, "")
         prefix = f"[{color}]" if color else ""
         suffix = "[/]" if color else ""
         table.add_row(f"{prefix}{stock}{suffix}", gid, str(mem), sec, comm, low)
@@ -1186,9 +1208,9 @@ def watch_cmd(
 # `dev/runpod logs --source onstart` (S3 fallback) を使う。
 TAIL_SOURCES: dict[str, str] = {
     "onstart": "tail -F /var/log/onstart.log",
-    "train": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/train.log"),
-    "gpu": "tail -F data/output/models/imitation/{case}/runs/{run_id}/gpu.log",
-    "system": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/system.log"),
+    "train": "tail -F data/output/models/{family}/{case}/runs/{run_id}/train.log",
+    "gpu": "tail -F data/output/models/{family}/{case}/runs/{run_id}/gpu.log",
+    "system": "tail -F data/output/models/{family}/{case}/runs/{run_id}/system.log",
 }
 
 
@@ -1242,7 +1264,9 @@ def tail_cmd(
         console.print(f"[red]ssh unavailable:[/] {exc}")
         raise typer.Exit(code=1) from exc
 
-    remote_cmd = TAIL_SOURCES[source].format(case=_case_subdir(case), run_id=run_id)
+    remote_cmd = TAIL_SOURCES[source].format(
+        family=_case_family(case), case=_case_subdir(case), run_id=run_id
+    )
     if not follow:
         # `tail -F` を `tail -n 200` に置き換える
         remote_cmd = remote_cmd.replace("tail -F", "tail -n 200")

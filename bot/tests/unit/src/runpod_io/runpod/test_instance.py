@@ -45,6 +45,8 @@ def test_render_onstart_replaces_all_placeholders() -> None:
         "<BRANCH>",
         "<REPO_URL>",
         "<CASE>",
+        "<CASE_FAMILY>",
+        "<CASE_SUBDIR>",
         "<TRAIN_MODULE>",
         "__ONSTART_LIB_00_PRELUDE__",
         "__ONSTART_LIB_10_TOOLS__",

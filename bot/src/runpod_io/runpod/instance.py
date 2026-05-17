@@ -34,6 +34,13 @@ _TEMPLATE_PLACEHOLDERS = (
     "<BRANCH>",
     "<REPO_URL>",
     "<CASE>",
+    # `<CASE>` is the registry key (e.g. "case9_per_planet"). `<CASE_FAMILY>`
+    # is the top-level family directory ("imitation" / "reinforce" / ...) and
+    # `<CASE_SUBDIR>` is the on-disk case dir ("case9", "case1", ...). Onstart
+    # shell scripts persist / DVC-pull / push under
+    # `data/output/models/<CASE_FAMILY>/<CASE_SUBDIR>/runs/<RUN_ID>`.
+    "<CASE_FAMILY>",
+    "<CASE_SUBDIR>",
     "<TRAIN_MODULE>",
     "<CONFIG_ARG>",
     "<PREPROCESS_CMD>",
@@ -123,6 +130,8 @@ def render_onstart(
     branch: str,
     repo_url: str,
     case: str = "case1",
+    case_family: str = "imitation",
+    case_subdir: str = "case1",
     train_module: str = "pipeline.imitation.case1.training.train",
     config_arg: str = "",
     preprocess_cmd: str = "",
@@ -137,6 +146,8 @@ def render_onstart(
     _validate("branch", branch)
     _validate("repo_url", repo_url)
     _validate("case", case)
+    _validate("case_family", case_family)
+    _validate("case_subdir", case_subdir)
     # train_module は preprocess-only 経路では空文字。値があれば形式チェック。
     if train_module and not _VALID_VALUE.match(train_module):
         raise TemplateError(
@@ -158,6 +169,8 @@ def render_onstart(
         "<BRANCH>": branch,
         "<REPO_URL>": repo_url,
         "<CASE>": case,
+        "<CASE_FAMILY>": case_family,
+        "<CASE_SUBDIR>": case_subdir,
         "<TRAIN_MODULE>": train_module,
         "<CONFIG_ARG>": config_arg,
         "<PREPROCESS_CMD>": preprocess_cmd,

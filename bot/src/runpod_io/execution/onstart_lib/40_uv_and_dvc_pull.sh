@@ -198,7 +198,7 @@ echo "[onstart] step=mkdir_run"
 # 絶対 path で固定: train.py は ORBIT_WARS_RUN_DIR を Path.resolve() するので
 # 相対 path だと cwd (uv run --directory bot) 基準になり bot/data/... に
 # ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
-RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+RUN_DIR_ABS="$(pwd)/data/output/models/<CASE_FAMILY>/<CASE_SUBDIR>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
 # iter4 fix: preprocess の前に mart symlink を物理 dir に materialize する。
