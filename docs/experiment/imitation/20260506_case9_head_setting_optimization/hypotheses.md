@@ -1,7 +1,7 @@
 # Hypotheses — imitation/case9 head_setting_optimization
 
 > 作成日: 2026-05-06
-> 最終更新: 2026-05-09
+> 最終更新: 2026-05-13
 > 状態: in_progress
 > 最大 iteration: 上限なし (ユーザー停止指示まで)
 > 主要メトリクス: 学習中 val_loss / val_target_acc / val_ships_acc (case7/case8 同形式) + ローカル self-play 10 戦の挙動評価 (vs baseline_v1)
@@ -76,10 +76,11 @@ case9 は **head 設計の最適化** にスコープを絞る。特徴量 / bac
   - template variant: 並行比較として `template_features` にも timeline / fleet pressure を per-template 注入
   - 期待効果: 各 slot / template の判断材料が増え、精緻な選択が可能に
 
-- [ ] (P2) **H14: planet_id 直接予測 head (3-head の target_head 復活)** — 3-head の target_head を template (8 class) ではなく **`planet_id` (37 class) 直接予測**に戻す。case3 phase2 由来の最も精緻な target 選択肢。データ量増を前提に収束を狙う。
+- [~] (P2) **H14: planet_id 直接予測 head (3-head の target_head 復活)** — 3-head の target_head を template (8 class) ではなく **`planet_id` (37 class) 直接予測**に戻す。case3 phase2 由来の最も精緻な target 選択肢。データ量増を前提に収束を狙う。
   - candidate variant: candidate K=37 拡張 (full planet 集合) + ships_reg
   - template variant: 3-head の target_head を planet_id 37 class に戻す
   - 期待効果: target 解像度を最大化 (8 → 37)、抽象化による情報損失を排除
+  - **partial adoption (iter3, 2026-05-13)**: per_planet variant 単独で実装・学習 (template variant は未走)。val_target_fire_acc=0.351 / val_target_acc=0.920。両 variant 並行ルール違反のため iter は **inconclusive** 扱い、`H14 template variant` を deepen 候補として残す。
 
 - [ ] (P2) **H15: ships head の高解像度 bucket** — 4-bucket → **16 / 32-bucket** categorical (log spacing)。H12 (regression) と並走する精緻化選択肢。両 variant 並行。
   - 比較指標: val_ships_acc / 各 bucket の precision
@@ -99,3 +100,4 @@ case9 は **head 設計の最適化** にスコープを絞る。特徴量 / bac
 | 1 | 2026-05-07 | H2 candidate | hypotheses.md | `20260506-133924__...__a6a7bee__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md | - |
 | 1 | 2026-05-07 | H3 candidate_ships | hypotheses.md | `20260507-022131__...__ea87185__seed0` | val_cand_fire_acc=0.211 / 10ep=0/10 | inconclusive | iter1_result.md | - |
 | 2 | 2026-05-08 | H4 head_family_behavior_comparison | iter2_plan.md | `20260508-115939...` / `20260508-120122...` / `20260508-120124...` | template val_total=0.8758 fire=0.2888 / 3head val_total=1.0772 / cand×ships loss異常大; local 5ep all 0/5 | inconclusive | iter2_result.md | iter2_analysis.md |
+| 3 | 2026-05-12 | H14 per_planet (planet_id 直接予測 + ships regression / partial: candidate variant only, template variant 未実施) + データフィルタ (winners + top_team_rank 80, max_episodes 8000) | (plan 未作成、直接実装) | `20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0` | val_target_acc=0.9205 / val_target_fire_acc=0.3512 / val_target_noop_acc=0.991 / val_ship_mae=0.371 / local 1ep vs random=WIN, 1ep vs baseline_v1=LOSS | inconclusive (両 variant 未並行、n=2 で結論不可、n<300 ruleにより) | (result.md 未作成) | iter3_analysis.md (本セッション) |
