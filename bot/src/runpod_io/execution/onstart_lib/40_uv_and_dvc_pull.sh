@@ -97,7 +97,7 @@ PY_BIN="$(pwd)/bot/.venv/bin/python"
 DVC_BIN="${PY_BIN} -m dvc"
 echo "[onstart] iter12 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
 
-echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE>"
+echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE> family=<CASE_FAMILY>"
 # case0 は RunPod 基盤の E2E smoke 専用なので、dvc pull 経路の正常性検証だけ
 # 行い、他 case の outs を巻き込まない (memory: runpod_5_traps)。
 # data/lake/case0_smoke は数十バイトの sentinel ファイル 1 つだけ。
@@ -113,6 +113,32 @@ if [ "<CASE>" = "case0" ]; then
   fi
   echo "[onstart] case0_smoke contents:"
   ls -la data/lake/case0_smoke/ 2>&1 | head -5
+elif [ "<CASE_FAMILY>" = "reinforce" ]; then
+  # reinforce family は on-policy rollout で学習データを生成するため、
+  # kaggle_episodes mart の pull は不要。BC warm-start に使う重み (case9
+  # per_planet best.pt) だけを targeted pull する。BC 重みのパスは config
+  # YAML 内に hardcode されているので、配布されている .dvc を一括 pull する
+  # 方式 (recursive) で `data/output/models/imitation/case9_per_planet/` 配下
+  # の全 runs を取得する。
+  BC_RUNS_PARENT="data/output/models/imitation/case9_per_planet/runs"
+  echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
+  ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
+  # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
+  # train.yaml は単一 run の best.pt を参照するので、find で全 .dvc を渡す。
+  mapfile -t BC_DVCS < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
+  if [ ${#BC_DVCS[@]} -eq 0 ]; then
+    echo "[onstart] reinforce BC pull: no .dvc files under ${BC_RUNS_PARENT}" >&2
+    mark "45_dvc_pull_reinforce_bc_missing"
+    exit 1
+  fi
+  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} .dvc files to fetch"
+  if ! ${DVC_BIN} pull -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
+    echo "[onstart] dvc pull (reinforce BC) FAILED" >&2
+    mark "45_dvc_pull_reinforce_bc_failed"
+    exit 1
+  fi
+  echo "[onstart] reinforce BC pull complete; verifying best.pt..."
+  find "${BC_RUNS_PARENT}" -name "best.pt" -maxdepth 3 2>&1 | head -5
 else
   # 診断: cwd と repo の dvc-tracked 状態を log に残す
   echo "[onstart] dvc pull diagnostic:"
@@ -207,14 +233,17 @@ mkdir -p "${RUN_DIR_ABS}"
 # 事象を A6000 host で観測 (case8 iter4 1st run の `65_train_failed_exit_1`)。
 # 順序を「materialize → preprocess」に変えれば preprocess は materialize 済みの
 # 実 dir に直接書き込むため symlink chain を経由せず安全。
-MART_PARENT_PRE="data/mart/imitation"
-if [ -L "${MART_PARENT_PRE}" ]; then
-  echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
-  MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
-  rm "${MART_PARENT_PRE}"
-  mkdir -p "${MART_PARENT_PRE}"
-  if [ -d "${MART_TARGET_PRE}" ]; then
-    cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+# reinforce family は on-policy で mart を使わないので skip。
+if [ "<CASE_FAMILY>" != "reinforce" ]; then
+  MART_PARENT_PRE="data/mart/imitation"
+  if [ -L "${MART_PARENT_PRE}" ]; then
+    echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
+    MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
+    rm "${MART_PARENT_PRE}"
+    mkdir -p "${MART_PARENT_PRE}"
+    if [ -d "${MART_TARGET_PRE}" ]; then
+      cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+    fi
   fi
 fi
 
