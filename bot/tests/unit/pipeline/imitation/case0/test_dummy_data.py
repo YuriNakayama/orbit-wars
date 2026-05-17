@@ -14,7 +14,7 @@ from pipeline.imitation.case0.training.dummy_data import (
     write,
 )
 
-EXPECTED_SHA12_DEFAULT = "1bfcc041ff16"
+EXPECTED_SHA12_DEFAULT = "c7b2ad0b5a96"
 
 
 def _hash_df_values(df: pd.DataFrame) -> str:

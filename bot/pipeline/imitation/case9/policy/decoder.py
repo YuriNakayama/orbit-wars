@@ -504,12 +504,17 @@ def _decode_per_planet(
     `snapshot.planet_ids`. Ships count is `expm1(ship_pred[slot])`, clamped
     to a minimum floor and to src.ships.
     """
-    T = max(float(temperature), 1e-6)
+    pp_temp = _env_float("IL_CASE9_PP_TEMPERATURE", float(temperature))
+    T = max(pp_temp, 1e-6)
     assert output.per_planet_logits is not None
     assert output.ship_pred is not None
     pp_logits = output.per_planet_logits[0] / T  # (P, P+1)
     ship_pred = output.ship_pred[0]  # (P,) log1p space
     no_op_idx = pp_logits.shape[-1] - 1
+    noop_bias = _env_float("IL_CASE9_PP_NOOP_BIAS", 0.0)
+    if noop_bias != 0.0:
+        pp_logits = pp_logits.clone()
+        pp_logits[:, no_op_idx] = pp_logits[:, no_op_idx] - noop_bias
     fire_margin = _env_float("IL_CASE9_PP_FIRE_MARGIN", -999.0)
 
     (
