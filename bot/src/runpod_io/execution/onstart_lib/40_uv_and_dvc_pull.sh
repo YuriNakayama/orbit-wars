@@ -151,7 +151,15 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   fi
   echo "[onstart] cargo $(cargo --version 2>&1 | head -1)"
   RUST_BUILD_START=$(date +%s)
-  if ! ( cd simulator/rust && "${PY_BIN}" -m maturin develop --release ) 2>&1 | tail -30; then
+  # maturin develop は VIRTUAL_ENV を読んで install 先を決める。
+  # bot/.venv は cwd/bot/.venv にあるので絶対 path で明示 export する。
+  BOT_VENV_ABS="$(pwd)/bot/.venv"
+  if [ ! -d "${BOT_VENV_ABS}" ]; then
+    echo "[onstart] build_rust_sim: bot/.venv missing at ${BOT_VENV_ABS}" >&2
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  if ! ( cd simulator/rust && VIRTUAL_ENV="${BOT_VENV_ABS}" "${BOT_VENV_ABS}/bin/maturin" develop --release ) 2>&1 | tail -30; then
     echo "[onstart] build_rust_sim FAILED — orbit_wars_rust の build に失敗" >&2
     mark "45_build_rust_sim_failed"
     exit 1
