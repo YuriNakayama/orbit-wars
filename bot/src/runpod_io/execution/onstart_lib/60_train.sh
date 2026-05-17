@@ -24,7 +24,6 @@ fi
 TRAIN_LOG="${RUN_DIR_ABS}/train.log"
 GPU_LOG="${RUN_DIR_ABS}/gpu.log"
 mkdir -p "$(dirname "${TRAIN_LOG}")"
-S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 
 # nvidia-smi を background で 10s 周期サンプリング → gpu.log に append
 NVSMI_PID=""

@@ -134,16 +134,23 @@ else
   # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
   # を **--allow-missing の前** に 1 段追加する (--allow-missing 後に置くと
   # block 自体に到達しない事故が retry3 で発生)。
-  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//')
+  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//;s/_sweep_.*$//;s/_base_preprocess$//;s/_template_ships$//')
   CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
   echo "[onstart] iter15 targeted pull: case='<CASE>' subdir='${CASE_SUBDIR}' dir='${CASE_MART_DIR}'"
   ls -la "${CASE_MART_DIR}/" 2>&1 | head -10
   if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
      && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
-    echo "[onstart] dvc pull TARGETED (iter15): ${CASE_MART_DIR}/{train,val}.parquet.dvc"
+    # iter19 (case10 2026-05-14): index.parquet.dvc が存在すれば併せて pull する。
+    # case10 では side index (train_index.parquet / val_index.parquet) を train.py が
+    # in-memory フィルタで参照するため、parquet 本体と同時に取得が必要。
+    EXTRA_DVCS=()
+    [ -f "${CASE_MART_DIR}/train_index.parquet.dvc" ] && EXTRA_DVCS+=("${CASE_MART_DIR}/train_index.parquet.dvc")
+    [ -f "${CASE_MART_DIR}/val_index.parquet.dvc" ] && EXTRA_DVCS+=("${CASE_MART_DIR}/val_index.parquet.dvc")
+    echo "[onstart] dvc pull TARGETED (iter15): ${CASE_MART_DIR}/{train,val}.parquet.dvc${EXTRA_DVCS[*]:+ + index pair}"
     ${DVC_BIN} pull --force \
       "${CASE_MART_DIR}/train.parquet.dvc" \
-      "${CASE_MART_DIR}/val.parquet.dvc" 2>&1 | tail -30
+      "${CASE_MART_DIR}/val.parquet.dvc" \
+      "${EXTRA_DVCS[@]}" 2>&1 | tail -30
     echo "[onstart] iter15 targeted pull exit=$?"
   else
     echo "[onstart] iter15 targeted pull SKIP: case .dvc files not found" >&2
@@ -167,12 +174,20 @@ else
   # --allow-missing 後に case 別 mart parquet を**再 pull**して復活させる。
   if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
      && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
-    if [ ! -f "${CASE_MART_DIR}/train.parquet" ] \
-       || [ ! -f "${CASE_MART_DIR}/val.parquet" ]; then
-      echo "[onstart] iter17 re-pull: parquet was deleted by --allow-missing"
+    NEED_REPULL=0
+    [ ! -f "${CASE_MART_DIR}/train.parquet" ] && NEED_REPULL=1
+    [ ! -f "${CASE_MART_DIR}/val.parquet" ] && NEED_REPULL=1
+    [ -f "${CASE_MART_DIR}/train_index.parquet.dvc" ] && [ ! -f "${CASE_MART_DIR}/train_index.parquet" ] && NEED_REPULL=1
+    [ -f "${CASE_MART_DIR}/val_index.parquet.dvc" ] && [ ! -f "${CASE_MART_DIR}/val_index.parquet" ] && NEED_REPULL=1
+    if [ "${NEED_REPULL}" = "1" ]; then
+      echo "[onstart] iter17 re-pull: parquet (or index) was deleted by --allow-missing"
+      EXTRA_DVCS=()
+      [ -f "${CASE_MART_DIR}/train_index.parquet.dvc" ] && EXTRA_DVCS+=("${CASE_MART_DIR}/train_index.parquet.dvc")
+      [ -f "${CASE_MART_DIR}/val_index.parquet.dvc" ] && EXTRA_DVCS+=("${CASE_MART_DIR}/val_index.parquet.dvc")
       ${DVC_BIN} pull --force \
         "${CASE_MART_DIR}/train.parquet.dvc" \
-        "${CASE_MART_DIR}/val.parquet.dvc" 2>&1 | tail -10
+        "${CASE_MART_DIR}/val.parquet.dvc" \
+        "${EXTRA_DVCS[@]}" 2>&1 | tail -10
       echo "[onstart] iter17 re-pull exit=$?"
     fi
   fi

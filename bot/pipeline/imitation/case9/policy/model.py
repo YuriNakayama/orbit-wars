@@ -22,6 +22,7 @@ from .featurizer import GLOBAL_FEAT_DIM, MAX_PLANETS, PLANET_FEAT_DIM
 from .heads.backbone import BackboneConfig, SetTransformerBackbone
 from .heads.candidate import CandidateHead
 from .heads.candidate_ships import CandidateShipsHead
+from .heads.per_planet import PerPlanetHead
 from .heads.template_ships import TemplateShipsHead
 from .heads.three_head import ThreeHead
 from .types import BatchFeatures, PolicyOutput
@@ -32,6 +33,7 @@ SUPPORTED_HEAD_MODES = (
     "candidate_ships",
     "template_ships",
     "dual",
+    "per_planet",
 )
 
 
@@ -96,6 +98,11 @@ class Case9Policy(nn.Module):
                 attn_heads=self.cfg.attn_heads,
                 ships_buckets=self.cfg.ships_buckets,
             )
+        elif self.cfg.head_mode == "per_planet":
+            self.head_per_planet = PerPlanetHead(
+                hidden=self.cfg.hidden,
+                head_dropout=self.cfg.head_dropout,
+            )
         else:  # dual
             self.head_three = ThreeHead(
                 hidden=self.cfg.hidden,
@@ -142,6 +149,13 @@ class Case9Policy(nn.Module):
                 h_with_ctx, h, batch.template_ctx, batch.planet_mask
             )
             return PolicyOutput(target_logits=target_logits, ships_logits=ships_logits)
+        if self.cfg.head_mode == "per_planet":
+            per_planet_logits, ship_pred = self.head_per_planet(
+                h_with_ctx, ctx, h, batch.planet_mask
+            )
+            return PolicyOutput(
+                per_planet_logits=per_planet_logits, ship_pred=ship_pred
+            )
 
         from_logits, target_logits, ships_logits = self.head_three(
             h_with_ctx,

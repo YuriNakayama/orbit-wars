@@ -43,6 +43,7 @@ from pipeline.imitation.case9.training.losses import (
     compute_candidate_ships_loss,
     compute_dual_head_loss,
     compute_loss,
+    compute_per_planet_loss,
     compute_template_ships_loss,
     compute_three_head_loss,
 )
@@ -167,6 +168,10 @@ _METRIC_KEY_MAP: dict[str, str] = {
     "val_template_acc": "template_acc",
     "val_template_noop_acc": "template_noop_acc",
     "val_template_fire_acc": "template_fire_acc",
+    # per_planet metrics (head_mode=per_planet) — target_loss/target_acc/
+    # ship_loss/ship_mae reuse keys defined above.
+    "val_target_noop_acc": "target_noop_acc",
+    "val_target_fire_acc": "target_fire_acc",
 }
 
 
@@ -299,6 +304,26 @@ def _compute_loss_dispatch(
             "ships_loss": float(rep_ts.ships_loss.item()),
             "ships_acc": rep_ts.ships_acc,
         }
+    if head_mode == "per_planet":
+        from pipeline.imitation.case9.policy.featurizer import MAX_PLANETS
+
+        rep_pp = compute_per_planet_loss(
+            output,  # type: ignore[arg-type]
+            target_pid_per_src=batch.target_pid_per_src.to(device, non_blocking=True),
+            ship_pred_label=batch.ship_pred_label.to(device, non_blocking=True),
+            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+            weights=loss_weights,
+            no_op_idx=MAX_PLANETS,
+        )
+        return rep_pp.total, {
+            "total": float(rep_pp.total.detach().item()),
+            "target_loss": float(rep_pp.target_loss.item()),
+            "target_acc": rep_pp.target_acc,
+            "target_noop_acc": rep_pp.target_noop_acc,
+            "target_fire_acc": rep_pp.target_fire_acc,
+            "ship": float(rep_pp.ship_loss.item()),
+            "ship_mae": rep_pp.ship_mae,
+        }
     if head_mode == "dual":
         rep_d = compute_dual_head_loss(
             output,  # type: ignore[arg-type]
@@ -403,6 +428,8 @@ def _run_epoch(
                     acc_key = "from_acc"
                 elif head_mode == "template_ships":
                     acc_key = "template_acc"
+                elif head_mode == "per_planet":
+                    acc_key = "target_acc"
                 else:
                     acc_key = "cand_acc"
                 running_acc_val = totals.get(acc_key, 0.0) / max(1, n_batches)
@@ -613,6 +640,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         three_ships_w=float(lw_cfg.get("three_ship", lw_cfg.get("ship", 0.5))),
         three_pos_weight=float(lw_cfg.get("from_pos_weight", 5.0)),
         template_w=float(lw_cfg.get("template", lw_cfg.get("cand", 1.0))),
+        target_w=float(lw_cfg.get("target", 1.0)),
         cand_loss_type=str(lw_cfg.get("cand_loss_type", "ce")),
         focal_alpha=float(lw_cfg.get("focal_alpha", 0.25)),
         focal_gamma=float(lw_cfg.get("focal_gamma", 2.0)),
@@ -771,6 +799,19 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                     log_row[f"train_{k}"] = round(train_metrics[k], 4)
                 if k in val_metrics:
                     log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        elif head_mode == "per_planet":
+            for k in (
+                "target_loss",
+                "target_acc",
+                "target_noop_acc",
+                "target_fire_acc",
+                "ship",
+                "ship_mae",
+            ):
+                if k in train_metrics:
+                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
+                if k in val_metrics:
+                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
         else:  # candidate
             for k in (
                 "cand",
@@ -867,6 +908,8 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 primary_acc_key = "from_acc"
             elif head_mode == "template_ships":
                 primary_acc_key = "template_fire_acc"
+            elif head_mode == "per_planet":
+                primary_acc_key = "target_fire_acc"
             else:
                 primary_acc_key = "cand_fire_acc"
             primary_acc_val = val_metrics.get(primary_acc_key, 0.0)

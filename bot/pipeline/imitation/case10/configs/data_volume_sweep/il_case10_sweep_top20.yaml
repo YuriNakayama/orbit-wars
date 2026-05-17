@@ -1,0 +1,72 @@
+# case10 data_volume_sweep iter1 — top20 sweep point.
+# Reuses the shared base mart at data/mart/imitation/case10/base/ (built once
+# with loser_swap=true and no top_K cap). train_top_submission_limit /
+# use_loser_swap apply at train time via index_filter.compute_keep_row_indices.
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case10/train.parquet
+  out_val: data/mart/imitation/case10/val.parquet
+  rating_quantile: 0.0
+  top_submission_limit: null
+  turn_min: 50
+  turn_max: 400
+  val_split: 0.10
+  modes: ["1v1"]
+  loser_swap: true
+  max_episodes: null
+  train_top_submission_limit: 20
+  use_loser_swap: true
+
+model:
+  planet_in_dim: 41
+  global_in_dim: 20
+  cand_in_dim: 14
+  cand_k: 8
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_mode: template_ships
+
+train:
+  case: case10
+  batch_size: 512
+  epochs: 50
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 0
+  pin_memory: true
+  loss_weights:
+    ship: 0.75
+    cand: 1.25
+    template: 1.25
+    use_class_weights: true
+    class_weight_beta: 0.999
+    label_smoothing: 0.05
+    cand_loss_type: focal
+    focal_alpha: 0.50
+    focal_gamma: 2.0
+  scheduler:
+    type: cosine_warmup
+    t_max: 50
+    eta_min: 1.0e-5
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+  best_metric: val_template_fire_acc
+  best_metric_mode: max
+  early_stop:
+    metric: val_template_fire_acc
+    patience: 10
+    mode: max
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+  head_dropout: 0.1
+  weights_out: pipeline/imitation/case10/policy/data_volume_sweep/weights_top20.pt
+
+inference:
+  temperature: 1.0

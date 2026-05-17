@@ -129,7 +129,11 @@ def _maybe_reset_history(obs: dict[str, Any]) -> None:
         _HISTORY.clear()
 
 
-def agent(obs: Any) -> list[list[int | float]]:
+def agent(obs: Any, *_: Any, **__: Any) -> list[list[int | float]]:
+    # `*_` / `**__` allow being called either as `agent(obs)` (Kaggle submit) or
+    # `agent(obs, configuration)` (local selfplay simulator probe). Without
+    # this, the rust simulator's probe raises TypeError, falls back to the
+    # framework env.run() path, and the agent never produces a fire action.
     obs_dict = obs if isinstance(obs, dict) else dict(obs)
     _maybe_reset_history(obs_dict)
     model = _get_model()

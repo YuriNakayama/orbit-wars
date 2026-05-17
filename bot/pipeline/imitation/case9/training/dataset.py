@@ -52,6 +52,9 @@ class Sample:
     from_multihot: torch.Tensor  # (MAX_PLANETS,) bool — three_head fire label
     target_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
     ships_per_src: torch.Tensor  # (MAX_PLANETS,) int64; -1 = unused
+    # per_planet head 用ラベル: 0..MAX_PLANETS-1 = target slot; MAX_PLANETS = no-op
+    target_pid_per_src: torch.Tensor  # (MAX_PLANETS,) int64
+    ship_pred_label: torch.Tensor  # (MAX_PLANETS,) float32; log1p(ships); -1 = unused
     is_noop: bool
 
 
@@ -72,31 +75,56 @@ class BatchedSample:
     from_multihot: torch.Tensor
     target_per_src: torch.Tensor
     ships_per_src: torch.Tensor
+    target_pid_per_src: torch.Tensor
+    ship_pred_label: torch.Tensor
     is_noop: torch.Tensor
 
 
-def _list_to_numpy(col: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
-    """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
-    numpy buffer **without** materialising a Python list.
-
-    `combine_chunks()` consolidates into one ListArray; nested `flatten()`
-    drills past list nesting until we reach a primitive array; that primitive
-    array's `.to_numpy(zero_copy_only=False)` gives a single numpy buffer.
-
-    Returns a writable copy so downstream `torch.from_numpy` accepts it and
-    column-masking (mask_planet_cols / mask_global_cols) can mutate.
-    """
-    arr: pa.Array = col.combine_chunks()
+def _flatten_arrow_array(arr: pa.Array) -> pa.Array:
     while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
         arr = arr.flatten()
-    return np.array(arr.to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
+    return arr
 
 
-def _take(table_box: list[pa.Table], name: str, dtype: np.dtype) -> np.ndarray:
+def _list_to_numpy(
+    col: pa.ChunkedArray, dtype: np.dtype, *, writable: bool = False
+) -> np.ndarray:
+    """Flatten a (possibly chunked) list/list-of-list pyarrow column to a 1-D
+    numpy buffer.
+
+    pyarrow の `combine_chunks()` は int32 offset を使うため、入力列の合計が
+    2 GB を超えると `ArrowInvalid: offset overflow`。それを避けるため chunk
+    ごとに flatten + numpy 化し、結果を `np.concatenate` で 1 つの buffer に
+    結合する。candidate_feats / planet_feats など >2GB の big mart に対応。
+
+    `writable=False` (default) では各 chunk の view を最大限再利用し、
+    最終的な concatenate でのみ buffer 確保。`writable=True` は ablation
+    masking 用に numpy copy を強制する。
+    """
+    chunks = col.chunks if col.num_chunks > 0 else [col.combine_chunks()]
+    parts: list[np.ndarray] = []
+    for ch in chunks:
+        flat = _flatten_arrow_array(ch)
+        np_chunk: np.ndarray = flat.to_numpy(zero_copy_only=False)
+        if np_chunk.dtype != dtype:
+            np_chunk = np_chunk.astype(dtype, copy=False)
+        parts.append(np_chunk)
+    if len(parts) == 1:
+        np_arr = parts[0]
+    else:
+        np_arr = np.concatenate(parts)
+    if writable:
+        return np.array(np_arr, dtype=dtype, copy=True)
+    return np.asarray(np_arr)
+
+
+def _take(
+    table_box: list[pa.Table], name: str, dtype: np.dtype, *, writable: bool = False
+) -> np.ndarray:
     """Convert a list-typed column to numpy, then drop it from the table to
     free its arrow buffer. The table is held in a single-element list so this
     helper can mutate it in place."""
-    arr = _list_to_numpy(table_box[0][name], dtype)
+    arr = _list_to_numpy(table_box[0][name], dtype, writable=writable)
     table_box[0] = table_box[0].drop_columns([name])
     return arr
 
@@ -134,7 +162,12 @@ class CaseFourDataset(Dataset[Sample]):
         n = tbl[0].num_rows
         has_ship_label = "ship_label_per_src" in tbl[0].schema.names
 
-        planet_arr = _take(tbl, "planet_feats", np.dtype(np.float32))
+        # planet/global only need writable when ablation masking is applied.
+        need_writable_planet = bool(mask_planet_cols)
+        need_writable_global = bool(mask_global_cols)
+        planet_arr = _take(
+            tbl, "planet_feats", np.dtype(np.float32), writable=need_writable_planet
+        )
         if n > 0:
             self._planet_feat_dim = int(planet_arr.size // (n * MAX_PLANETS))
         else:
@@ -144,7 +177,9 @@ class CaseFourDataset(Dataset[Sample]):
             if 0 <= col < self._planet_feat_dim:
                 self._planet_feats[:, :, col] = 0.0
 
-        global_arr = _take(tbl, "global_feats", np.dtype(np.float32))
+        global_arr = _take(
+            tbl, "global_feats", np.dtype(np.float32), writable=need_writable_global
+        )
         if n > 0:
             self._global_feat_dim = int(global_arr.size // n)
         else:
@@ -213,6 +248,24 @@ class CaseFourDataset(Dataset[Sample]):
             ).reshape(n, MAX_PLANETS)
         else:
             self._ships_per_src = np.full((n, MAX_PLANETS), -1, dtype=np.int64)
+        # per_planet labels (added in 20260510 head re-design).
+        # `target_pid_per_src` encodes target slot 0..MAX_PLANETS-1 or
+        # MAX_PLANETS for the no-op sentinel. `ship_pred_label` is
+        # log1p(ships) for fired sources, -1.0 for unused.
+        if "target_pid_per_src" in tbl[0].schema.names:
+            self._target_pid_per_src = _take(
+                tbl, "target_pid_per_src", np.dtype(np.int64)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._target_pid_per_src = np.full(
+                (n, MAX_PLANETS), MAX_PLANETS, dtype=np.int64
+            )
+        if "ship_pred_label" in tbl[0].schema.names:
+            self._ship_pred_label = _take(
+                tbl, "ship_pred_label", np.dtype(np.float32)
+            ).reshape(n, MAX_PLANETS)
+        else:
+            self._ship_pred_label = np.full((n, MAX_PLANETS), -1.0, dtype=np.float32)
         self._is_noop = _take_primitive(tbl, "is_noop", np.dtype(np.bool_))
         self._n = n
 
@@ -295,6 +348,8 @@ class CaseFourDataset(Dataset[Sample]):
             from_multihot=torch.from_numpy(self._from_multihot[idx]),
             target_per_src=torch.from_numpy(self._target_per_src[idx]),
             ships_per_src=torch.from_numpy(self._ships_per_src[idx]),
+            target_pid_per_src=torch.from_numpy(self._target_pid_per_src[idx]),
+            ship_pred_label=torch.from_numpy(self._ship_pred_label[idx]),
             is_noop=bool(self._is_noop[idx]),
         )
 
@@ -316,5 +371,7 @@ def collate(samples: list[Sample]) -> BatchedSample:
         from_multihot=torch.stack([s.from_multihot for s in samples]),
         target_per_src=torch.stack([s.target_per_src for s in samples]),
         ships_per_src=torch.stack([s.ships_per_src for s in samples]),
+        target_pid_per_src=torch.stack([s.target_pid_per_src for s in samples]),
+        ship_pred_label=torch.stack([s.ship_pred_label for s in samples]),
         is_noop=torch.tensor([s.is_noop for s in samples], dtype=torch.bool),
     )

@@ -39,6 +39,8 @@ AGENT_REGISTRY: dict[str, str] = {
     "il_v9_candidate_ships": "pipeline.imitation.case9.policy.agent:agent",
     "il_v9_template_ships": "pipeline.imitation.case9.policy.agent:agent",
     "il_v9_dual": "pipeline.imitation.case9.policy.agent:agent",
+    "il_v10_candidate": "pipeline.imitation.case10.policy.agent:agent",
+    "il_v10_template": "pipeline.imitation.case10.policy.agent:agent",
     "random": "random",
 }
 

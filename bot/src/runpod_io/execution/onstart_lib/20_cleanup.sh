@@ -1,6 +1,7 @@
 # Progress marker — write a tiny file to S3 at each step so we can debug
 # without SSH access. AWS env vars are injected by create_pod.
 S3_MARKER_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_progress/<RUN_ID>"
+S3_ARTIFACT_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>"
 mark() {
   local step="$1"
   local ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -22,12 +23,15 @@ mark() {
 }
 mark "00_container_started"
 
-# Hard timeout safety net: trap が壊れても 2h で pod を強制 remove する。
+# Hard timeout safety net: trap が壊れても 8h で pod を強制 remove する。
+# 2026-05-12 観測: case10 base mart preprocess は host CPU 数や IO で
+# 大きくばらつき (1.04-3.31 ep/s)、worker=11 cap でも host 性能次第で
+# 完走 + dvc commit + push に 4h+ 必要なケースがある。8h に余裕を持たせる。
 # remove 前に log を S3 へ最終 snapshot として書き出す (cleanup_destroy が
 # 呼ばれない経路の救済 — 例えば `runpodctl remove pod` を外部から叩かれて
 # bash に SIGKILL が届いた場合や、kernel panic 等)。
 (
-  sleep 7200
+  sleep 28800
   if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
     aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
   fi
@@ -49,6 +53,20 @@ cleanup_destroy() {
     aws s3 cp /var/log/onstart.log \
       "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || \
       echo "[onstart] log upload failed (non-fatal)"
+  fi
+  if command -v aws >/dev/null 2>&1; then
+    # Preserve preprocessed mart parquet even if a later train step fails or the
+    # pod is externally terminated before DVC push finishes. This is a fallback
+    # artifact path, not the canonical DVC path.
+    MART_SNAPSHOT_DIR="data/mart/imitation/<CASE>"
+    if [ -d "${MART_SNAPSHOT_DIR}" ]; then
+      echo "[onstart] uploading mart snapshot to ${S3_ARTIFACT_PREFIX}/mart/"
+      aws s3 cp "${MART_SNAPSHOT_DIR}" "${S3_ARTIFACT_PREFIX}/mart/" \
+        --recursive 2>/dev/null || \
+        echo "[onstart] mart snapshot upload failed (non-fatal)"
+    else
+      echo "[onstart] mart snapshot skip (not found: ${MART_SNAPSHOT_DIR})"
+    fi
   fi
   # RunPod は docker_args の bash プロセスが exit するとコンテナを再起動して
   # docker_args を再実行する (実 e2e で確認済み: stop pod 後も restart loop)。

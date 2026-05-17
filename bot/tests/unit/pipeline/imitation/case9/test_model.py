@@ -73,6 +73,15 @@ def test_forward_shape(head_mode: str) -> None:
         assert out.from_logits is None
         assert out.candidate_logits is None
         assert out.ship_pred is None
+    elif head_mode == "per_planet":
+        assert out.per_planet_logits is not None
+        assert out.ship_pred is not None
+        assert out.per_planet_logits.shape == (2, MAX_PLANETS, MAX_PLANETS + 1)
+        assert out.ship_pred.shape == (2, MAX_PLANETS)
+        assert out.from_logits is None
+        assert out.target_logits is None
+        assert out.ships_logits is None
+        assert out.candidate_logits is None
     else:  # dual
         assert out.from_logits is not None
         assert out.target_logits is not None
@@ -98,6 +107,7 @@ def test_forward_no_nan(head_mode: str) -> None:
         "ships_logits",
         "candidate_logits",
         "ship_pred",
+        "per_planet_logits",
     ):
         v = getattr(out, name)
         if v is None:
@@ -112,7 +122,13 @@ def test_param_count_within_range(head_mode: str) -> None:
     cfg = ModelConfig(head_mode=head_mode)
     model = Case9Policy(cfg)
     n = count_parameters(model)
-    upper = 1_900_000 if head_mode == "dual" else 1_500_000
+    if head_mode == "dual":
+        upper = 1_900_000
+    elif head_mode == "per_planet":
+        # bilinear pair_proj + larger src/tgt projections widen the head budget.
+        upper = 4_000_000
+    else:
+        upper = 1_500_000
     assert 800_000 < n < upper, f"{head_mode} has {n} params"
 
 

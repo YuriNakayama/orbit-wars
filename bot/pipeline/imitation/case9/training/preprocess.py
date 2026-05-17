@@ -157,6 +157,39 @@ def _player_slots(row: dict[str, Any], num_slots: int) -> list[int]:
     return list(range(num_slots))
 
 
+def _select_winner_slots(
+    rec: dict[str, Any],
+    num_slots: int,
+    *,
+    winners_only: bool,
+    top_team_rank: int,
+) -> list[int]:
+    """Pick which player slots to emit frames for, after winner / rank filters.
+
+    - winners_only=True: keep only the winning slot (per `winner` field).
+    - top_team_rank > 0: drop the slot if its `agent_{slot}_team_rank` is
+      either 0 (unknown) or above the threshold. Top-80 → top_team_rank=80.
+    """
+    if rec.get("draw"):
+        return []
+    if winners_only:
+        winner = int(rec.get("winner", -1))
+        if winner < 0 or winner >= num_slots:
+            return []
+        slots = [winner]
+    else:
+        slots = list(range(num_slots))
+    if top_team_rank > 0:
+        kept: list[int] = []
+        for slot in slots:
+            rank = int(rec.get(f"agent_{slot}_team_rank", 0) or 0)
+            if rank <= 0 or rank > top_team_rank:
+                continue
+            kept.append(slot)
+        slots = kept
+    return slots
+
+
 def _build_frame(
     obs: dict[str, Any],
     action_list: list[list[Any]],
@@ -194,8 +227,14 @@ def _build_frame(
     ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
     # candidate_ships variant 用: ships を 4-bucket 化 (cand_slot fired のみ)。
     ships_bucket_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    # per_planet head 用ラベル: target slot 0..MAX_PLANETS-1 = fire to that slot,
+    # MAX_PLANETS = no-op sentinel (= NUM_TARGETS+1 と同義)。
+    target_pid_per_src = np.full(MAX_PLANETS, MAX_PLANETS, dtype=np.int32)
+    # ship_pred_label: log1p(ships) for fired sources, -1.0 otherwise.
+    ship_pred_label = np.full(MAX_PLANETS, -1.0, dtype=np.float32)
 
     # Default: my_planets that did not fire → label = 0 (no-op slot)
+    # per_planet 側は default = no-op (MAX_PLANETS) のまま放置 (上で初期化済み)
     for slot in range(MAX_PLANETS):
         if my_planet_mask[slot]:
             cand_slot_per_src[slot] = 0
@@ -223,11 +262,17 @@ def _build_frame(
         # ships は src.ships に対する比率の bucket。
         from_multihot[slot] = True
         ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
+        # per_planet ships regression label (log1p space).
+        ship_pred_label[slot] = float(math.log1p(max(0, ships)))
         if target_pid is None:
             target_template = T_NO_OP
             cand_slot_per_src[slot] = UNUSED_LABEL
             outside += 1
         else:
+            # per_planet target slot label (planet index in pid_to_slot).
+            tgt_slot = pid_to_slot.get(int(target_pid))
+            if tgt_slot is not None and 0 <= tgt_slot < MAX_PLANETS:
+                target_pid_per_src[slot] = int(tgt_slot)
             tgt_row = next(
                 (row for row in raw_planets if int(row[0]) == int(target_pid)), None
             )
@@ -272,6 +317,8 @@ def _build_frame(
         "from_multihot": from_multihot.tolist(),
         "target_per_src": target_per_src.tolist(),
         "ships_per_src": ships_per_src.tolist(),
+        "target_pid_per_src": target_pid_per_src.tolist(),
+        "ship_pred_label": ship_pred_label.tolist(),
         "is_noop": is_noop,
     }
     return row, fired_total, outside
@@ -331,6 +378,9 @@ def _process_episode(
     base_dir: Path,
     val_split: float,
     num_player_slots: int,
+    *,
+    winners_only: bool = False,
+    top_team_rank: int = 0,
 ) -> _EpisodeResult:
     """Worker: process one episode record into frames.
 
@@ -340,7 +390,16 @@ def _process_episode(
         return _EpisodeResult(
             bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
         )
-    slots = list(range(num_player_slots))
+    slots = _select_winner_slots(
+        rec,
+        num_player_slots,
+        winners_only=winners_only,
+        top_team_rank=top_team_rank,
+    )
+    if not slots:
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
+        )
     rp = rec.get("replay_path") or ""
     replay_path = (base_dir / rp).resolve() if rp else None
     if replay_path is None or not replay_path.exists():
@@ -397,6 +456,8 @@ def _arrow_schema() -> pa.Schema:
             pa.field("from_multihot", pa.list_(pa.bool_())),
             pa.field("target_per_src", pa.list_(pa.int32())),
             pa.field("ships_per_src", pa.list_(pa.int32())),
+            pa.field("target_pid_per_src", pa.list_(pa.int32())),
+            pa.field("ship_pred_label", pa.list_(pa.float32())),
             pa.field("is_noop", pa.bool_()),
         ]
     )
@@ -451,6 +512,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     rating_quantile = float(data_cfg.get("rating_quantile", 0.50))
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
+    winners_only = bool(data_cfg.get("winners_only", False))
+    top_team_rank = int(data_cfg.get("top_team_rank", 0) or 0)
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
@@ -458,7 +521,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 
     logger.info(
         "preprocess case8 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
-        "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s",
+        "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s "
+        "winners_only=%s top_team_rank=%d",
         featurizer.PLANET_FEAT_DIM,
         featurizer.GLOBAL_FEAT_DIM,
         CAND_K,
@@ -467,9 +531,27 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         rating_quantile,
         val_split,
         max_episodes,
+        winners_only,
+        top_team_rank,
     )
 
-    index = pl.read_parquet(index_path)
+    # Hive-partitioned index parquet has heterogeneous schemas across files —
+    # the older files predate `agent_*_team_rank`. `polars.scan_parquet` locks
+    # the union schema to the first file it sees, which drops `team_rank`
+    # entirely. Use `pyarrow.dataset` instead: it unifies schemas across all
+    # discovered files, filling missing columns with NULL.
+    import pyarrow.dataset as pa_ds
+
+    parquet_files: list[str] = []
+    for dirpath, _dirs, files in os.walk(str(index_path)):
+        for fname in files:
+            if fname.endswith(".parquet"):
+                parquet_files.append(os.path.join(dirpath, fname))
+    if not parquet_files:
+        raise RuntimeError(f"no parquet files found under {index_path}")
+    arrow_table = pa_ds.dataset(parquet_files, format="parquet").to_table()
+    index = pl.from_arrow(arrow_table)
+    assert isinstance(index, pl.DataFrame)
     filtered, cutoff = _filter_index(index, modes, rating_quantile)
     episodes_total = filtered.height
     if max_episodes is not None:
@@ -563,7 +645,12 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             for processed, rec in enumerate(rows, start=1):
                 try:
                     result = _process_episode(
-                        rec, base_dir, val_split, _num_player_slots(rec, modes)
+                        rec,
+                        base_dir,
+                        val_split,
+                        _num_player_slots(rec, modes),
+                        winners_only=winners_only,
+                        top_team_rank=top_team_rank,
                     )
                     _consume_result(result)
                 finally:
@@ -585,6 +672,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
+                        winners_only=winners_only,
+                        top_team_rank=top_team_rank,
                     )
                     inflight[fut] = idx
                     return True

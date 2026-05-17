@@ -208,8 +208,10 @@ def create_pod(
     if cloud_type not in ("SECURE", "COMMUNITY", "ALL"):
         raise ValueError(f"cloud_type must be SECURE/COMMUNITY/ALL, got {cloud_type!r}")
     # RunPod の dockerArgs は GraphQL 文字列にそのまま挿入されるため、改行や引用符
-    # を含む bash script を直接渡すと parse error になる。base64 化してから 1 行の
-    # bootstrap で decode + bash 実行する。
+    # を含む bash script を直接渡すと parse error になる。さらに RunPod 側の
+    # mutation には実質的な payload サイズ制限があり、生 base64 (~68KB) を送ると
+    # `Something went wrong` で全 attempt が失敗する。gzip + base64 にすると
+    # 22KB 程度まで縮み、安定して起動できる (2026-05-11 ハマり踏みで確定)。
     #
     # ENTRYPOINT 上書き問題への対処: 公式 runpod/* image は /start.sh で sshd /
     # jupyter を起動する。docker_args で ENTRYPOINT を上書きするとそれが走らず
@@ -218,11 +220,14 @@ def create_pod(
     #   1. /start.sh が存在すれば background で実行 (sshd 起動を維持)
     #   2. その後 onstart を foreground で実行
     # この順なら SSH は早期に開通し、onstart の任意の段階で `tail -F` 接続可能。
-    encoded = base64.b64encode(onstart_script.encode("utf-8")).decode("ascii")
+    import gzip
+
+    compressed = gzip.compress(onstart_script.encode("utf-8"), compresslevel=9)
+    encoded = base64.b64encode(compressed).decode("ascii")
     docker_args = (
         "bash -c '"
         "[ -x /start.sh ] && (/start.sh > /var/log/start.log 2>&1 &); "
-        f"echo {encoded} | base64 -d | bash"
+        f"echo {encoded} | base64 -d | gunzip | bash"
         "'"
     )
     kwargs: dict[str, Any] = {
