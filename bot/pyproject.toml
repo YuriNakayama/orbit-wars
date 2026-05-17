@@ -133,6 +133,9 @@ max-complexity = 5
 "pipeline/imitation/case10/training/train.py" = ["B008"]
 "pipeline/imitation/case10/policy/timeline.py" = ["E501"]
 "pipeline/imitation/case10/policy/featurizer.py" = ["E501"]
+"pipeline/reinforce/case1/policy/timeline.py" = ["E501"]
+"pipeline/reinforce/case1/policy/featurizer.py" = ["E501"]
+"pipeline/reinforce/case1/training/ppo.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/unit/pipeline/**/test_*.py" = ["E501"]
 "tests/integration/pipeline/**/test_*.py" = ["E501"]
@@ -261,6 +264,28 @@ module = [
     "pipeline.imitation.case9.evaluation.replay_match",
     "pipeline.imitation.case10.training.preprocess",
     "pipeline.imitation.case10.training.train",
+    "pipeline.reinforce.case0.policy.sampling",
+    "pipeline.reinforce.case0.training.train",
+    "pipeline.reinforce.case0.training.ppo",
+    "pipeline.reinforce.case0.training.env",
+    "pipeline.reinforce.case0.evaluation.eval_vs_baseline",
+    "pipeline.reinforce.case1.policy.sampling",
+    "pipeline.reinforce.case1.policy.decoder",
+    "pipeline.reinforce.case1.policy.featurizer",
+    "pipeline.reinforce.case1.policy.candidates",
+    "pipeline.reinforce.case1.policy.templates",
+    "pipeline.reinforce.case1.policy.timeline",
+    "pipeline.reinforce.case1.policy.safety",
+    "pipeline.reinforce.case1.policy.heads.backbone",
+    "pipeline.reinforce.case1.policy.heads.per_planet",
+    "pipeline.reinforce.case1.policy.heads.value",
+    "pipeline.reinforce.case1.policy.model",
+    "pipeline.reinforce.case1.policy.agent",
+    "pipeline.reinforce.case1.training.env",
+    "pipeline.reinforce.case1.training.rollout",
+    "pipeline.reinforce.case1.training.ppo",
+    "pipeline.reinforce.case1.training.train",
+    "pipeline.reinforce.case1.evaluation.eval_vs_baseline",
 ]
 ignore_errors = true
 
