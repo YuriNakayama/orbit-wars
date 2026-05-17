@@ -52,7 +52,14 @@ lint = [
     "types-pyyaml>=6.0.12.20250915",
     "types-requests>=2.32.0.20250913",
 ]
-env = []
+env = [
+    # reinforce family は on-policy で env.step() を回すため Rust 製シミュレータ
+    # (PyO3 + maturin で build した orbit_wars_rust) を import する。RunPod
+    # onstart は uv sync --group env で maturin を取得し
+    # `simulator/rust && maturin develop --release` を実行する。
+    # imitation case は使わないので install_dependency_groups=[] で必要時のみ.
+    "maturin>=1.7,<2",
+]
 
 
 [tool.ruff]

@@ -105,11 +105,12 @@ echo "[onstart] iter12 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
 if [ "<CASE_FAMILY>" = "reinforce" ]; then
   echo "[onstart] step=build_rust_sim (reinforce family のみ)"
   # reinforce は on-policy で env.step() を回すため Rust 製シミュレータの
-  # Linux .so が必要。bot の deps に maturin は無いので bot venv に追加
-  # インストール → simulator/rust 配下で maturin develop --release を実行。
-  # imitation case は parquet-based BC で env を使わないため不要。
-  echo "[onstart] build_rust_sim: installing maturin into bot venv via uv pip"
-  if ! ( cd bot && uv pip install "maturin>=1.7,<2" ) 2>&1 | tail -10; then
+  # Linux .so が必要。bot の dependency-groups.env に maturin を入れて
+  # `uv sync --group env` で入れる方が pip 経路を回避できて確実。
+  # imitation case は parquet-based BC で env を使わないため env group を
+  # 入れずに済む (default sync は --no-dev で env group も skip)。
+  echo "[onstart] build_rust_sim: installing maturin via uv sync --group env"
+  if ! ( cd bot && uv sync --locked --no-dev --group env ) 2>&1 | tail -15; then
     echo "[onstart] build_rust_sim: maturin install FAILED" >&2
     mark "45_build_rust_sim_failed"
     exit 1
