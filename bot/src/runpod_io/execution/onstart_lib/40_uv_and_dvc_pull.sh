@@ -110,11 +110,30 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   # imitation case は parquet-based BC で env を使わないため env group を
   # 入れずに済む (default sync は --no-dev で env group も skip)。
   echo "[onstart] build_rust_sim: installing maturin via uv sync --group env"
-  if ! ( cd bot && uv sync --locked --no-dev --group env ) 2>&1 | tail -15; then
-    echo "[onstart] build_rust_sim: maturin install FAILED" >&2
+  # Capture full output to /tmp/uv_env_sync.log so we have at least a
+  # post-mortem hint when the pod gets cleaned up (onstart.log は S3 へ
+  # 上がる前に terminate されることがあり診断できないため)。
+  UV_ENV_LOG="/tmp/uv_env_sync.log"
+  if ! ( cd bot && uv sync --no-dev --group env --frozen ) >"${UV_ENV_LOG}" 2>&1; then
+    echo "[onstart] build_rust_sim: maturin install FAILED — uv sync log tail:" >&2
+    tail -30 "${UV_ENV_LOG}" >&2 || true
+    # S3 へ即 upload。pod が消える前に保全。
+    if command -v aws >/dev/null 2>&1; then
+      aws s3 cp "${UV_ENV_LOG}" \
+        "s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>/uv_env_sync.log" \
+        2>&1 | head -3 || true
+    fi
     mark "45_build_rust_sim_failed"
     exit 1
   fi
+  echo "[onstart] uv sync --group env ok; checking maturin binary"
+  if [ ! -x bot/.venv/bin/maturin ]; then
+    echo "[onstart] build_rust_sim: bot/.venv/bin/maturin not present after sync" >&2
+    ls -la bot/.venv/bin/ 2>&1 | grep -iE "maturin|^total" >&2 || true
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  echo "[onstart] maturin $(bot/.venv/bin/maturin --version 2>&1 | head -1)"
   # Rust toolchain (cargo) の存在確認。RunPod base image に含まれていない場合
   # rustup で導入する。memory `project_runpod_5_traps` の trap には未記録。
   if ! command -v cargo >/dev/null 2>&1; then
