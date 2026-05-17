@@ -1,4 +1,4 @@
-"""Replay → parquet preprocess for imitation/case10.
+"""Replay → parquet preprocess for imitation/case8.
 
 Per-frame supervision schema:
 
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import logging
 import math
 import os
@@ -37,21 +38,20 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import orjson
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import typer
 import yaml
 
-from pipeline.imitation.case10.policy import featurizer
-from pipeline.imitation.case10.policy.candidates import CAND_FEAT_DIM, CAND_K
-from pipeline.imitation.case10.policy.featurizer import (
+from pipeline.imitation.case11.policy import featurizer
+from pipeline.imitation.case11.policy.candidates import CAND_FEAT_DIM, CAND_K
+from pipeline.imitation.case11.policy.featurizer import (
     MAX_PLANETS,
     HistoryState,
 )
-from pipeline.imitation.case10.policy.geometry import Planet, aim_with_prediction
-from pipeline.imitation.case10.policy.templates import (
+from pipeline.imitation.case11.policy.geometry import Planet, aim_with_prediction
+from pipeline.imitation.case11.policy.templates import (
     T_NO_OP,
     classify_actual_target,
 )
@@ -97,11 +97,6 @@ def _repo_root() -> Path:
 def _abspath(rel: str | Path) -> Path:
     p = Path(rel)
     return p if p.is_absolute() else (_repo_root() / p).resolve()
-
-
-def _load_replay_json(replay_path: Path) -> dict[str, Any]:
-    with gzip.open(replay_path, "rb") as f:
-        return orjson.loads(f.read())
 
 
 def _build_planet(row: list[Any]) -> Planet:
@@ -162,70 +157,37 @@ def _player_slots(row: dict[str, Any], num_slots: int) -> list[int]:
     return list(range(num_slots))
 
 
-def _swap_owner_01(owner: int) -> int:
-    if owner == 0:
-        return 1
-    if owner == 1:
-        return 0
-    return owner
+def _select_winner_slots(
+    rec: dict[str, Any],
+    num_slots: int,
+    *,
+    winners_only: bool,
+    top_team_rank: int,
+) -> list[int]:
+    """Pick which player slots to emit frames for, after winner / rank filters.
 
-
-def _swap_obs_players(obs: dict[str, Any], winner_slot: int) -> dict[str, Any]:
-    """Return a new obs where player 0 / player 1 ownership is swapped.
-
-    Used by loser_swap=true: the original loser-slot frame is rewritten so the
-    winner appears as ``obs.player = winner_slot`` while the board state is
-    relabeled accordingly. Planets/fleets owned by 0 become 1 and vice versa;
-    neutral (-1) is preserved.
+    - winners_only=True: keep only the winning slot (per `winner` field).
+    - top_team_rank > 0: drop the slot if its `agent_{slot}_team_rank` is
+      either 0 (unknown) or above the threshold. Top-80 → top_team_rank=80.
     """
-    new_planets: list[list[Any]] = []
-    for row in obs.get("planets") or []:
-        nr = list(row)
-        nr[1] = _swap_owner_01(int(nr[1]))
-        new_planets.append(nr)
-    new_fleets: list[list[Any]] = []
-    for row in obs.get("fleets") or []:
-        nr = list(row)
-        nr[1] = _swap_owner_01(int(nr[1]))
-        new_fleets.append(nr)
-    new_initial: list[list[Any]] = []
-    for row in obs.get("initial_planets") or []:
-        nr = list(row)
-        nr[1] = _swap_owner_01(int(nr[1]))
-        new_initial.append(nr)
-    return {
-        **obs,
-        "player": winner_slot,
-        "planets": new_planets,
-        "fleets": new_fleets,
-        "initial_planets": new_initial,
-    }
-
-
-def _episode_meta_fields(rec: dict[str, Any]) -> dict[str, Any]:
-    """Static (per-episode) fields written into the side index.parquet."""
-    turn_count = rec.get("turns")
-    if turn_count is None:
-        turn_count = -1
-    p0_sub = rec.get("agent_0_submission_id")
-    p1_sub = rec.get("agent_1_submission_id")
-    p0_mu = rec.get("agent_0_rating_mu")
-    p1_mu = rec.get("agent_1_rating_mu")
-    return {
-        "turn_count": int(turn_count),
-        "mode": str(rec.get("mode", "")),
-        "p0_submission_id": str(p0_sub) if p0_sub is not None else "",
-        "p1_submission_id": str(p1_sub) if p1_sub is not None else "",
-        "p0_rating_mu": float(p0_mu) if p0_mu is not None else 0.0,
-        "p1_rating_mu": float(p1_mu) if p1_mu is not None else 0.0,
-    }
-
-
-def _swap_action_target(action: list[Any]) -> list[Any]:
-    """Action shape is [from_pid, angle, ships] — planet ids are stable across
-    the swap (only ownership labels change), so the action list is unchanged.
-    """
-    return list(action)
+    if rec.get("draw"):
+        return []
+    if winners_only:
+        winner = int(rec.get("winner", -1))
+        if winner < 0 or winner >= num_slots:
+            return []
+        slots = [winner]
+    else:
+        slots = list(range(num_slots))
+    if top_team_rank > 0:
+        kept: list[int] = []
+        for slot in slots:
+            rank = int(rec.get(f"agent_{slot}_team_rank", 0) or 0)
+            if rank <= 0 or rank > top_team_rank:
+                continue
+            kept.append(slot)
+        slots = kept
+    return slots
 
 
 def _build_frame(
@@ -250,7 +212,6 @@ def _build_frame(
     pid_to_slot = {pid: i for i, pid in enumerate(snap.planet_ids)}
     planets = [_build_planet(row) for row in raw_planets]
     by_id = {p.id: p for p in planets}
-    raw_by_id = {int(row[0]): row for row in raw_planets}
     initial_planets = [_build_planet(row) for row in (obs.get("initial_planets") or [])]
     initial_by_id = {p.id: p for p in initial_planets}
     ang_vel = float(obs.get("angular_velocity", 0.0) or 0.0)
@@ -266,8 +227,14 @@ def _build_frame(
     ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
     # candidate_ships variant 用: ships を 4-bucket 化 (cand_slot fired のみ)。
     ships_bucket_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    # per_planet head 用ラベル: target slot 0..MAX_PLANETS-1 = fire to that slot,
+    # MAX_PLANETS = no-op sentinel (= NUM_TARGETS+1 と同義)。
+    target_pid_per_src = np.full(MAX_PLANETS, MAX_PLANETS, dtype=np.int32)
+    # ship_pred_label: log1p(ships) for fired sources, -1.0 otherwise.
+    ship_pred_label = np.full(MAX_PLANETS, -1.0, dtype=np.float32)
 
     # Default: my_planets that did not fire → label = 0 (no-op slot)
+    # per_planet 側は default = no-op (MAX_PLANETS) のまま放置 (上で初期化済み)
     for slot in range(MAX_PLANETS):
         if my_planet_mask[slot]:
             cand_slot_per_src[slot] = 0
@@ -295,12 +262,20 @@ def _build_frame(
         # ships は src.ships に対する比率の bucket。
         from_multihot[slot] = True
         ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
+        # per_planet ships regression label (log1p space).
+        ship_pred_label[slot] = float(math.log1p(max(0, ships)))
         if target_pid is None:
             target_template = T_NO_OP
             cand_slot_per_src[slot] = UNUSED_LABEL
             outside += 1
         else:
-            tgt_row = raw_by_id.get(int(target_pid))
+            # per_planet target slot label (planet index in pid_to_slot).
+            tgt_slot = pid_to_slot.get(int(target_pid))
+            if tgt_slot is not None and 0 <= tgt_slot < MAX_PLANETS:
+                target_pid_per_src[slot] = int(tgt_slot)
+            tgt_row = next(
+                (row for row in raw_planets if int(row[0]) == int(target_pid)), None
+            )
             if tgt_row is None:
                 target_template = T_NO_OP
             else:
@@ -342,6 +317,8 @@ def _build_frame(
         "from_multihot": from_multihot.tolist(),
         "target_per_src": target_per_src.tolist(),
         "ships_per_src": ships_per_src.tolist(),
+        "target_pid_per_src": target_pid_per_src.tolist(),
+        "ship_pred_label": ship_pred_label.tolist(),
         "is_noop": is_noop,
     }
     return row, fired_total, outside
@@ -350,28 +327,14 @@ def _build_frame(
 def _iter_episode_frames(
     replay_path: Path,
     player_slots: list[int],
-    *,
-    loser_swap: bool = False,
-    winner_slot: int | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
-    """Iterate replay frames and emit (frame_rows, frame_metas, fired, outside).
-
-    With ``loser_swap=true`` and a known ``winner_slot``, the loser slot's frame
-    is rewritten via :func:`_swap_obs_players` so the board is relabeled to the
-    winner's perspective and the winner's action at the same step is used as
-    the supervision label. Frame count is unchanged (1 ep -> 2 samples).
-
-    The returned ``frame_metas`` list is row-aligned with ``frame_rows`` and
-    captures (player_slot, source_slot, is_loser_view, step_idx).
-    """
-    data = _load_replay_json(replay_path)
+) -> tuple[list[dict[str, Any]], int, int]:
+    with gzip.open(replay_path, "rt") as f:
+        data = json.load(f)
     steps = data.get("steps", [])
-    out_rows: list[dict[str, Any]] = []
-    out_metas: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     histories: dict[int, HistoryState] = {slot: HistoryState() for slot in player_slots}
     fired_total = 0
     outside_total = 0
-    apply_swap = loser_swap and winner_slot is not None
 
     for step_idx, step in enumerate(steps):
         for slot in player_slots:
@@ -390,45 +353,21 @@ def _iter_episode_frames(
             if obs.get("player") is None:
                 obs = {**obs, "player": slot}
 
-            is_loser_view = False
-            view_slot = slot
-            if apply_swap and slot != winner_slot:
-                # Loser slot frame: swap board ownership and use winner's
-                # action so the model learns counterfactual "what the winner
-                # would have done from this losing position".
-                obs = _swap_obs_players(obs, winner_slot)
-                planets = obs.get("planets") or []
-                wd = step[winner_slot] if winner_slot < len(step) else {}
-                action_list = _swap_action_target(wd.get("action") or [])
-                is_loser_view = True
-                view_slot = winner_slot
-
             history = histories[slot]
             built = _build_frame(obs, action_list, planets, history)
             if built is not None:
                 row, fired, outside = built
-                out_rows.append(row)
-                out_metas.append(
-                    {
-                        "player_slot": int(view_slot),
-                        "source_slot": int(slot),
-                        "is_loser_view": bool(is_loser_view),
-                        "step_idx": int(step_idx),
-                    }
-                )
+                out.append(row)
                 fired_total += fired
                 outside_total += outside
             featurizer.update_history(history, obs, action_list)
-    return out_rows, out_metas, fired_total, outside_total
+    return out, fired_total, outside_total
 
 
 @dataclass(frozen=True)
 class _EpisodeResult:
     bucket: str  # "train" | "val"
     frames: list[dict[str, Any]]
-    metas: list[dict[str, Any]]  # row-aligned with `frames`
-    match_id: str
-    winner_slot: int  # -1 when unknown / draw
     fired: int
     outside: int
     skip_reason: str | None  # None | "no_slots" | "no_replay" | "no_frames"
@@ -440,68 +379,41 @@ def _process_episode(
     val_split: float,
     num_player_slots: int,
     *,
-    loser_swap: bool = False,
+    winners_only: bool = False,
+    top_team_rank: int = 0,
 ) -> _EpisodeResult:
     """Worker: process one episode record into frames.
 
     Pure function (importable / picklable). Returns a single result.
     """
-    match_id = str(rec.get("match_id", ""))
-    winner_raw = rec.get("winner")
-    winner_slot = int(winner_raw) if winner_raw is not None else -1
     if num_player_slots == 0 or rec.get("draw"):
         return _EpisodeResult(
-            bucket="",
-            frames=[],
-            metas=[],
-            match_id=match_id,
-            winner_slot=winner_slot,
-            fired=0,
-            outside=0,
-            skip_reason="no_slots",
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
         )
-    slots = list(range(num_player_slots))
+    slots = _select_winner_slots(
+        rec,
+        num_player_slots,
+        winners_only=winners_only,
+        top_team_rank=top_team_rank,
+    )
+    if not slots:
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
+        )
     rp = rec.get("replay_path") or ""
     replay_path = (base_dir / rp).resolve() if rp else None
     if replay_path is None or not replay_path.exists():
         return _EpisodeResult(
-            bucket="",
-            frames=[],
-            metas=[],
-            match_id=match_id,
-            winner_slot=winner_slot,
-            fired=0,
-            outside=0,
-            skip_reason="no_replay",
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
         )
-    swap_arg = loser_swap and winner_slot in (0, 1)
-    frames, metas, fired, outside = _iter_episode_frames(
-        replay_path,
-        slots,
-        loser_swap=swap_arg,
-        winner_slot=winner_slot if swap_arg else None,
-    )
+    frames, fired, outside = _iter_episode_frames(replay_path, slots)
     if not frames:
         return _EpisodeResult(
-            bucket="",
-            frames=[],
-            metas=[],
-            match_id=match_id,
-            winner_slot=winner_slot,
-            fired=fired,
-            outside=outside,
-            skip_reason="no_frames",
+            bucket="", frames=[], fired=fired, outside=outside, skip_reason="no_frames"
         )
-    bucket = _split_episode(match_id, val_split)
+    bucket = _split_episode(str(rec["match_id"]), val_split)
     return _EpisodeResult(
-        bucket=bucket,
-        frames=frames,
-        metas=metas,
-        match_id=match_id,
-        winner_slot=winner_slot,
-        fired=fired,
-        outside=outside,
-        skip_reason=None,
+        bucket=bucket, frames=frames, fired=fired, outside=outside, skip_reason=None
     )
 
 
@@ -509,106 +421,21 @@ def _filter_index(
     index: pl.DataFrame,
     modes: list[str],
     rating_quantile: float,
-    *,
-    base_dir: Path,
-    top_submission_limit: int | None = None,
-    turn_min: int | None = None,
-    turn_max: int | None = None,
 ) -> tuple[pl.DataFrame, float]:
     df = index.filter(pl.col("mode").is_in(modes))
     df = df.filter(~pl.col("draw"))
     rating_cols = [c for c in df.columns if c.endswith("_rating_mu")]
-    submission_cols = [c for c in df.columns if c.endswith("_submission_id")]
-    if top_submission_limit is not None:
-        parts: list[pl.DataFrame] = []
-        for mu_col in rating_cols:
-            prefix = mu_col[: -len("_rating_mu")]
-            submission_col = f"{prefix}_submission_id"
-            if submission_col not in df.columns:
-                continue
-            parts.append(
-                df.select(
-                    pl.col(submission_col).alias("submission_id"),
-                    pl.col(mu_col).alias("mu"),
-                )
-            )
-        ratings = pl.concat(parts).filter(pl.col("mu") > 0)
-        if ratings.is_empty():
-            return df, 0.0
-        ranked = (
-            ratings.group_by("submission_id")
-            .agg(pl.col("mu").max().alias("max_mu"))
-            .sort("max_mu", descending=True)
-        )
-        top = ranked.head(int(top_submission_limit))
-        cutoff = float(top["max_mu"][-1])
-        top_ids = top["submission_id"].to_list()
-        cond = pl.lit(False)
-        for col in submission_cols:
-            cond = cond | pl.col(col).is_in(top_ids)
-    else:
-        rating = pl.concat(
-            [df.select(pl.col(c).alias("mu")) for c in rating_cols]
-        ).filter(pl.col("mu") > 0)
-        if rating.is_empty():
-            return df, 0.0
-        cutoff = float(rating.quantile(rating_quantile).item())
-        cond = pl.lit(False)
-        for col in rating_cols:
-            cond = cond | (pl.col(col) >= cutoff)
-    df = df.filter(cond)
-    if turn_min is not None or turn_max is not None:
-        kept_match_ids = [
-            str(row["match_id"])
-            for row in df.select(["match_id", "replay_path"]).to_dicts()
-            if _turn_count_in_range(
-                base_dir / str(row["replay_path"]), turn_min, turn_max
-            )
-        ]
-        df = df.filter(pl.col("match_id").is_in(kept_match_ids))
-    return df, cutoff
-
-
-def _turn_count_in_range(
-    replay_path: Path,
-    turn_min: int | None,
-    turn_max: int | None,
-) -> bool:
-    if not replay_path.exists():
-        return False
-    data = _load_replay_json(replay_path)
-    turns = len(data.get("steps", []))
-    if turn_min is not None and turns < turn_min:
-        return False
-    if turn_max is not None and turns > turn_max:
-        return False
-    return True
-
-
-def _index_arrow_schema() -> pa.Schema:
-    """Side index schema, row-aligned with the mart parquet.
-
-    Each row in train.parquet / val.parquet has one matching row here whose
-    ``row_idx`` equals the position in the mart file. Captures upstream
-    metadata so other analyses can re-filter without re-running preprocess.
-    """
-    return pa.schema(
-        [
-            pa.field("row_idx", pa.int64()),
-            pa.field("match_id", pa.string()),
-            pa.field("player_slot", pa.int32()),
-            pa.field("source_slot", pa.int32()),
-            pa.field("winner_slot", pa.int32()),
-            pa.field("is_loser_view", pa.bool_()),
-            pa.field("step_idx", pa.int32()),
-            pa.field("turn_count", pa.int32()),
-            pa.field("mode", pa.string()),
-            pa.field("p0_submission_id", pa.string()),
-            pa.field("p1_submission_id", pa.string()),
-            pa.field("p0_rating_mu", pa.float32()),
-            pa.field("p1_rating_mu", pa.float32()),
-        ]
+    rating = pl.concat([df.select(pl.col(c).alias("mu")) for c in rating_cols]).filter(
+        pl.col("mu") > 0
     )
+    if rating.is_empty():
+        return df, 0.0
+    cutoff = float(rating.quantile(rating_quantile).item())
+    cond = pl.lit(False)
+    for col in rating_cols:
+        cond = cond | (pl.col(col) >= cutoff)
+    df = df.filter(cond)
+    return df, cutoff
 
 
 def _arrow_schema() -> pa.Schema:
@@ -629,6 +456,8 @@ def _arrow_schema() -> pa.Schema:
             pa.field("from_multihot", pa.list_(pa.bool_())),
             pa.field("target_per_src", pa.list_(pa.int32())),
             pa.field("ships_per_src", pa.list_(pa.int32())),
+            pa.field("target_pid_per_src", pa.list_(pa.int32())),
+            pa.field("ship_pred_label", pa.list_(pa.float32())),
             pa.field("is_noop", pa.bool_()),
         ]
     )
@@ -643,19 +472,12 @@ class StreamingParquetWriter:
     underlying ParquetWriter. ``rows_written`` reports the cumulative count.
     """
 
-    def __init__(
-        self,
-        path: Path,
-        flush_every: int = FLUSH_EVERY_FRAMES,
-        *,
-        schema: pa.Schema | None = None,
-    ) -> None:
+    def __init__(self, path: Path, flush_every: int = FLUSH_EVERY_FRAMES) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._flush_every = flush_every
-        self._schema = schema if schema is not None else _arrow_schema()
         self._buf: list[dict[str, Any]] = []
-        self._writer = pq.ParquetWriter(str(path), self._schema, compression="zstd")
+        self._writer = pq.ParquetWriter(str(path), _arrow_schema(), compression="zstd")
         self.rows_written = 0
 
     def append(self, row: dict[str, Any]) -> None:
@@ -666,7 +488,7 @@ class StreamingParquetWriter:
     def _flush(self) -> None:
         if not self._buf:
             return
-        table = pa.Table.from_pylist(self._buf, schema=self._schema)
+        table = pa.Table.from_pylist(self._buf, schema=_arrow_schema())
         self._writer.write_table(table)
         self.rows_written += len(self._buf)
         self._buf.clear()
@@ -690,51 +512,47 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     rating_quantile = float(data_cfg.get("rating_quantile", 0.50))
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
-    top_submission_limit = data_cfg.get("top_submission_limit")
-    turn_min = data_cfg.get("turn_min")
-    turn_max = data_cfg.get("turn_max")
-    loser_swap = bool(data_cfg.get("loser_swap", False))
+    winners_only = bool(data_cfg.get("winners_only", False))
+    top_team_rank = int(data_cfg.get("top_team_rank", 0) or 0)
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
-    out_train_index = out_train.with_name(out_train.stem + "_index.parquet")
-    out_val_index = out_val.with_name(out_val.stem + "_index.parquet")
     index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
 
     logger.info(
-        "preprocess case10 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
-        "modes=%s rating_q=%.2f top_submission_limit=%s turn_range=[%s,%s] "
-        "val_split=%.2f max_episodes=%s",
+        "preprocess case8 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
+        "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s "
+        "winners_only=%s top_team_rank=%d",
         featurizer.PLANET_FEAT_DIM,
         featurizer.GLOBAL_FEAT_DIM,
         CAND_K,
         CAND_FEAT_DIM,
         modes,
         rating_quantile,
-        top_submission_limit,
-        turn_min,
-        turn_max,
         val_split,
         max_episodes,
+        winners_only,
+        top_team_rank,
     )
 
-    # The Kaggle episode index is a partitioned parquet dataset collected over
-    # multiple scraper runs.  Newer partitions can contain extra metadata
-    # columns (for example `agent_0_team_rank`) that older partitions do not
-    # have.  Use scan_parquet with extra_columns="ignore" so the shared schema
-    # remains readable on RunPod.
-    index = pl.scan_parquet(index_path, extra_columns="ignore").collect()
-    filtered, cutoff = _filter_index(
-        index,
-        modes,
-        rating_quantile,
-        base_dir=base_dir,
-        top_submission_limit=(
-            int(top_submission_limit) if top_submission_limit is not None else None
-        ),
-        turn_min=int(turn_min) if turn_min is not None else None,
-        turn_max=int(turn_max) if turn_max is not None else None,
-    )
+    # Hive-partitioned index parquet has heterogeneous schemas across files —
+    # the older files predate `agent_*_team_rank`. `polars.scan_parquet` locks
+    # the union schema to the first file it sees, which drops `team_rank`
+    # entirely. Use `pyarrow.dataset` instead: it unifies schemas across all
+    # discovered files, filling missing columns with NULL.
+    import pyarrow.dataset as pa_ds
+
+    parquet_files: list[str] = []
+    for dirpath, _dirs, files in os.walk(str(index_path)):
+        for fname in files:
+            if fname.endswith(".parquet"):
+                parquet_files.append(os.path.join(dirpath, fname))
+    if not parquet_files:
+        raise RuntimeError(f"no parquet files found under {index_path}")
+    arrow_table = pa_ds.dataset(parquet_files, format="parquet").to_table()
+    index = pl.from_arrow(arrow_table)
+    assert isinstance(index, pl.DataFrame)
+    filtered, cutoff = _filter_index(index, modes, rating_quantile)
     episodes_total = filtered.height
     if max_episodes is not None:
         filtered = filtered.head(int(max_episodes))
@@ -742,7 +560,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     rows = filtered.to_dicts()
     n_to_process = len(rows)
     logger.info(
-        "preprocess case10 filter: cutoff=%.2f episodes_total=%d to_process=%d",
+        "preprocess case8 filter: cutoff=%.2f episodes_total=%d to_process=%d",
         cutoff,
         episodes_total,
         n_to_process,
@@ -750,12 +568,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
 
     train_writer = StreamingParquetWriter(out_train)
     val_writer = StreamingParquetWriter(out_val)
-    train_index_writer = StreamingParquetWriter(
-        out_train_index, schema=_index_arrow_schema()
-    )
-    val_index_writer = StreamingParquetWriter(
-        out_val_index, schema=_index_arrow_schema()
-    )
 
     started_at = time.monotonic()
     kept = 0
@@ -800,13 +612,11 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     # inflight cap = 4x workers — bounds memory of pending future results
     inflight_cap = max(4, max_workers * 4)
     logger.info(
-        "preprocess case10 parallel: workers=%d inflight_cap=%d (override via "
+        "preprocess case8 parallel: workers=%d inflight_cap=%d (override via "
         "ORBIT_WARS_PREPROCESS_WORKERS=0 for serial execution)",
         max_workers,
         inflight_cap,
     )
-
-    rec_by_match: dict[str, dict[str, Any]] = {str(r["match_id"]): r for r in rows}
 
     def _consume_result(result: _EpisodeResult) -> None:
         nonlocal kept, fired_total, outside_total
@@ -823,26 +633,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             outside_total += result.outside
             return
         writer = val_writer if result.bucket == "val" else train_writer
-        index_writer = (
-            val_index_writer if result.bucket == "val" else train_index_writer
-        )
-        rec = rec_by_match.get(result.match_id, {})
-        meta_static = _episode_meta_fields(rec)
-        for frame, meta in zip(result.frames, result.metas, strict=True):
-            row_idx = writer.rows_written + len(writer._buf)  # noqa: SLF001
+        for frame in result.frames:
             writer.append(frame)
-            index_writer.append(
-                {
-                    "row_idx": int(row_idx),
-                    "match_id": result.match_id,
-                    "player_slot": int(meta["player_slot"]),
-                    "source_slot": int(meta["source_slot"]),
-                    "winner_slot": int(result.winner_slot),
-                    "is_loser_view": bool(meta["is_loser_view"]),
-                    "step_idx": int(meta["step_idx"]),
-                    **meta_static,
-                }
-            )
         kept += 1
         fired_total += result.fired
         outside_total += result.outside
@@ -857,7 +649,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
-                        loser_swap=loser_swap,
+                        winners_only=winners_only,
+                        top_team_rank=top_team_rank,
                     )
                     _consume_result(result)
                 finally:
@@ -879,7 +672,8 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
-                        loser_swap=loser_swap,
+                        winners_only=winners_only,
+                        top_team_rank=top_team_rank,
                     )
                     inflight[fut] = idx
                     return True
@@ -915,7 +709,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         break
     finally:
         logger.info(
-            "preprocess case10 closing parquet writers: "
+            "preprocess case8 closing parquet writers: "
             "train_flushed_so_far=%d val_flushed_so_far=%d",
             train_writer.rows_written,
             val_writer.rows_written,
@@ -923,29 +717,14 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         close_started = time.monotonic()
         n_train = train_writer.close()
         n_val = val_writer.close()
-        n_train_idx = train_index_writer.close()
-        n_val_idx = val_index_writer.close()
-        if n_train_idx != n_train or n_val_idx != n_val:
-            logger.warning(
-                "preprocess case10 index/mart row mismatch: "
-                "train mart=%d index=%d / val mart=%d index=%d",
-                n_train,
-                n_train_idx,
-                n_val,
-                n_val_idx,
-            )
         logger.info(
-            "preprocess case10 parquet finalized: train=%d val=%d close_elapsed=%.1fs "
-            "out_train=%s out_val=%s out_train_index=%s out_val_index=%s "
-            "loser_swap=%s",
+            "preprocess case8 parquet finalized: train=%d val=%d close_elapsed=%.1fs "
+            "out_train=%s out_val=%s",
             n_train,
             n_val,
             time.monotonic() - close_started,
             out_train,
             out_val,
-            out_train_index,
-            out_val_index,
-            loser_swap,
         )
 
     report = PreprocessReport(
@@ -962,7 +741,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     pct = 100.0 * outside_total / max(1, fired_total)
     total_elapsed = time.monotonic() - started_at
     logger.info(
-        "preprocess case10 done: cutoff=%.2f kept=%d/%d "
+        "preprocess case8 done: cutoff=%.2f kept=%d/%d "
         "skip(no_slots=%d, no_replay=%d, no_frames=%d) "
         "frames train=%d val=%d label_outside_K=%d / fired=%d (%.1f%%) "
         "total_elapsed=%.1fs",
@@ -988,7 +767,7 @@ app = typer.Typer(add_completion=False)
 @app.command()
 def main(
     config: Path = typer.Option(  # noqa: B008
-        Path("pipeline/imitation/case10/configs/il_case10_candidate.yaml"),
+        Path("pipeline/imitation/case8/configs/il_case8.yaml"),
         "--config",
         "-c",
         help="YAML config path",

@@ -1,0 +1,70 @@
+# imitation/case11 per_planet — case9 per_planet 派生の専用 case。
+# Per-source × (P+1) target categorical (planet_id 直接予測 + no-op sentinel) +
+# log1p(ships) regression head. Backbone = Set Transformer hidden=192 / ISABx4 /
+# heads=8 / inducing=24 (case9 と一致).
+#
+# データフィルタ (上で合意した条件):
+#   modes: ["1v1"]
+#   winners_only: true     — winner 側スロットの frame のみ採用
+#   top_team_rank: 80      — agent_<slot>_team_rank が 1..80 の試合のみ
+#   rating_quantile: 0.0   — winners + top_rank で十分絞り込み済みなので 0
+#   max_episodes: null     — 最新 lake (winner top80 ~5,042 対戦) を全件使用
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case11_per_planet/train.parquet
+  out_val: data/mart/imitation/case11_per_planet/val.parquet
+  rating_quantile: 0.0
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: null
+  winners_only: true
+  top_team_rank: 80
+
+model:
+  planet_in_dim: 41
+  global_in_dim: 20
+  cand_in_dim: 14
+  cand_k: 8
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_mode: per_planet
+
+train:
+  case: case11
+  batch_size: 512
+  epochs: 45
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 0
+  pin_memory: true
+  loss_weights:
+    target: 1.0
+    ship: 0.5
+    use_class_weights: false
+    label_smoothing: 0.0
+  scheduler:
+    type: cosine_warmup
+    t_max: 45
+    eta_min: 1.0e-5
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+  best_metric: val_target_fire_acc
+  best_metric_mode: max
+  early_stop:
+    metric: val_target_fire_acc
+    patience: 10
+    mode: max
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+  head_dropout: 0.1
+  weights_out: pipeline/imitation/case11/policy/weights.pt
+
+inference:
+  temperature: 1.0

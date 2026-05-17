@@ -276,6 +276,21 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "",
     },
+    # case11: per_planet-only successor of case9_per_planet, refreshed on
+    # the latest Kaggle episode lake. winners_only + top_team_rank=80 +
+    # max_episodes=null (1v1, ~5,042 matches).
+    "case11": {
+        "stage": "train_imitation_case11",
+        "train_module": "pipeline.imitation.case11.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case11/configs/il_case11_per_planet.yaml"
+        ),
+        "preprocess_cmd": (
+            "pipeline.imitation.case11.training.preprocess "
+            "--config pipeline/imitation/case11/configs/il_case11_per_planet.yaml"
+        ),
+        "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.

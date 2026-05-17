@@ -807,8 +807,12 @@ def _ensure_runpod_key() -> None:
 @app.command("stock")
 def stock_cmd(
     min_memory_gb: int = typer.Option(16, "--min-memory-gb"),
-    max_dph: float = typer.Option(10.0, "--max-dph", help="cap on uninterruptable price"),
-    gpu_count: int = typer.Option(1, "--gpu-count", help="quote price/stock for this count"),
+    max_dph: float = typer.Option(
+        10.0, "--max-dph", help="cap on uninterruptable price"
+    ),
+    gpu_count: int = typer.Option(
+        1, "--gpu-count", help="quote price/stock for this count"
+    ),
     include_no_stock: bool = typer.Option(
         False, "--include-no-stock", help="show GPUs with stockStatus=null too"
     ),
@@ -831,7 +835,7 @@ def stock_cmd(
             continue
         gid = str(entry.get("id", ""))
         query = (
-            "{ gpuTypes(input: {id: \"" + gid + "\"}) { "
+            '{ gpuTypes(input: {id: "' + gid + '"}) { '
             "memoryInGb securePrice communityPrice "
             "lowestPrice(input: {gpuCount: " + str(gpu_count) + "}) { "
             "uninterruptablePrice stockStatus } } }"
@@ -867,7 +871,9 @@ def stock_cmd(
     stock_order = {"High": 0, "Medium": 1, "Low": 2, "-": 3, "ERR": 4}
     rows.sort(key=lambda r: (stock_order.get(r[0], 9), r[5] if r[5] != "-" else "z"))
 
-    table = Table(title=f"RunPod GPU stock (min_mem={min_memory_gb}GB, gpu_count={gpu_count})")
+    table = Table(
+        title=f"RunPod GPU stock (min_mem={min_memory_gb}GB, gpu_count={gpu_count})"
+    )
     table.add_column("stock")
     table.add_column("gpu")
     table.add_column("mem", justify="right")
@@ -875,7 +881,13 @@ def stock_cmd(
     table.add_column("comm$/h", justify="right")
     table.add_column("lowest$/h", justify="right")
     for stock, gid, mem, sec, comm, low in rows:
-        color = {"High": "green", "Medium": "cyan", "Low": "yellow", "-": "dim", "ERR": "red"}.get(stock, "")
+        color = {
+            "High": "green",
+            "Medium": "cyan",
+            "Low": "yellow",
+            "-": "dim",
+            "ERR": "red",
+        }.get(stock, "")
         prefix = f"[{color}]" if color else ""
         suffix = "[/]" if color else ""
         table.add_row(f"{prefix}{stock}{suffix}", gid, str(mem), sec, comm, low)
