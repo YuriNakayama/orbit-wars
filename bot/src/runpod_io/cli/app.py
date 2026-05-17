@@ -613,6 +613,24 @@ def train(
             "to see the full marker timeline."
         )
         if not result.is_success:
+            # If we hit stalled / failure while the pod is still RUNNING, try
+            # to grab /var/log/onstart.log over SSH BEFORE terminating: the
+            # bash cleanup_destroy trap may not run when the pod is killed
+            # externally, leaving only the marker timeline behind. Best-effort.
+            if result.outcome in {"stalled", "failure"}:
+                from runpod_io.execution.rescue import rescue_onstart_log
+
+                rescue = rescue_onstart_log(
+                    sdk, pod_id, run_id, aws_profile=aws_profile
+                )
+                if rescue.uploaded:
+                    console.print(
+                        f"[green]rescue:[/] onstart log saved to {rescue.s3_uri} "
+                        f"({rescue.bytes_uploaded} bytes)"
+                    )
+                else:
+                    console.print(f"[dim]rescue skipped:[/] {rescue.error}")
+
             # Defense in depth: ensure the pod is terminated even if onstart
             # trap missed it. Idempotent — already-removed pods are accepted.
             from runpod_io.runpod.cleanup import terminate_pod
@@ -1189,6 +1207,22 @@ def watch_cmd(
         "to see the full marker timeline."
     )
     if not result.is_success:
+        # Pre-terminate log rescue (same as train --watch path). The pod may
+        # already be EXITED — rescue_onstart_log returns ssh-unavailable
+        # quietly in that case, which is fine.
+        if result.outcome in {"stalled", "failure"}:
+            from runpod_io.execution.rescue import rescue_onstart_log
+
+            rescue = rescue_onstart_log(
+                runpod_sdk, pod_id, run_id, aws_profile=aws_profile
+            )
+            if rescue.uploaded:
+                console.print(
+                    f"[green]rescue:[/] onstart log saved to {rescue.s3_uri} "
+                    f"({rescue.bytes_uploaded} bytes)"
+                )
+            else:
+                console.print(f"[dim]rescue skipped:[/] {rescue.error}")
         raise typer.Exit(code=1)
 
 

@@ -148,8 +148,11 @@ def fetch_onstart_log(
     1. `run_dir/onstart.log` がローカルにあればそれを読む (DVC pull 後の経路)
     2. なければ `s3://<bucket>/<prefix>/<run_id>/onstart.log` から取得
        (失敗 pod の cleanup_destroy が直接 upload した snapshot)
+    3. それも無ければ `onstart.live.log` (bash 側の periodic flusher が 30s
+       間隔で push する暫定 snapshot, または watcher が SSH 経由で救出した
+       pre-terminate snapshot) を読む
 
-    どちらも見つからなければ None。
+    どれも見つからなければ None。
     """
     if run_dir is not None:
         local_path = run_dir / "onstart.log"
@@ -160,15 +163,48 @@ def fetch_onstart_log(
             )
 
     client = s3_client if s3_client is not None else _build_s3_client(profile)
-    key = f"{prefix}/{run_id}/onstart.log"
-    try:
-        obj = client.get_object(Bucket=bucket, Key=key)
-    except Exception:  # noqa: BLE001 — boto3 ClientError 全部 catch
-        return None
-    body = obj["Body"].read()
-    if isinstance(body, bytes):
-        body = body.decode("utf-8", errors="replace")
-    return OnstartLog(text=body, source="s3")
+    for filename, label in (
+        ("onstart.log", "s3"),
+        ("onstart.live.log", "s3_live"),
+        ("onstart.rescue.log", "s3_rescue"),
+    ):
+        key = f"{prefix}/{run_id}/{filename}"
+        try:
+            obj = client.get_object(Bucket=bucket, Key=key)
+        except Exception:  # noqa: BLE001 — boto3 ClientError 全部 catch
+            continue
+        body = obj["Body"].read()
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", errors="replace")
+        return OnstartLog(text=body, source=label)
+    return None
+
+
+def upload_rescue_log(
+    run_id: str,
+    text: str,
+    *,
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = PROGRESS_PREFIX,
+    s3_client: Any | None = None,
+) -> str:
+    """SSH 経由で救出した onstart.log を S3 へ upload する (rescue snapshot)。
+
+    `cleanup_destroy` trap が動かない pod (外部 SIGKILL / SDK terminate)
+    に対する保険。アップロード先 key は `<prefix>/<run_id>/onstart.rescue.log`
+    で固定。`fetch_onstart_log` がこの key を fallback として読む。
+    成功時は s3:// URI を返す。
+    """
+    client = s3_client if s3_client is not None else _build_s3_client(profile)
+    key = f"{prefix}/{run_id}/onstart.rescue.log"
+    client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=text.encode("utf-8"),
+        ContentType="text/plain; charset=utf-8",
+    )
+    return f"s3://{bucket}/{key}"
 
 
 # ===== artifact prefix (PR1: 成果物消失の止血) =====
