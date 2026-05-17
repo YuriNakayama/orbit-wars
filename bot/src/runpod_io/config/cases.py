@@ -278,17 +278,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
     },
     # case11: per_planet-only successor of case9_per_planet, refreshed on
     # the latest Kaggle episode lake. winners_only + top_team_rank=80 +
-    # max_episodes=null (1v1, ~5,042 matches).
+    # max_episodes=null (1v1, ~30,160 matches, 5.94M frames, ~21GB).
+    # mart は事前に local で preprocess + DVC push 済 (case9_per_planet と同
+    # じ運用)。pod 側は dvc pull のみで mart を取得し、preprocess を再実行
+    # しない (case10 retry で 40_uv_sync_done 後に dvc pull が hang した
+    # trap を避けるためにも、pod での 19GB pull の負荷を最小化する)。
     "case11": {
         "stage": "train_imitation_case11",
         "train_module": "pipeline.imitation.case11.training.train",
         "config_arg": (
             "--config pipeline/imitation/case11/configs/il_case11_per_planet.yaml"
         ),
-        "preprocess_cmd": (
-            "pipeline.imitation.case11.training.preprocess "
-            "--config pipeline/imitation/case11/configs/il_case11_per_planet.yaml"
-        ),
+        "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",
     },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
