@@ -97,6 +97,44 @@ PY_BIN="$(pwd)/bot/.venv/bin/python"
 DVC_BIN="${PY_BIN} -m dvc"
 echo "[onstart] iter12 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
 
+# reinforce family は on-policy で env.step() を回す唯一の case 群なので、
+# Rust 製シミュレータ `orbit_wars_rust` (PyO3 + maturin) の Linux .so を
+# 学習開始前に build する。imitation case は parquet-based BC で env を
+# 一切使わないため build 不要だった (rust .so は worktree の darwin 版が
+# git untracked で残っているのみ)。
+if [ "<CASE_FAMILY>" = "reinforce" ]; then
+  echo "[onstart] step=build_rust_sim (reinforce family のみ)"
+  # reinforce は on-policy で env.step() を回すため Rust 製シミュレータの
+  # Linux .so が必要。bot の deps に maturin は無いので bot venv に追加
+  # インストール → simulator/rust 配下で maturin develop --release を実行。
+  # imitation case は parquet-based BC で env を使わないため不要。
+  if ! "${PY_BIN}" -m pip install --quiet "maturin>=1.7,<2"; then
+    echo "[onstart] build_rust_sim: maturin install FAILED" >&2
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  # Rust toolchain (cargo) の存在確認。RunPod base image に含まれていない場合
+  # rustup で導入する。memory `project_runpod_5_traps` の trap には未記録。
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "[onstart] cargo not found — installing rust toolchain via rustup"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+    source "$HOME/.cargo/env"
+  fi
+  RUST_BUILD_START=$(date +%s)
+  if ! ( cd simulator/rust && "${PY_BIN}" -m maturin develop --release ) 2>&1 | tail -30; then
+    echo "[onstart] build_rust_sim FAILED — orbit_wars_rust の build に失敗" >&2
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  RUST_BUILD_ELAPSED=$(( $(date +%s) - RUST_BUILD_START ))
+  echo "[onstart] build_rust_sim ok (elapsed=${RUST_BUILD_ELAPSED}s)"
+  if ! "${PY_BIN}" -c "import sys; sys.path.insert(0, 'simulator/rust/python'); import orbit_wars_rust; print('orbit_wars_rust import OK')" 2>&1; then
+    echo "[onstart] build_rust_sim verify FAILED" >&2
+    mark "45_build_rust_sim_verify_failed"
+    exit 1
+  fi
+fi
+
 echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE> family=<CASE_FAMILY>"
 # case0 は RunPod 基盤の E2E smoke 専用なので、dvc pull 経路の正常性検証だけ
 # 行い、他 case の outs を巻き込まない (memory: runpod_5_traps)。
