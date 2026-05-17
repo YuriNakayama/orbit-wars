@@ -108,7 +108,8 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   # Linux .so が必要。bot の deps に maturin は無いので bot venv に追加
   # インストール → simulator/rust 配下で maturin develop --release を実行。
   # imitation case は parquet-based BC で env を使わないため不要。
-  if ! "${PY_BIN}" -m pip install --quiet "maturin>=1.7,<2"; then
+  echo "[onstart] build_rust_sim: installing maturin into bot venv via uv pip"
+  if ! ( cd bot && uv pip install "maturin>=1.7,<2" ) 2>&1 | tail -10; then
     echo "[onstart] build_rust_sim: maturin install FAILED" >&2
     mark "45_build_rust_sim_failed"
     exit 1
@@ -117,9 +118,18 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   # rustup で導入する。memory `project_runpod_5_traps` の trap には未記録。
   if ! command -v cargo >/dev/null 2>&1; then
     echo "[onstart] cargo not found — installing rust toolchain via rustup"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-    source "$HOME/.cargo/env"
+    if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal 2>&1 | tail -10; then
+      echo "[onstart] rustup install FAILED" >&2
+      mark "45_build_rust_sim_failed"
+      exit 1
+    fi
+    # rustup の env script を source して PATH を反映。
+    if [ -f "$HOME/.cargo/env" ]; then
+      # shellcheck disable=SC1091
+      source "$HOME/.cargo/env"
+    fi
   fi
+  echo "[onstart] cargo $(cargo --version 2>&1 | head -1)"
   RUST_BUILD_START=$(date +%s)
   if ! ( cd simulator/rust && "${PY_BIN}" -m maturin develop --release ) 2>&1 | tail -30; then
     echo "[onstart] build_rust_sim FAILED — orbit_wars_rust の build に失敗" >&2
