@@ -174,10 +174,19 @@ else
   # 残骸自体は preprocess skip ロジックで再利用される (新規 preprocess も上書き可能)。
   # memory `project_runpod_5_traps_2026_05_04.md` および
   # `project_runpod_onstart_pitfalls.md` 参照。
-  if ! ${DVC_BIN} pull --allow-missing --force; then
-    echo "[onstart] dvc pull (full) FAILED" >&2
-    mark "45_dvc_pull_full_failed"
-    exit 1
+  #
+  # 2026-05-18 case11 retry7: mart-only path (PREPROCESS_CMD="") では
+  # targeted pull で必要な mart は取得済 + kaggle_episodes も不要なので、
+  # この full pull は graph 解析で 60GB+ の outs を fetch しようとして
+  # hang する。SKIP して targeted pull の結果を尊重する。
+  if [ -z "<PREPROCESS_CMD>" ]; then
+    echo "[onstart] dvc pull --allow-missing SKIP (PREPROCESS_CMD empty; targeted pull complete)"
+  else
+    if ! ${DVC_BIN} pull --allow-missing --force; then
+      echo "[onstart] dvc pull (full) FAILED" >&2
+      mark "45_dvc_pull_full_failed"
+      exit 1
+    fi
   fi
   # iter17 fix (case9 retry5 2026-05-06 12:12): `dvc pull --allow-missing --force`
   # が graph 整合のため targeted pull で取得した case 別 parquet を削除して
