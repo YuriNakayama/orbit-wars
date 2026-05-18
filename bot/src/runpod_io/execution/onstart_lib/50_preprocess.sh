@@ -37,6 +37,16 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
         echo "[onstart] cleaning stale npy dir ${d}"
         rm -rf "${d}"
       done
+  # Volume quota is 300GB. After 75GB dvc-cache + 46GB uv-cache + 6GB uv-venv
+  # only ~173GB remains — 1GB short of train_npy's 174GB footprint.
+  # Drop dvc-cache (regenerable from S3 in 5-10min via dvc pull) to free
+  # 75GB. This is the cheapest way to fit the conversion under quota.
+  if [ -d /persist/dvc-cache ]; then
+    DVC_CACHE_SIZE=$(du -sh /persist/dvc-cache 2>/dev/null | awk '{print $1}')
+    echo "[onstart] cleaning /persist/dvc-cache (was ${DVC_CACHE_SIZE}) to free quota"
+    rm -rf /persist/dvc-cache
+    mkdir -p /persist/dvc-cache
+  fi
   echo "[onstart] /persist after cleanup:"
   df -h /persist 2>&1 | tail -2 || true
   echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
