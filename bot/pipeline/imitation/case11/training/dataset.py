@@ -115,17 +115,28 @@ class _GroupArrays:
 
 
 def _list_col_to_numpy(table: pa.Table, name: str, dtype: np.dtype) -> np.ndarray:
+    """Convert a list-typed column to a standalone numpy buffer.
+
+    `to_numpy(zero_copy_only=False)` may return a view into the arrow
+    buffer; without an explicit copy the underlying arrow Table cannot be
+    GC'd even after we drop our Python reference, leading to RAM growth
+    that defeats lazy loading. We force a contiguous copy here so the
+    arrow buffer can be freed as soon as the caller's `table` reference
+    is gone.
+    """
     col = table[name]
     chunks = col.chunks if col.num_chunks > 0 else [col.combine_chunks()]
     parts: list[np.ndarray] = []
     for ch in chunks:
         flat = _flatten_arrow(ch)
-        parts.append(flat.to_numpy(zero_copy_only=False).astype(dtype, copy=False))
-    return parts[0] if len(parts) == 1 else np.concatenate(parts)
+        parts.append(flat.to_numpy(zero_copy_only=False).astype(dtype, copy=True))
+    if len(parts) == 1:
+        return parts[0]
+    return np.concatenate(parts)
 
 
 def _primitive_col(table: pa.Table, name: str, dtype: np.dtype) -> np.ndarray:
-    return np.asarray(table[name].to_numpy(zero_copy_only=False), dtype=dtype)
+    return np.array(table[name].to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
 
 
 def _materialise_group(
@@ -308,6 +319,10 @@ class CaseFourDataset(Dataset[Sample]):
         arrays = _materialise_group(
             table, self._schema_names, int(self._group_row_counts[g])
         )
+        # Drop the arrow Table explicitly so the buffer it owns can be freed
+        # as soon as Python decrements the refcount. `_list_col_to_numpy`
+        # copies every column, so `arrays` does not retain any view into it.
+        del table
         with self._lock:
             self._cache[g] = arrays
             self._cache.move_to_end(g)
