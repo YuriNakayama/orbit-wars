@@ -12,7 +12,7 @@ lake (~66k episodes) を winner-only / top80 でフィルタし、case9 の OOM 
 | featurizer | planet 41 / global 20 / candidate 8×14 | **同一** |
 | head | per_planet 単一 + log1p(ships) | **同一** (`SUPPORTED_HEAD_MODES = ("per_planet",)` に制限) |
 | データ | winners_only + top_team_rank=80 + `max_episodes=8000` | winners_only + top_team_rank=80 + **`max_episodes=null`** |
-| mart path | `data/mart/imitation/case9_per_planet/` | `data/mart/imitation/case11_per_planet/` |
+| mart path | `data/mart/imitation/case9_per_planet/` | `data/mart/imitation/case11/` |
 | weights_out | `policy/weights_per_planet.pt` | `policy/weights.pt` |
 
 期待 mart 規模 (1v1 / draw 除外 / winner ∈ top80, 最新 lake 計測):

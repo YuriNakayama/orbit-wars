@@ -14,8 +14,8 @@ seed: 0
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
   replay_dir: data/lake/kaggle_episodes/matches/replays
-  out_train: data/mart/imitation/case11_per_planet/train.parquet
-  out_val: data/mart/imitation/case11_per_planet/val.parquet
+  out_train: data/mart/imitation/case11/train.parquet
+  out_val: data/mart/imitation/case11/val.parquet
   rating_quantile: 0.0
   val_split: 0.10
   modes: ["1v1"]
