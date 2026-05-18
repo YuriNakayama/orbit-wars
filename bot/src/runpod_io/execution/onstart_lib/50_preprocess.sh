@@ -1,5 +1,18 @@
 PREPROCESS_RAN=0
-if [ -n "<PREPROCESS_CMD>" ]; then
+# Special branch: parquet_to_npy converters do not produce a new parquet;
+# they read the existing mart parquet and emit per-column .npy files for
+# mmap consumption. Skip the parquet freshness check + post-preprocess
+# DVC track block entirely. The targeted mart pull in 40 already fetched
+# the parquet, so we just run the converter once and proceed to train.
+if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
+  echo "[onstart] step=parquet_to_npy case=<CASE> (skip parquet-skip + dvc-track)"
+  if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> ); then
+    echo "[onstart] step=parquet_to_npy FAILED (exit code != 0)" >&2
+    mark "55_parquet_to_npy_failed"
+    exit 1
+  fi
+  echo "[onstart] step=parquet_to_npy done"
+elif [ -n "<PREPROCESS_CMD>" ]; then
   # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
   # `.dvc` stub は git にあるが本体 blob が S3 にない (orphan) ケースで
   # `data/mart/imitation/<CASE>/*.parquet` が dangling symlink として

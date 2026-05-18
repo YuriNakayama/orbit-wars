@@ -121,7 +121,7 @@ else
   # preprocess_cmd を埋め込む。空文字なら "mart 事前 push 済" と判断。
   # 2026-05-18 case11 retry で /persist のキャッシュ不在 + 60GB pull が
   # hang して 40_uv_sync_done で stall 連発した trap への対処。
-  if [ -z "<PREPROCESS_CMD>" ]; then
+  if [ -z "<PREPROCESS_CMD>" ] || [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
     echo "[onstart] dvc pull SKIP kaggle_episodes (PREPROCESS_CMD empty; mart-only path)"
   else
     # 診断: cwd と repo の dvc-tracked 状態を log に残す
@@ -179,7 +179,7 @@ else
   # targeted pull で必要な mart は取得済 + kaggle_episodes も不要なので、
   # この full pull は graph 解析で 60GB+ の outs を fetch しようとして
   # hang する。SKIP して targeted pull の結果を尊重する。
-  if [ -z "<PREPROCESS_CMD>" ]; then
+  if [ -z "<PREPROCESS_CMD>" ] || [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
     echo "[onstart] dvc pull --allow-missing SKIP (PREPROCESS_CMD empty; targeted pull complete)"
   else
     if ! ${DVC_BIN} pull --allow-missing --force; then

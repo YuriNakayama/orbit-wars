@@ -43,12 +43,13 @@ train:
   epochs: 10
   lr: 3.0e-4
   weight_decay: 1.0e-4
-  num_workers: 0
-  # 2026-05-18 retry #12: pin_memory=true で training loop の RAM が
-  # 5-6 GB/5min で単調増加して 138 GB で OOM (exit 137)。stress test では
-  # dataset 由来 leak は無かったので、pin_memory が CUDA stream 完了後も
-  # pinned tensor を解放しない側の問題と推定。false で経過観測する。
+  # 2026-05-18 retry #15: parquet -> per-column .npy 化 (mmap_mode="r") で
+  # dataset の IO を OS page cache に委譲した。mmap は fork-safe なので
+  # num_workers=2 で安全に prefetch 並列化できる (parquet ParquetFile 路線
+  # では fork 不可だった)。pin_memory は retry #12 で leak したため off 維持。
+  num_workers: 2
   pin_memory: false
+  persistent_workers: true
   loss_weights:
     target: 1.0
     ship: 0.5

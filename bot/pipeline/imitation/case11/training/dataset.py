@@ -1,43 +1,39 @@
-"""Parquet → torch Dataset/DataLoader for imitation/case11.
+"""Per-column .npy mmap Dataset/DataLoader for imitation/case11.
 
-case11 mart は ~5.94M rows / ~19 GB (ZSTD parquet)。in-memory zero-copy
-(case8 iter13 流) では peak ~100-140 GB の host RAM が要求され、RunPod
-の典型 host RAM (24-32 GB) で OOM (exit 137) する。
+retry #14 までの経緯:
+- case8 iter13 流の in-memory zero-copy: peak RAM ~100-140GB で OOM (#11)
+- row-group lazy load (LRU cache): RAM 安定だが 1 epoch ~2-3h (#13/#14, IO 律速)
 
-このモジュールは **row-group lazy load + LRU cache** で再実装:
+このモジュールは **per-column .npy + mmap_mode="r"** で再実装:
 
-- `__init__` は `pq.ParquetFile` を保持し、row → row_group mapping を
-  precompute するだけ。peak RAM は ~50 MB。
-- `__getitem__(idx)` は idx を含む row_group を fetch → numpy slice → torch。
-  LRU cache (default size 4) で連続 idx の再読み込みを抑止。
-- `class_weight_on_*` は 1pass で全 row_group を scan して bincount。
-  peak は row_group 1 つ分のみ。
+- `parquet_to_npy.py` で事前に train/val parquet を per-column .npy に変換
+  (ZSTD 解除、shape を flatten 済 ndarray として保存)。1 回限りのコスト。
+- Dataset は `np.load(mmap_mode="r")` で各 .npy を mmap open。RSS は数十 MB
+  のみ。__getitem__ は np.array() で row slice を copy し、torch.from_numpy
+  に渡す (mmap view を切って GPU 転送後の解放を保証)。
+- shuffle=True でも OS page cache が頻繁 access する row を hot に保つので
+  実質 in-memory アクセスと同等速度。
+- DataLoader workers=2-4 推奨: mmap は fork-safe で各 worker が独立 view を
+  持てる (parquet ParquetFile と違って共有不可問題なし)。
 
-shuffle=True との相性: idx がランダムに飛ぶと cache ヒット率が下がるが、
-batch=512 でほとんどの batch が 1-2 row group に分散する想定 (1073 groups,
-5000 rows/group)。worker=0 推奨 (process fork で cache 共有不可)。
+mart layout:
+  data/mart/imitation/case11/train_npy/{planet_feats,...}.npy
+  data/mart/imitation/case11/val_npy/{planet_feats,...}.npy
 """
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
 
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
-from pipeline.imitation.case11.policy.candidates import CAND_FEAT_DIM, CAND_K
 from pipeline.imitation.case11.policy.featurizer import (
     GLOBAL_FEAT_DIM,
-    MAX_PLANETS,
     PLANET_FEAT_DIM,
 )
-from pipeline.imitation.case11.policy.templates import TEMPLATE_CTX_DIM
 
 
 @dataclass(frozen=True)
@@ -84,190 +80,22 @@ class BatchedSample:
     is_noop: torch.Tensor
 
 
-def _flatten_arrow(arr: pa.Array) -> pa.Array:
-    while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
-        arr = arr.flatten()
-    return arr
-
-
-@dataclass
-class _GroupArrays:
-    """Numpy arrays for a single row_group, lazily materialised on first access."""
-
-    planet_feats: np.ndarray
-    global_feats: np.ndarray
-    planet_mask: np.ndarray
-    my_planet_mask: np.ndarray
-    target_mask: np.ndarray
-    template_ctx: np.ndarray
-    candidate_feats: np.ndarray
-    candidate_mask: np.ndarray
-    candidate_pid: np.ndarray
-    cand_slot_per_src: np.ndarray
-    ship_label_per_src: np.ndarray
-    ships_bucket_per_src: np.ndarray
-    from_multihot: np.ndarray
-    target_per_src: np.ndarray
-    ships_per_src: np.ndarray
-    target_pid_per_src: np.ndarray
-    ship_pred_label: np.ndarray
-    is_noop: np.ndarray
-
-
-def _list_col_to_numpy(table: pa.Table, name: str, dtype: np.dtype) -> np.ndarray:
-    """Convert a list-typed column to a standalone numpy buffer.
-
-    `to_numpy(zero_copy_only=False)` may return a view into the arrow
-    buffer; without an explicit copy the underlying arrow Table cannot be
-    GC'd even after we drop our Python reference, leading to RAM growth
-    that defeats lazy loading. We force a contiguous copy here so the
-    arrow buffer can be freed as soon as the caller's `table` reference
-    is gone.
-    """
-    col = table[name]
-    chunks = col.chunks if col.num_chunks > 0 else [col.combine_chunks()]
-    parts: list[np.ndarray] = []
-    for ch in chunks:
-        flat = _flatten_arrow(ch)
-        parts.append(flat.to_numpy(zero_copy_only=False).astype(dtype, copy=True))
-    if len(parts) == 1:
-        return parts[0]
-    return np.concatenate(parts)
-
-
-def _primitive_col(table: pa.Table, name: str, dtype: np.dtype) -> np.ndarray:
-    return np.array(table[name].to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
-
-
-def _materialise_group(
-    table: pa.Table, schema_names: set[str], n_rows: int
-) -> _GroupArrays:
-    """row_group の pyarrow Table を `_GroupArrays` (numpy) に変換する。"""
-    pf_dim = PLANET_FEAT_DIM
-    gf_dim = GLOBAL_FEAT_DIM
-    pa_dtype_f32 = np.dtype(np.float32)
-    pa_dtype_bool = np.dtype(np.bool_)
-    pa_dtype_i64 = np.dtype(np.int64)
-
-    planet_feats = _list_col_to_numpy(table, "planet_feats", pa_dtype_f32).reshape(
-        n_rows, MAX_PLANETS, pf_dim
-    )
-    global_feats = _list_col_to_numpy(table, "global_feats", pa_dtype_f32).reshape(
-        n_rows, gf_dim
-    )
-    planet_mask = _list_col_to_numpy(table, "planet_mask", pa_dtype_bool).reshape(
-        n_rows, MAX_PLANETS
-    )
-    my_planet_mask = _list_col_to_numpy(table, "my_planet_mask", pa_dtype_bool).reshape(
-        n_rows, MAX_PLANETS
-    )
-    target_mask = _list_col_to_numpy(table, "target_mask", pa_dtype_bool).reshape(
-        n_rows, MAX_PLANETS
-    )
-
-    if "template_ctx" in schema_names:
-        template_ctx = _list_col_to_numpy(table, "template_ctx", pa_dtype_f32).reshape(
-            n_rows, MAX_PLANETS, TEMPLATE_CTX_DIM
-        )
-    else:
-        template_ctx = np.zeros(
-            (n_rows, MAX_PLANETS, TEMPLATE_CTX_DIM), dtype=np.float32
-        )
-
-    candidate_feats = _list_col_to_numpy(
-        table, "candidate_feats", pa_dtype_f32
-    ).reshape(n_rows, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
-    candidate_mask = _list_col_to_numpy(table, "candidate_mask", pa_dtype_bool).reshape(
-        n_rows, MAX_PLANETS, CAND_K
-    )
-    candidate_pid = _list_col_to_numpy(table, "candidate_pid", pa_dtype_i64).reshape(
-        n_rows, MAX_PLANETS, CAND_K
-    )
-    cand_slot_per_src = _list_col_to_numpy(
-        table, "cand_slot_per_src", pa_dtype_i64
-    ).reshape(n_rows, MAX_PLANETS)
-
-    if "ship_label_per_src" in schema_names:
-        ship_label_per_src = _list_col_to_numpy(
-            table, "ship_label_per_src", pa_dtype_i64
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        ship_label_per_src = np.full((n_rows, MAX_PLANETS), -1, dtype=np.int64)
-
-    if "ships_bucket_per_src" in schema_names:
-        ships_bucket_per_src = _list_col_to_numpy(
-            table, "ships_bucket_per_src", pa_dtype_i64
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        ships_bucket_per_src = np.full((n_rows, MAX_PLANETS), -1, dtype=np.int64)
-
-    if "from_multihot" in schema_names:
-        from_multihot = _list_col_to_numpy(
-            table, "from_multihot", pa_dtype_bool
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        from_multihot = np.zeros((n_rows, MAX_PLANETS), dtype=np.bool_)
-
-    if "target_per_src" in schema_names:
-        target_per_src = _list_col_to_numpy(
-            table, "target_per_src", pa_dtype_i64
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        target_per_src = np.full((n_rows, MAX_PLANETS), -1, dtype=np.int64)
-
-    if "ships_per_src" in schema_names:
-        ships_per_src = _list_col_to_numpy(
-            table, "ships_per_src", pa_dtype_i64
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        ships_per_src = np.full((n_rows, MAX_PLANETS), -1, dtype=np.int64)
-
-    if "target_pid_per_src" in schema_names:
-        target_pid_per_src = _list_col_to_numpy(
-            table, "target_pid_per_src", pa_dtype_i64
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        target_pid_per_src = np.full((n_rows, MAX_PLANETS), MAX_PLANETS, dtype=np.int64)
-
-    if "ship_pred_label" in schema_names:
-        ship_pred_label = _list_col_to_numpy(
-            table, "ship_pred_label", pa_dtype_f32
-        ).reshape(n_rows, MAX_PLANETS)
-    else:
-        ship_pred_label = np.full((n_rows, MAX_PLANETS), -1.0, dtype=np.float32)
-
-    is_noop = _primitive_col(table, "is_noop", pa_dtype_bool)
-
-    return _GroupArrays(
-        planet_feats=planet_feats,
-        global_feats=global_feats,
-        planet_mask=planet_mask,
-        my_planet_mask=my_planet_mask,
-        target_mask=target_mask,
-        template_ctx=template_ctx,
-        candidate_feats=candidate_feats,
-        candidate_mask=candidate_mask,
-        candidate_pid=candidate_pid,
-        cand_slot_per_src=cand_slot_per_src,
-        ship_label_per_src=ship_label_per_src,
-        ships_bucket_per_src=ships_bucket_per_src,
-        from_multihot=from_multihot,
-        target_per_src=target_per_src,
-        ships_per_src=ships_per_src,
-        target_pid_per_src=target_pid_per_src,
-        ship_pred_label=ship_pred_label,
-        is_noop=is_noop,
-    )
+def _npy_dir_for(parquet_path: Path | str) -> Path:
+    """`<dir>/<split>.parquet` -> `<dir>/<split>_npy/`."""
+    p = Path(parquet_path)
+    return p.with_name(p.stem + "_npy")
 
 
 class CaseFourDataset(Dataset[Sample]):
-    """Lazy row-group-based parquet Dataset for case11.
+    """Per-column .npy + mmap_mode="r" Dataset for case11.
 
-    Holds an open `pq.ParquetFile` and reads one row_group at a time on demand,
-    caching the most recent groups in an LRU. Memory peak is ~ (cache_size
-    × row_group_size × per-row-bytes); with cache=4 and ~5000 rows/group this
-    is roughly 0.5-1 GB even for the 19 GB mart, well under the 24-32 GB host
-    RAM cap.
+    Expects mart layout produced by `parquet_to_npy.py`:
+        <stem>_npy/{planet_feats, ..., is_noop}.npy
+
+    Each column is mmap-opened (zero RAM cost, OS page-cache backed).
+    `__getitem__(idx)` returns a per-row torch.Tensor with `np.array` copy
+    to ensure the resulting tensor does not retain a view into the memmap
+    (avoids the retry #12-style accumulation observed under pin_memory).
     """
 
     def __init__(
@@ -275,101 +103,74 @@ class CaseFourDataset(Dataset[Sample]):
         parquet_path: Path | str,
         mask_planet_cols: list[int] | None = None,
         mask_global_cols: list[int] | None = None,
-        *,
-        cache_size: int = 4,
     ) -> None:
         if mask_planet_cols or mask_global_cols:
-            # ablation masking would require in-memory rewrite; case11 does not
-            # need it, so reject early instead of silently ignoring.
             raise NotImplementedError(
-                "mask_planet_cols/mask_global_cols not supported in lazy mode"
+                "mask_planet_cols/mask_global_cols not supported in mmap mode"
             )
-        path = str(parquet_path)
-        self._pf = pq.ParquetFile(path)
-        self._schema_names: set[str] = set(self._pf.schema_arrow.names)
+        npy_dir = _npy_dir_for(parquet_path)
+        if not npy_dir.is_dir():
+            raise FileNotFoundError(
+                f"npy mart not found: {npy_dir}. "
+                "Run `python -m pipeline.imitation.case11.training.parquet_to_npy`"
+            )
         self._planet_feat_dim = PLANET_FEAT_DIM
         self._global_feat_dim = GLOBAL_FEAT_DIM
 
-        num_groups = self._pf.num_row_groups
-        self._group_row_counts = np.empty(num_groups, dtype=np.int64)
-        for g in range(num_groups):
-            self._group_row_counts[g] = self._pf.metadata.row_group(g).num_rows
-        # Cumulative offsets: row_offsets[g] = first row index in row_group g.
-        self._row_offsets = np.concatenate(([0], np.cumsum(self._group_row_counts)))
-        self._n = int(self._row_offsets[-1])
-        self._num_groups = num_groups
+        def _mm(name: str) -> np.ndarray:
+            arr: np.ndarray = np.load(npy_dir / f"{name}.npy", mmap_mode="r")
+            return arr
 
-        self._cache: OrderedDict[int, _GroupArrays] = OrderedDict()
-        self._cache_size = max(1, int(cache_size))
-        self._lock = Lock()
+        self._planet_feats = _mm("planet_feats")
+        self._global_feats = _mm("global_feats")
+        self._planet_mask = _mm("planet_mask")
+        self._my_planet_mask = _mm("my_planet_mask")
+        self._target_mask = _mm("target_mask")
+        self._template_ctx = _mm("template_ctx")
+        self._candidate_feats = _mm("candidate_feats")
+        self._candidate_mask = _mm("candidate_mask")
+        self._candidate_pid = _mm("candidate_pid")
+        self._cand_slot_per_src = _mm("cand_slot_per_src")
+        self._ship_label_per_src = _mm("ship_label_per_src")
+        self._ships_bucket_per_src = _mm("ships_bucket_per_src")
+        self._from_multihot = _mm("from_multihot")
+        self._target_per_src = _mm("target_per_src")
+        self._ships_per_src = _mm("ships_per_src")
+        self._target_pid_per_src = _mm("target_pid_per_src")
+        self._ship_pred_label = _mm("ship_pred_label")
+        self._is_noop = _mm("is_noop")
 
-    def _group_for_row(self, idx: int) -> tuple[int, int]:
-        # binary search; right-inclusive: find largest g with row_offsets[g] <= idx.
-        g = int(np.searchsorted(self._row_offsets, idx, side="right") - 1)
-        return g, idx - int(self._row_offsets[g])
-
-    def _get_group(self, g: int) -> _GroupArrays:
-        with self._lock:
-            cached = self._cache.get(g)
-            if cached is not None:
-                self._cache.move_to_end(g)
-                return cached
-        # Read outside the lock to avoid serialising IO.
-        table = self._pf.read_row_group(g)
-        arrays = _materialise_group(
-            table, self._schema_names, int(self._group_row_counts[g])
-        )
-        # Drop the arrow Table explicitly so the buffer it owns can be freed
-        # as soon as Python decrements the refcount. `_list_col_to_numpy`
-        # copies every column, so `arrays` does not retain any view into it.
-        del table
-        with self._lock:
-            self._cache[g] = arrays
-            self._cache.move_to_end(g)
-            while len(self._cache) > self._cache_size:
-                self._cache.popitem(last=False)
-        return arrays
+        self._n = int(self._planet_feats.shape[0])
 
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
         del beta
-        counts = np.zeros(num_classes, dtype=np.float64)
-        for g in range(self._num_groups):
-            arr = self._get_group(g).cand_slot_per_src.reshape(-1)
-            arr = arr[arr != ignore_index]
-            if arr.size:
-                counts += np.bincount(arr, minlength=num_classes)
+        flat = np.asarray(self._cand_slot_per_src).reshape(-1)
+        flat = flat[flat != ignore_index]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
         return _inverse_freq_weights(counts)
 
     def class_weight_on_templates_including_noop(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
         del beta
-        counts = np.zeros(num_classes, dtype=np.float64)
-        for g in range(self._num_groups):
-            grp = self._get_group(g)
-            labels = grp.target_per_src.copy()
-            labels[labels == ignore_index] = num_classes - 1
-            valid = grp.my_planet_mask.reshape(-1)
-            flat = labels.reshape(-1)[valid]
-            if flat.size:
-                counts += np.bincount(flat, minlength=num_classes)
+        labels = np.asarray(self._target_per_src).copy()
+        labels[labels == ignore_index] = num_classes - 1
+        valid = np.asarray(self._my_planet_mask).reshape(-1)
+        flat = labels.reshape(-1)[valid]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
         return _inverse_freq_weights(counts)
 
     def class_weight_on_ships(
         self, num_classes: int = 4, beta: float = 0.999, ignore_index: int = -1
     ) -> torch.Tensor:
         del beta
-        counts = np.zeros(num_classes, dtype=np.float64)
-        for g in range(self._num_groups):
-            grp = self._get_group(g)
-            flat = grp.ships_per_src.reshape(-1)
-            if np.all(flat == ignore_index):
-                flat = grp.ships_bucket_per_src.reshape(-1)
-            flat = flat[flat != ignore_index]
-            if flat.size:
-                counts += np.bincount(flat, minlength=num_classes)
+        flat = np.asarray(self._ships_per_src).reshape(-1)
+        if np.all(flat == ignore_index):
+            flat = np.asarray(self._ships_bucket_per_src).reshape(-1)
+        flat = flat[flat != ignore_index]
+        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
         return _inverse_freq_weights(counts)
 
     def __len__(self) -> int:
@@ -378,46 +179,35 @@ class CaseFourDataset(Dataset[Sample]):
     def __getitem__(self, idx: int) -> Sample:
         if idx < 0 or idx >= self._n:
             raise IndexError(idx)
-        g, local = self._group_for_row(idx)
-        grp = self._get_group(g)
-        # Force a copy on each slice: a torch.from_numpy(view) tensor keeps a
-        # strong reference to the underlying ndarray, which in turn keeps the
-        # whole _GroupArrays alive even after LRU eviction. Once a batch is
-        # pinned + sent to CUDA, pytorch may retain it for a few iterations,
-        # so the views accumulate and RAM climbs without bound (retry #12:
-        # 138GB after 1h). Each per-row slice is ~250 floats (tiny), so the
-        # copy cost is negligible compared to keeping arrow arrays alive.
+        # np.array(...) forces a copy out of the memmap so the resulting
+        # torch.Tensor owns a contiguous buffer independent of the OS page
+        # cache. This sidesteps the view-accumulation pattern that caused
+        # retry #12 to leak ~6 GB / 5 min into 138 GB OOM.
         return Sample(
-            planet_feats=torch.from_numpy(np.array(grp.planet_feats[local])),
-            global_feats=torch.from_numpy(np.array(grp.global_feats[local])),
-            planet_mask=torch.from_numpy(np.array(grp.planet_mask[local])),
-            my_planet_mask=torch.from_numpy(np.array(grp.my_planet_mask[local])),
-            target_mask=torch.from_numpy(np.array(grp.target_mask[local])),
-            template_ctx=torch.from_numpy(np.array(grp.template_ctx[local])),
-            candidate_feats=torch.from_numpy(
-                np.array(grp.candidate_feats[local])
-            ),
-            candidate_mask=torch.from_numpy(np.array(grp.candidate_mask[local])),
-            candidate_pid=torch.from_numpy(np.array(grp.candidate_pid[local])),
-            cand_slot_per_src=torch.from_numpy(
-                np.array(grp.cand_slot_per_src[local])
-            ),
+            planet_feats=torch.from_numpy(np.array(self._planet_feats[idx])),
+            global_feats=torch.from_numpy(np.array(self._global_feats[idx])),
+            planet_mask=torch.from_numpy(np.array(self._planet_mask[idx])),
+            my_planet_mask=torch.from_numpy(np.array(self._my_planet_mask[idx])),
+            target_mask=torch.from_numpy(np.array(self._target_mask[idx])),
+            template_ctx=torch.from_numpy(np.array(self._template_ctx[idx])),
+            candidate_feats=torch.from_numpy(np.array(self._candidate_feats[idx])),
+            candidate_mask=torch.from_numpy(np.array(self._candidate_mask[idx])),
+            candidate_pid=torch.from_numpy(np.array(self._candidate_pid[idx])),
+            cand_slot_per_src=torch.from_numpy(np.array(self._cand_slot_per_src[idx])),
             ship_label_per_src=torch.from_numpy(
-                np.array(grp.ship_label_per_src[local])
+                np.array(self._ship_label_per_src[idx])
             ),
             ships_bucket_per_src=torch.from_numpy(
-                np.array(grp.ships_bucket_per_src[local])
+                np.array(self._ships_bucket_per_src[idx])
             ),
-            from_multihot=torch.from_numpy(np.array(grp.from_multihot[local])),
-            target_per_src=torch.from_numpy(np.array(grp.target_per_src[local])),
-            ships_per_src=torch.from_numpy(np.array(grp.ships_per_src[local])),
+            from_multihot=torch.from_numpy(np.array(self._from_multihot[idx])),
+            target_per_src=torch.from_numpy(np.array(self._target_per_src[idx])),
+            ships_per_src=torch.from_numpy(np.array(self._ships_per_src[idx])),
             target_pid_per_src=torch.from_numpy(
-                np.array(grp.target_pid_per_src[local])
+                np.array(self._target_pid_per_src[idx])
             ),
-            ship_pred_label=torch.from_numpy(
-                np.array(grp.ship_pred_label[local])
-            ),
-            is_noop=bool(grp.is_noop[local]),
+            ship_pred_label=torch.from_numpy(np.array(self._ship_pred_label[idx])),
+            is_noop=bool(self._is_noop[idx]),
         )
 
 

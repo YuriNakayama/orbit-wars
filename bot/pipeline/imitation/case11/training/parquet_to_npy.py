@@ -1,0 +1,227 @@
+"""One-time converter: case11 mart parquet -> per-column uncompressed .npy.
+
+Why: ZSTD parquet + row-group lazy load makes 1 epoch ~2-3h on L4 (IO bound).
+Converting once to plain `np.save` files lets Dataset use `mmap_mode="r"`,
+which defers reads to the OS page cache. RSS stays at ~50MB while training,
+and per-batch random reads become indistinguishable from in-memory access.
+
+Output layout (per split):
+  data/mart/imitation/case11/<split>_npy/
+    planet_feats.npy           # (N, MAX_PLANETS, PLANET_FEAT_DIM) float32
+    global_feats.npy           # (N, GLOBAL_FEAT_DIM) float32
+    planet_mask.npy            # (N, MAX_PLANETS) bool
+    my_planet_mask.npy
+    target_mask.npy
+    template_ctx.npy           # (N, MAX_PLANETS, TEMPLATE_CTX_DIM) float32
+    candidate_feats.npy        # (N, MAX_PLANETS, CAND_K, CAND_FEAT_DIM) f32
+    candidate_mask.npy
+    candidate_pid.npy
+    cand_slot_per_src.npy
+    ship_label_per_src.npy
+    ships_bucket_per_src.npy
+    from_multihot.npy
+    target_per_src.npy
+    ships_per_src.npy
+    target_pid_per_src.npy
+    ship_pred_label.npy
+    is_noop.npy                # (N,) bool
+
+Memory: streams row_group by row_group, writes one column at a time using
+`np.memmap` so peak RSS stays under 8GB even for the 19GB train parquet.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import typer
+
+from pipeline.imitation.case11.policy.candidates import CAND_FEAT_DIM, CAND_K
+from pipeline.imitation.case11.policy.featurizer import (
+    GLOBAL_FEAT_DIM,
+    MAX_PLANETS,
+    PLANET_FEAT_DIM,
+)
+from pipeline.imitation.case11.policy.templates import TEMPLATE_CTX_DIM
+
+logger = logging.getLogger(__name__)
+
+
+# (parquet_column, dtype, shape_per_row, optional_default)
+_LIST_COLS: tuple[tuple[str, np.dtype, tuple[int, ...]], ...] = (
+    ("planet_feats", np.dtype(np.float32), (MAX_PLANETS, PLANET_FEAT_DIM)),
+    ("global_feats", np.dtype(np.float32), (GLOBAL_FEAT_DIM,)),
+    ("planet_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
+    ("my_planet_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
+    ("target_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
+    ("template_ctx", np.dtype(np.float32), (MAX_PLANETS, TEMPLATE_CTX_DIM)),
+    ("candidate_feats", np.dtype(np.float32), (MAX_PLANETS, CAND_K, CAND_FEAT_DIM)),
+    ("candidate_mask", np.dtype(np.bool_), (MAX_PLANETS, CAND_K)),
+    ("candidate_pid", np.dtype(np.int64), (MAX_PLANETS, CAND_K)),
+    ("cand_slot_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("ship_label_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("ships_bucket_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("from_multihot", np.dtype(np.bool_), (MAX_PLANETS,)),
+    ("target_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("ships_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("target_pid_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("ship_pred_label", np.dtype(np.float32), (MAX_PLANETS,)),
+)
+
+
+def _flatten_arrow(arr: pa.Array) -> pa.Array:
+    while pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type):
+        arr = arr.flatten()
+    return arr
+
+
+def _chunk_to_numpy(arr: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
+    chunks = arr.chunks if arr.num_chunks > 0 else [arr.combine_chunks()]
+    parts: list[np.ndarray] = []
+    for ch in chunks:
+        flat = _flatten_arrow(ch)
+        parts.append(flat.to_numpy(zero_copy_only=False).astype(dtype, copy=True))
+    return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
+def _default_for_missing(
+    col: str, n_rows: int, dtype: np.dtype, shape_per_row: tuple[int, ...]
+) -> np.ndarray:
+    """Return a default-filled buffer for an optional column not present
+    in the parquet. Matches `_materialise_group` defaults in dataset.py."""
+    out_shape = (n_rows,) + shape_per_row
+    if col == "ship_label_per_src":
+        return np.full(out_shape, -1, dtype=dtype)
+    if col == "ships_bucket_per_src":
+        return np.full(out_shape, -1, dtype=dtype)
+    if col == "from_multihot":
+        return np.zeros(out_shape, dtype=dtype)
+    if col == "target_per_src":
+        return np.full(out_shape, -1, dtype=dtype)
+    if col == "ships_per_src":
+        return np.full(out_shape, -1, dtype=dtype)
+    if col == "target_pid_per_src":
+        return np.full(out_shape, MAX_PLANETS, dtype=dtype)
+    if col == "ship_pred_label":
+        return np.full(out_shape, -1.0, dtype=dtype)
+    if col == "template_ctx":
+        return np.zeros(out_shape, dtype=dtype)
+    raise KeyError(f"no default registered for missing column: {col}")
+
+
+def convert_split(parquet_path: Path, out_dir: Path) -> None:
+    """Stream a single split parquet -> per-column .npy under out_dir."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pf = pq.ParquetFile(str(parquet_path))
+    schema_names = set(pf.schema_arrow.names)
+    n_rows = int(pf.metadata.num_rows)
+    n_groups = pf.num_row_groups
+    logger.info(
+        "convert split=%s rows=%d groups=%d -> %s",
+        parquet_path.name,
+        n_rows,
+        n_groups,
+        out_dir,
+    )
+
+    # Pre-allocate memmaps for each column.
+    memmaps: dict[str, np.memmap] = {}
+    for col, dtype, shape_per_row in _LIST_COLS:
+        out_path = out_dir / f"{col}.npy"
+        # We use np.lib.format.open_memmap which writes the .npy header.
+        memmaps[col] = np.lib.format.open_memmap(
+            str(out_path),
+            mode="w+",
+            dtype=dtype,
+            shape=(n_rows,) + shape_per_row,
+        )
+    # is_noop is primitive (not list-typed).
+    is_noop_mm = np.lib.format.open_memmap(
+        str(out_dir / "is_noop.npy"),
+        mode="w+",
+        dtype=np.dtype(np.bool_),
+        shape=(n_rows,),
+    )
+
+    cursor = 0
+    for g in range(n_groups):
+        table = pf.read_row_group(g)
+        rg_rows = int(pf.metadata.row_group(g).num_rows)
+        if g % 50 == 0 or g == n_groups - 1:
+            logger.info(
+                "  group %d/%d rows %d-%d", g, n_groups, cursor, cursor + rg_rows
+            )
+
+        for col, dtype, shape_per_row in _LIST_COLS:
+            if col not in schema_names:
+                memmaps[col][cursor : cursor + rg_rows] = _default_for_missing(
+                    col, rg_rows, dtype, shape_per_row
+                )
+                continue
+            buf = _chunk_to_numpy(table[col], dtype).reshape((rg_rows,) + shape_per_row)
+            memmaps[col][cursor : cursor + rg_rows] = buf
+
+        is_noop_chunk = np.array(
+            table["is_noop"].to_numpy(zero_copy_only=False),
+            dtype=np.bool_,
+            copy=True,
+        )
+        is_noop_mm[cursor : cursor + rg_rows] = is_noop_chunk
+
+        cursor += rg_rows
+        del table
+    assert cursor == n_rows, f"row mismatch: cursor={cursor} expected={n_rows}"
+
+    # Flush + close memmaps.
+    for mm in memmaps.values():
+        mm.flush()
+        del mm
+    is_noop_mm.flush()
+    del is_noop_mm
+
+    logger.info("done split=%s -> %s", parquet_path.name, out_dir)
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "bot").is_dir() and (parent / ".git").exists():
+            return parent
+    raise RuntimeError(f"repo root not found from {here}")
+
+
+def _abs(p: Path) -> Path:
+    return p if p.is_absolute() else (_repo_root() / p).resolve()
+
+
+app = typer.Typer(add_completion=False, help="case11 parquet -> per-column .npy")
+
+
+@app.command()
+def main(
+    train_parquet: Path = typer.Option(  # noqa: B008
+        Path("data/mart/imitation/case11/train.parquet"), "--train-parquet"
+    ),
+    val_parquet: Path = typer.Option(  # noqa: B008
+        Path("data/mart/imitation/case11/val.parquet"), "--val-parquet"
+    ),
+    out_root: Path = typer.Option(  # noqa: B008
+        Path("data/mart/imitation/case11"), "--out-root"
+    ),
+) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    # Resolve relative to the repo root (one level above `bot/`) so the
+    # script works whether invoked from worktree root or from inside `bot/`.
+    train_parquet = _abs(train_parquet)
+    val_parquet = _abs(val_parquet)
+    out_root = _abs(out_root)
+    convert_split(train_parquet, out_root / "train_npy")
+    convert_split(val_parquet, out_root / "val_npy")
+
+
+if __name__ == "__main__":
+    app()

@@ -516,22 +516,28 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     # iter5: yaml override (default: cuda 上では pin_memory=True、host RAM が
     # 厳しいときは false 推奨)
     pin_memory = bool(train_cfg.get("pin_memory", device.type == "cuda"))
+    num_workers = int(train_cfg.get("num_workers", 0))
+    persistent_workers = (
+        bool(train_cfg.get("persistent_workers", False)) and num_workers > 0
+    )
     train_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         train_ds,
         batch_size=int(train_cfg["batch_size"]),
         shuffle=True,
         collate_fn=collate,
-        num_workers=int(train_cfg.get("num_workers", 0)),
+        num_workers=num_workers,
         generator=g,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
     val_loader: DataLoader = DataLoader(  # type: ignore[type-arg]
         val_ds,
         batch_size=int(train_cfg["batch_size"]),
         shuffle=False,
         collate_fn=collate,
-        num_workers=int(train_cfg.get("num_workers", 0)),
+        num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
 
     head_mode = str(model_cfg.get("head_mode", "candidate"))

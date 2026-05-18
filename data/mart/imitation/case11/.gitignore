@@ -1,2 +1,7 @@
 /train.parquet
 /val.parquet
+/train_npy
+/val_npy
+# pod 側で parquet -> npy 変換するため、npy stub は commit しない
+/train_npy.dvc
+/val_npy.dvc
