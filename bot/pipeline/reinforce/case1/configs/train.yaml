@@ -35,6 +35,7 @@ training:
   ppo_epochs: 2
   minibatch_size: 256
   max_grad_norm: 0.5
+  target_kl: 0.05
   opponent: baseline_v1
 
 output:

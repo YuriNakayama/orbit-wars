@@ -31,6 +31,9 @@ class PPOConfig:
     minibatch_size: int = 64
     max_grad_norm: float = 0.5
     normalize_advantage: bool = True
+    # iter1 (H1): target_kl 平均 approx_kl が閾値超過したら当該 epoch 完走後に
+    # 次 epoch を skip する CleanRL / SB3 標準実装。None で off (旧挙動)。
+    target_kl: float | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,8 @@ class PPOStats:
     approx_kl: float
     bc_kl: float
     clip_fraction: float
+    # iter1 (H1): 実際に走った epoch 数。`cfg.epochs` 未満なら early stop された。
+    epochs_run: float = 0.0
 
 
 def _slice_batch(
@@ -143,8 +148,10 @@ def ppo_update(
     kls: list[float] = []
     bc_kls: list[float] = []
     clips: list[float] = []
+    epochs_run = 0
 
     for _ in range(cfg.epochs):
+        epoch_kls: list[float] = []
         perm = torch.randperm(n)
         for start in range(0, n, cfg.minibatch_size):
             idx = perm[start : start + cfg.minibatch_size]
@@ -182,12 +189,24 @@ def ppo_update(
             with torch.no_grad():
                 approx_kl = (aux["old_log_probs"] - new_lp).mean()
                 clip_frac = (torch.abs(ratio - 1.0) > cfg.clip_eps).float().mean()
+            approx_kl_val = float(approx_kl.item())
             p_losses.append(float(policy_loss.item()))
             v_losses.append(float(value_loss.item()))
             entropies.append(float(entropy_mean.item()))
-            kls.append(float(approx_kl.item()))
+            kls.append(approx_kl_val)
+            epoch_kls.append(approx_kl_val)
             bc_kls.append(float(bc_kl.item()))
             clips.append(float(clip_frac.item()))
+
+        epochs_run += 1
+        # CleanRL/SB3 流: 当該 epoch の minibatch 平均 approx_kl が target_kl
+        # を超えたら次 epoch を skip。clipping 単独では守れない trust region を
+        # hard 保証する PPO 標準テクニック。当該 epoch は完走してから判定する
+        # (途中 break ではなく次の epoch を抑止) ので統計は欠損しない。
+        if cfg.target_kl is not None and epoch_kls:
+            epoch_mean_kl = sum(epoch_kls) / len(epoch_kls)
+            if epoch_mean_kl > cfg.target_kl:
+                break
 
     def _mean(xs: list[float]) -> float:
         return sum(xs) / len(xs) if xs else 0.0
@@ -202,6 +221,7 @@ def ppo_update(
         approx_kl=_mean(kls),
         bc_kl=_mean(bc_kls),
         clip_fraction=_mean(clips),
+        epochs_run=float(epochs_run),
     )
 
 

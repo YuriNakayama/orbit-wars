@@ -163,6 +163,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         weight_decay=float(train_cfg.get("weight_decay", 0.0)),
     )
 
+    target_kl_raw = train_cfg.get("target_kl")
     ppo_cfg = PPOConfig(
         clip_eps=float(train_cfg.get("clip_eps", 0.2)),
         value_coef=float(train_cfg.get("value_coef", 0.5)),
@@ -171,6 +172,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         epochs=int(train_cfg.get("ppo_epochs", 4)),
         minibatch_size=int(train_cfg.get("minibatch_size", 64)),
         max_grad_norm=float(train_cfg.get("max_grad_norm", 0.5)),
+        target_kl=float(target_kl_raw) if target_kl_raw is not None else None,
     )
 
     iterations = int(train_cfg["iterations"])
@@ -225,6 +227,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "approx_kl": float(stats.approx_kl),
             "bc_kl": float(stats.bc_kl),
             "clip_fraction": float(stats.clip_fraction),
+            "epochs_run": float(stats.epochs_run),
         }
         history.append(record)
         logger.info(json.dumps({"event": "iter", **record}))
