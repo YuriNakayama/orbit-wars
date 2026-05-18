@@ -41,7 +41,11 @@ train:
   lr: 3.0e-4
   weight_decay: 1.0e-4
   num_workers: 0
-  pin_memory: true
+  # 2026-05-18 retry #12: pin_memory=true で training loop の RAM が
+  # 5-6 GB/5min で単調増加して 138 GB で OOM (exit 137)。stress test では
+  # dataset 由来 leak は無かったので、pin_memory が CUDA stream 完了後も
+  # pinned tensor を解放しない側の問題と推定。false で経過観測する。
+  pin_memory: false
   loss_weights:
     target: 1.0
     ship: 0.5

@@ -380,24 +380,43 @@ class CaseFourDataset(Dataset[Sample]):
             raise IndexError(idx)
         g, local = self._group_for_row(idx)
         grp = self._get_group(g)
+        # Force a copy on each slice: a torch.from_numpy(view) tensor keeps a
+        # strong reference to the underlying ndarray, which in turn keeps the
+        # whole _GroupArrays alive even after LRU eviction. Once a batch is
+        # pinned + sent to CUDA, pytorch may retain it for a few iterations,
+        # so the views accumulate and RAM climbs without bound (retry #12:
+        # 138GB after 1h). Each per-row slice is ~250 floats (tiny), so the
+        # copy cost is negligible compared to keeping arrow arrays alive.
         return Sample(
-            planet_feats=torch.from_numpy(grp.planet_feats[local]),
-            global_feats=torch.from_numpy(grp.global_feats[local]),
-            planet_mask=torch.from_numpy(grp.planet_mask[local]),
-            my_planet_mask=torch.from_numpy(grp.my_planet_mask[local]),
-            target_mask=torch.from_numpy(grp.target_mask[local]),
-            template_ctx=torch.from_numpy(grp.template_ctx[local]),
-            candidate_feats=torch.from_numpy(grp.candidate_feats[local]),
-            candidate_mask=torch.from_numpy(grp.candidate_mask[local]),
-            candidate_pid=torch.from_numpy(grp.candidate_pid[local]),
-            cand_slot_per_src=torch.from_numpy(grp.cand_slot_per_src[local]),
-            ship_label_per_src=torch.from_numpy(grp.ship_label_per_src[local]),
-            ships_bucket_per_src=torch.from_numpy(grp.ships_bucket_per_src[local]),
-            from_multihot=torch.from_numpy(grp.from_multihot[local]),
-            target_per_src=torch.from_numpy(grp.target_per_src[local]),
-            ships_per_src=torch.from_numpy(grp.ships_per_src[local]),
-            target_pid_per_src=torch.from_numpy(grp.target_pid_per_src[local]),
-            ship_pred_label=torch.from_numpy(grp.ship_pred_label[local]),
+            planet_feats=torch.from_numpy(np.array(grp.planet_feats[local])),
+            global_feats=torch.from_numpy(np.array(grp.global_feats[local])),
+            planet_mask=torch.from_numpy(np.array(grp.planet_mask[local])),
+            my_planet_mask=torch.from_numpy(np.array(grp.my_planet_mask[local])),
+            target_mask=torch.from_numpy(np.array(grp.target_mask[local])),
+            template_ctx=torch.from_numpy(np.array(grp.template_ctx[local])),
+            candidate_feats=torch.from_numpy(
+                np.array(grp.candidate_feats[local])
+            ),
+            candidate_mask=torch.from_numpy(np.array(grp.candidate_mask[local])),
+            candidate_pid=torch.from_numpy(np.array(grp.candidate_pid[local])),
+            cand_slot_per_src=torch.from_numpy(
+                np.array(grp.cand_slot_per_src[local])
+            ),
+            ship_label_per_src=torch.from_numpy(
+                np.array(grp.ship_label_per_src[local])
+            ),
+            ships_bucket_per_src=torch.from_numpy(
+                np.array(grp.ships_bucket_per_src[local])
+            ),
+            from_multihot=torch.from_numpy(np.array(grp.from_multihot[local])),
+            target_per_src=torch.from_numpy(np.array(grp.target_per_src[local])),
+            ships_per_src=torch.from_numpy(np.array(grp.ships_per_src[local])),
+            target_pid_per_src=torch.from_numpy(
+                np.array(grp.target_pid_per_src[local])
+            ),
+            ship_pred_label=torch.from_numpy(
+                np.array(grp.ship_pred_label[local])
+            ),
             is_noop=bool(grp.is_noop[local]),
         )
 
