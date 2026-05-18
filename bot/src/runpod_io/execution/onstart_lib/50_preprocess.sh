@@ -78,13 +78,29 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   # so the dataset's `_npy_dir_for` resolution (sibling of train.parquet)
   # picks them up without code changes.
   MART_CASE_DIR="$(pwd)/data/mart/imitation/<CASE>"
+  echo "[onstart] NPY_OUT_ROOT contents pre-symlink:"
+  ls -la "${NPY_OUT_ROOT}" 2>&1 | head -10 || true
   for split in train val; do
-    if [ -d "${NPY_OUT_ROOT}/${split}_npy" ]; then
-      rm -rf "${MART_CASE_DIR}/${split}_npy" 2>/dev/null || true
-      ln -s "${NPY_OUT_ROOT}/${split}_npy" "${MART_CASE_DIR}/${split}_npy"
-      echo "[onstart] linked ${MART_CASE_DIR}/${split}_npy -> ${NPY_OUT_ROOT}/${split}_npy"
+    SRC="${NPY_OUT_ROOT}/${split}_npy"
+    DST="${MART_CASE_DIR}/${split}_npy"
+    if [ -d "${SRC}" ]; then
+      rm -rf "${DST}" 2>/dev/null || true
+      if ln -s "${SRC}" "${DST}"; then
+        echo "[onstart] linked ${DST} -> ${SRC}"
+      else
+        echo "[onstart] FAILED to symlink ${DST} -> ${SRC}" >&2
+        mark "55_parquet_to_npy_failed"
+        exit 1
+      fi
+    else
+      echo "[onstart] WARN: ${SRC} not a directory" >&2
+      ls -la "$(dirname "${SRC}")" 2>&1 | tail -10 || true
+      mark "55_parquet_to_npy_failed"
+      exit 1
     fi
   done
+  echo "[onstart] MART_CASE_DIR contents post-symlink:"
+  ls -la "${MART_CASE_DIR}" 2>&1 | head -20 || true
   echo "[onstart] step=parquet_to_npy done"
 elif [ -n "<PREPROCESS_CMD>" ]; then
   # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
