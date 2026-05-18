@@ -6,11 +6,34 @@ PREPROCESS_RAN=0
 # the parquet, so we just run the converter once and proceed to train.
 if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   echo "[onstart] step=parquet_to_npy case=<CASE> (skip parquet-skip + dvc-track)"
-  if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> ); then
+  # The .npy files are 100GB+ uncompressed. Container disk on most pods
+  # (RTX 4090 SECURE: ~30GB) is too small, causing SIGBUS on mmap write.
+  # Force out-root onto /persist (network volume, 300GB). Also keep
+  # train_parquet / val_parquet as inputs read from the symlinked mart dir.
+  NPY_OUT_ROOT="/persist/data-mart-imitation/<CASE>"
+  mkdir -p "${NPY_OUT_ROOT}"
+  TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/train.parquet"
+  VAL_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/val.parquet"
+  echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
+  if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> \
+      --train-parquet "${TRAIN_PQ_ABS}" \
+      --val-parquet "${VAL_PQ_ABS}" \
+      --out-root "${NPY_OUT_ROOT}" ); then
     echo "[onstart] step=parquet_to_npy FAILED (exit code != 0)" >&2
     mark "55_parquet_to_npy_failed"
     exit 1
   fi
+  # Symlink the per-split npy dirs back under data/mart/imitation/<CASE>/
+  # so the dataset's `_npy_dir_for` resolution (sibling of train.parquet)
+  # picks them up without code changes.
+  MART_CASE_DIR="$(pwd)/data/mart/imitation/<CASE>"
+  for split in train val; do
+    if [ -d "${NPY_OUT_ROOT}/${split}_npy" ]; then
+      rm -rf "${MART_CASE_DIR}/${split}_npy" 2>/dev/null || true
+      ln -s "${NPY_OUT_ROOT}/${split}_npy" "${MART_CASE_DIR}/${split}_npy"
+      echo "[onstart] linked ${MART_CASE_DIR}/${split}_npy -> ${NPY_OUT_ROOT}/${split}_npy"
+    fi
+  done
   echo "[onstart] step=parquet_to_npy done"
 elif [ -n "<PREPROCESS_CMD>" ]; then
   # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
