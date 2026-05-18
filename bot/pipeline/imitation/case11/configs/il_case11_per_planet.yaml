@@ -37,7 +37,10 @@ model:
 train:
   case: case11
   batch_size: 512
-  epochs: 45
+  # 2026-05-18 retry #13: lazy dataset で 1 epoch あたり ~2h かかる
+  # (5.36M rows / 512 batch = 10.5k batches × IO overhead)。45 epoch は
+  # 90h で非現実的なので 10 epoch + patience=3 に削って早期収束 or 中断。
+  epochs: 10
   lr: 3.0e-4
   weight_decay: 1.0e-4
   num_workers: 0
@@ -53,7 +56,7 @@ train:
     label_smoothing: 0.0
   scheduler:
     type: cosine_warmup
-    t_max: 45
+    t_max: 10
     eta_min: 1.0e-5
     warmup_epochs: 3
     warmup_start_factor: 0.1
@@ -61,7 +64,7 @@ train:
   best_metric_mode: max
   early_stop:
     metric: val_target_fire_acc
-    patience: 10
+    patience: 3
     mode: max
   grad_clip_max_norm: 1.0
   ema:
