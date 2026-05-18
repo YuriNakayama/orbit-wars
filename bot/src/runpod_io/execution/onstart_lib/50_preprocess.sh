@@ -50,14 +50,30 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   echo "[onstart] /persist after cleanup:"
   df -h /persist 2>&1 | tail -2 || true
   echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
+  # parquet_to_npy takes ~14min and emits no marker by itself, which
+  # tickles the 900s STALL_THRESHOLD watcher and gets the pod killed
+  # mid-conversion (observed retry on commit 9584b73). Run a background
+  # heartbeat loop that emits a step=54_parquet_to_npy_heartbeat_N marker
+  # every 4min so the watcher sees ongoing progress.
+  mark "54_parquet_to_npy_started"
+  (
+    n=1
+    while sleep 240; do
+      mark "54_parquet_to_npy_heartbeat_${n}"
+      n=$((n + 1))
+    done
+  ) &
+  HB_PID=$!
   if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> \
       --train-parquet "${TRAIN_PQ_ABS}" \
       --val-parquet "${VAL_PQ_ABS}" \
       --out-root "${NPY_OUT_ROOT}" ); then
+    kill "${HB_PID}" 2>/dev/null || true
     echo "[onstart] step=parquet_to_npy FAILED (exit code != 0)" >&2
     mark "55_parquet_to_npy_failed"
     exit 1
   fi
+  kill "${HB_PID}" 2>/dev/null || true
   # Symlink the per-split npy dirs back under data/mart/imitation/<CASE>/
   # so the dataset's `_npy_dir_for` resolution (sibling of train.parquet)
   # picks them up without code changes.
