@@ -114,19 +114,30 @@ if [ "<CASE>" = "case0" ]; then
   echo "[onstart] case0_smoke contents:"
   ls -la data/lake/case0_smoke/ 2>&1 | head -5
 else
-  # 診断: cwd と repo の dvc-tracked 状態を log に残す
-  echo "[onstart] dvc pull diagnostic:"
-  ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
-  # set -e は外しているので明示的に exit code を確認
-  if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches.dvc; then
-    echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
-    echo "[onstart] dvc pull diagnostic listing:"
-    ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
-    ls -la 2>&1 | head -10
-    git status --short 2>&1 | head -10
-    git log --oneline -3 2>&1 | head -3
-    mark "45_dvc_pull_kaggle_failed"
-    exit 1
+  # mart-only path: preprocess を pod 側で走らせない設計の case (mart は
+  # 事前 push 済) では kaggle_episodes (60GB+, 62k hive parquet files) の
+  # pull は不要。skip して直接 case 別 mart targeted pull に進む。
+  # PREPROCESS_CMD は instance.render_onstart が CASE_DEFAULTS の
+  # preprocess_cmd を埋め込む。空文字なら "mart 事前 push 済" と判断。
+  # 2026-05-18 case11 retry で /persist のキャッシュ不在 + 60GB pull が
+  # hang して 40_uv_sync_done で stall 連発した trap への対処。
+  if [ -z "<PREPROCESS_CMD>" ]; then
+    echo "[onstart] dvc pull SKIP kaggle_episodes (PREPROCESS_CMD empty; mart-only path)"
+  else
+    # 診断: cwd と repo の dvc-tracked 状態を log に残す
+    echo "[onstart] dvc pull diagnostic:"
+    ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
+    # set -e は外しているので明示的に exit code を確認
+    if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches.dvc; then
+      echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
+      echo "[onstart] dvc pull diagnostic listing:"
+      ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
+      ls -la 2>&1 | head -10
+      git status --short 2>&1 | head -10
+      git log --oneline -3 2>&1 | head -3
+      mark "45_dvc_pull_kaggle_failed"
+      exit 1
+    fi
   fi
   # iter15 fix (case9 retry3 2026-05-06 12:00): `dvc pull --allow-missing` は
   # graph 解析で衝突 (case8 outs vs .dvc 重複) を検出すると case9 parquet を
