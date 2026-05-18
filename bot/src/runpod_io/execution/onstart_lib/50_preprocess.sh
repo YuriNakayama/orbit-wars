@@ -14,6 +14,20 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   mkdir -p "${NPY_OUT_ROOT}"
   TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/train.parquet"
   VAL_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/val.parquet"
+  # Cleanup stale .npy directories from prior runs. The network volume
+  # is shared across runs (orbit_wars 300GB), so the previous run's
+  # train_npy (~174GB) lingers and triggers "Disk quota exceeded" on
+  # the next conversion (observed retry #16 commit 7324d4f).
+  echo "[onstart] /persist before cleanup:"
+  df -h /persist 2>&1 | tail -2 || true
+  for split in train val; do
+    if [ -d "${NPY_OUT_ROOT}/${split}_npy" ]; then
+      echo "[onstart] cleaning stale ${NPY_OUT_ROOT}/${split}_npy"
+      rm -rf "${NPY_OUT_ROOT}/${split}_npy"
+    fi
+  done
+  echo "[onstart] /persist after cleanup:"
+  df -h /persist 2>&1 | tail -2 || true
   echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
   if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> \
       --train-parquet "${TRAIN_PQ_ABS}" \
