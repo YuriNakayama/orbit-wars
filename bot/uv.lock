@@ -2553,6 +2553,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "dvc", extra = ["s3"] },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "kaggle" },
     { name = "kaggle-environments" },
     { name = "numpy" },
@@ -2603,6 +2605,8 @@ lint = [
 [package.metadata]
 requires-dist = [
     { name = "dvc", extras = ["s3"], specifier = ">=3.55" },
+    { name = "jax", specifier = ">=0.4.30" },
+    { name = "jaxlib", specifier = ">=0.4.30" },
     { name = "kaggle", specifier = ">=1.6.17" },
     { name = "kaggle-environments", specifier = ">=1.17.0" },
     { name = "numpy", specifier = ">=2.2.6" },
