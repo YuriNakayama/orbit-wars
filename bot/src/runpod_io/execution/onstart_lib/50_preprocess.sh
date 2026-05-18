@@ -15,17 +15,28 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/train.parquet"
   VAL_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/val.parquet"
   # Cleanup stale .npy directories from prior runs. The network volume
-  # is shared across runs (orbit_wars 300GB), so the previous run's
-  # train_npy (~174GB) lingers and triggers "Disk quota exceeded" on
-  # the next conversion (observed retry #16 commit 7324d4f).
+  # has a 300GB quota that is shared across runs (orbit_wars), so the
+  # previous run's train_npy (~174GB) lingers and triggers "Disk quota
+  # exceeded" on the next conversion (observed retry #16 commit 7324d4f).
   echo "[onstart] /persist before cleanup:"
   df -h /persist 2>&1 | tail -2 || true
+  echo "[onstart] /persist usage breakdown (top-level dirs, slow):"
+  du -sh /persist/* 2>/dev/null | sort -h | tail -20 || true
+  # Drop the per-case .npy directories and any other lingering imitation
+  # converters' outputs to maximize free quota for the upcoming write.
   for split in train val; do
     if [ -d "${NPY_OUT_ROOT}/${split}_npy" ]; then
       echo "[onstart] cleaning stale ${NPY_OUT_ROOT}/${split}_npy"
       rm -rf "${NPY_OUT_ROOT}/${split}_npy"
     fi
   done
+  # Also remove any sibling case_npy dirs from earlier experiments since
+  # they're regenerable from parquet (~191GB recoverable per case).
+  find /persist/data-mart-imitation -maxdepth 2 -type d -name "*_npy" 2>/dev/null \
+    | while read -r d; do
+        echo "[onstart] cleaning stale npy dir ${d}"
+        rm -rf "${d}"
+      done
   echo "[onstart] /persist after cleanup:"
   df -h /persist 2>&1 | tail -2 || true
   echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
