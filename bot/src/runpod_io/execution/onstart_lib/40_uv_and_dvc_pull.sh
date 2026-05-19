@@ -47,12 +47,15 @@ if [ "${SKIP_UV_SYNC}" -eq 0 ]; then
   if [ ! -x bot/.venv/bin/python ]; then
     echo "[onstart] uv sync: detected broken venv (bin/python missing); resetting"
     rm -rf bot/.venv 2>/dev/null || true
-    if [ -d /persist/uv-venv-bot ]; then
-      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
-        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
-        || true
-      ln -sfn /persist/uv-venv-bot bot/.venv
-    fi
+    # /persist/uv-venv-bot 自体が消えているケースもある (2026-05-19 commit
+    # cba789f で observed: `ln: failed to create symbolic link 'bot/.venv':
+    # No such file or directory`)。-d check 後の else 分岐が無いと symlink
+    # を張らず uv sync が暗黙の path に書こうとして即死する。
+    mkdir -p /persist/uv-venv-bot
+    find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
+      || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
+      || true
+    ln -sfn /persist/uv-venv-bot bot/.venv
   fi
   for attempt in 1 2 3; do
     # --frozen は --locked より厳格 (lock の依存解決を一切再計算しない)。
