@@ -50,6 +50,33 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   echo "[onstart] /persist after cleanup:"
   df -h /persist 2>&1 | tail -2 || true
   echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
+  # iter cb70d34 trap: bot/.venv/bin/python disappeared between
+  # 40_uv_sync_done and the parquet_to_npy command despite the early
+  # SKIP path proving it existed. MFS appears to garbage-collect symlink
+  # targets across pod boundaries. Re-validate and recover via uv sync.
+  if [ ! -x bot/.venv/bin/python ]; then
+    echo "[onstart] WARN: bot/.venv/bin/python missing pre-parquet_to_npy; force uv sync" >&2
+    ls -la bot/.venv 2>&1 | head -3 || true
+    if [ -L bot/.venv ]; then
+      ls -la "$(readlink -f bot/.venv)" 2>&1 | head -5 || true
+    fi
+    rm -rf bot/.venv 2>/dev/null || true
+    if [ -d /persist/uv-venv-bot ]; then
+      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null || true
+      ln -sfn /persist/uv-venv-bot bot/.venv
+    fi
+    if ! uv sync --frozen --no-dev --directory bot; then
+      echo "[onstart] uv sync recovery FAILED" >&2
+      mark "55_parquet_to_npy_failed"
+      exit 1
+    fi
+    if [ ! -x bot/.venv/bin/python ]; then
+      echo "[onstart] uv sync recovery did not produce bin/python" >&2
+      mark "55_parquet_to_npy_failed"
+      exit 1
+    fi
+    echo "[onstart] uv sync recovery complete"
+  fi
   # parquet_to_npy takes ~14min and emits no marker by itself, which
   # tickles the 900s STALL_THRESHOLD watcher and gets the pod killed
   # mid-conversion (observed retry on commit 9584b73). Run a background
