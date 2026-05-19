@@ -298,6 +298,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
     },
+    # reinforce_case1_bench_workers: short 5-iter run to measure rollout
+    # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
+    # Same hyperparams, only iterations + rollout_workers differ.
+    "reinforce_case1_bench_workers": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_bench_workers",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/bench_workers.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # bench_jax_env_gpu: GPU benchmark for the JAX env. Not a training case.
     # Installs jax[cuda12] inside the pod, runs vendor vs jax(cpu/gpu) timings,
     # writes bench_results.json. Uses family=reinforce so the onstart pipeline

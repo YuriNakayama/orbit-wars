@@ -182,6 +182,8 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     shaping_coef = float(train_cfg.get("shaping_coef", 0.001))
     opponent_name = str(train_cfg.get("opponent", "random_noop"))
     opponent = _resolve_opponent(opponent_name)
+    # 0 → auto (cpu_count() - 1), 1 → serial. Default serial for backward compat.
+    rollout_workers = int(train_cfg.get("rollout_workers", 1))
 
     logger.info(
         json.dumps(
@@ -193,6 +195,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 "opponent": opponent_name,
                 "bc_warmstart": bc_path is not None,
                 "kl_beta": ppo_cfg.kl_beta,
+                "rollout_workers": rollout_workers,
             }
         )
     )
@@ -213,6 +216,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             gamma=gamma,
             gae_lambda=gae_lambda,
             shaping_coef=shaping_coef,
+            num_workers=rollout_workers,
         )
         stats = ppo_update(model, bc_reference, optimizer, rollout, ppo_cfg)
         wr = _win_rate(rollout.episode_outcomes)
