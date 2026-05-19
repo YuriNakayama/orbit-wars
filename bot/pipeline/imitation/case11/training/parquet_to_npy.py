@@ -184,32 +184,58 @@ def convert_split(parquet_path: Path, out_dir: Path) -> None:
     is_noop_mm.flush()
     del is_noop_mm
 
-    # Force fsync to commit dirty pages to the (possibly network-attached)
-    # filesystem. Without this, mfs/NFS may delay-commit and the .npy files
-    # appear absent in subsequent ls calls (observed retry on 94fe40f).
+    # Force fsync per-file. mm.flush() only msync()s the memory mapping
+    # but on MFS the inode metadata sync is on a separate code path —
+    # observed (commit 2cb655d) that planet_feats.npy / global_feats.npy
+    # / target_pid_per_src.npy / ship_pred_label.npy / is_noop.npy were
+    # absent in Path.exists() check ~1s after flush. Open each file by
+    # fd and fsync to force the metadata flush.
+    expected_files = [f"{col}.npy" for col, _dt, _sh in _LIST_COLS] + ["is_noop.npy"]
+    for name in expected_files:
+        p = out_dir / name
+        try:
+            with open(p, "rb+") as f:
+                os.fsync(f.fileno())
+        except FileNotFoundError:
+            logger.warning("fsync skip: %s not present yet (will retry)", p)
+    # And a global sync as belt-and-braces.
     os.sync()
 
     # Verify presence + size so downstream `[ -d "$out_dir" ]` checks won't
     # silently see an empty directory. If a file is missing or zero-byte,
-    # raise to make the converter fail loud rather than letting train.py
-    # discover the mismatch.
-    logger.info("verifying outputs in %s", out_dir)
-    expected_files = [f"{col}.npy" for col, _dt, _sh in _LIST_COLS] + ["is_noop.npy"]
-    missing: list[str] = []
-    zero_byte: list[str] = []
-    for name in expected_files:
-        p = out_dir / name
-        if not p.exists():
-            missing.append(name)
-            continue
-        sz = p.stat().st_size
-        if sz == 0:
-            zero_byte.append(name)
-            continue
-        logger.info("  %s: %.1f MB", name, sz / 1e6)
-    if missing or zero_byte:
+    # retry the verify after a short sleep to let MFS metadata catch up
+    # (commit 2cb655d observed 5 files missing right after flush despite
+    # os.sync). Failure after retries raises RuntimeError.
+    import time
+    for attempt in range(1, 4):
+        logger.info("verifying outputs in %s (attempt %d/3)", out_dir, attempt)
+        missing: list[str] = []
+        zero_byte: list[str] = []
+        for name in expected_files:
+            p = out_dir / name
+            if not p.exists():
+                missing.append(name)
+                continue
+            sz = p.stat().st_size
+            if sz == 0:
+                zero_byte.append(name)
+                continue
+        if not (missing or zero_byte):
+            for name in expected_files:
+                sz = (out_dir / name).stat().st_size
+                logger.info("  %s: %.1f MB", name, sz / 1e6)
+            break
+        logger.warning(
+            "verify attempt %d/3 found missing=%d zero=%d; sleeping 10s and retrying",
+            attempt,
+            len(missing),
+            len(zero_byte),
+        )
+        os.sync()
+        time.sleep(10)
+    else:
         raise RuntimeError(
-            f"verify failed: missing={missing} zero_byte={zero_byte} out_dir={out_dir}"
+            f"verify failed after 3 attempts: missing={missing} zero_byte={zero_byte} out_dir={out_dir}"
         )
 
     logger.info("done split=%s -> %s", parquet_path.name, out_dir)
