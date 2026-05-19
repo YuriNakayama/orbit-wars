@@ -298,6 +298,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
     },
+    # bench_jax_env_gpu: GPU benchmark for the JAX env. Not a training case.
+    # Installs jax[cuda12] inside the pod, runs vendor vs jax(cpu/gpu) timings,
+    # writes bench_results.json. Uses family=reinforce so the onstart pipeline
+    # builds the Rust simulator and pulls BC weights (~5 min overhead, harmless
+    # — we just need the JAX env imports to resolve, plus a default-shape run dir).
+    "bench_jax_env_gpu": {
+        "family": "reinforce",
+        "stage": "bench_jax_env_gpu",
+        "train_module": "pipeline._bench.jax_env_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
@@ -319,6 +332,8 @@ def case_subdir(case: str) -> str:
         return "case10"
     if case.startswith("reinforce_"):
         return case[len("reinforce_") :]
+    if case.startswith("bench_"):
+        return case[len("bench_") :]
     return case
 
 
