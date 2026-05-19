@@ -192,6 +192,16 @@ def _worker_init(model_cfg_dict: dict[str, Any], state_dict_bytes: bytes) -> Non
     torch.set_num_threads(1)
 
 
+def _worker_update_state_dict(state_dict_bytes: bytes) -> None:
+    """Reload model weights without rebuilding the worker. Called between iters."""
+    import io
+
+    assert _WORKER_MODEL is not None, "worker not initialized"
+    state_dict = torch.load(io.BytesIO(state_dict_bytes), map_location="cpu")
+    _WORKER_MODEL.load_state_dict(state_dict)
+    _WORKER_MODEL.eval()
+
+
 def _worker_run(
     args: tuple[str, int, int, float],
 ) -> _EpisodeResult:
@@ -216,6 +226,54 @@ def _worker_run(
         seat=seat,
         shaping_coef=shaping_coef,
     )
+
+
+class RolloutWorkerPool:
+    """Persistent multiprocessing pool for rollout collection.
+
+    Created once per training run; reused across all `collect_rollout` calls.
+    Eliminates the per-iter pool startup cost (kaggle_environments import +
+    state_dict deserialize × num_workers) that made the spawn-each-time
+    implementation 1.7× slower than serial on a single A4500 host.
+
+    Use as a context manager so the pool is cleanly closed on exit.
+    """
+
+    def __init__(self, model: ActorCritic, num_workers: int) -> None:
+        cfg_dict, sd_bytes = _serialize_model(model)
+        ctx = get_context("spawn")
+        self._pool = ctx.Pool(
+            processes=num_workers,
+            initializer=_worker_init,
+            initargs=(cfg_dict, sd_bytes),
+        )
+        self._num_workers = num_workers
+
+    @property
+    def num_workers(self) -> int:
+        return self._num_workers
+
+    def update_model(self, model: ActorCritic) -> None:
+        """Broadcast new weights to every worker. Called once per training iter."""
+        _, sd_bytes = _serialize_model(model)
+        # Run the update on every worker. Use a list with one task per worker
+        # so each one runs the callable; map distributes across workers.
+        self._pool.map(_worker_update_state_dict, [sd_bytes] * self._num_workers)
+
+    def run(
+        self, packed_args: list[tuple[str, int, int, float]]
+    ) -> list[_EpisodeResult]:
+        return self._pool.map(_worker_run, packed_args)
+
+    def close(self) -> None:
+        self._pool.close()
+        self._pool.join()
+
+    def __enter__(self) -> "RolloutWorkerPool":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 def _serialize_model(model: ActorCritic) -> tuple[dict[str, Any], bytes]:
@@ -260,6 +318,14 @@ def _resolve_opponent_name(opponent: OpponentAgent) -> str:
     )
 
 
+def resolve_num_workers(num_workers: int, num_episodes: int) -> int:
+    """Translate `num_workers <= 0` (auto) to cpu_count - 1, capped at episodes."""
+    if num_workers <= 0:
+        cpu = os.cpu_count() or 1
+        num_workers = max(1, cpu - 1)
+    return min(num_workers, num_episodes)
+
+
 def collect_rollout(
     model: ActorCritic,
     opponent: OpponentAgent,
@@ -270,21 +336,16 @@ def collect_rollout(
     gae_lambda: float = 0.95,
     shaping_coef: float = 0.001,
     seat_swap: bool = True,
-    num_workers: int = 1,
+    worker_pool: "RolloutWorkerPool | None" = None,
 ) -> RolloutBatch:
     """Collect on-policy rollouts.
 
-    `num_workers > 1` enables a multiprocessing pool; episode order is preserved
-    so seat_swap semantics match the serial path. `num_workers <= 0` is treated
-    as `os.cpu_count() - 1` (capped at `num_episodes`).
+    When `worker_pool` is provided, episodes are dispatched across the
+    persistent pool (model weights must already be synced via
+    `worker_pool.update_model(model)` before this call). Otherwise the rollout
+    runs serially in the calling process.
     """
     model.eval()
-
-    # Resolve effective worker count.
-    if num_workers <= 0:
-        cpu = os.cpu_count() or 1
-        num_workers = max(1, cpu - 1)
-    num_workers = min(num_workers, num_episodes)
 
     ep_args = [
         (
@@ -295,7 +356,7 @@ def collect_rollout(
         for ep_idx in range(num_episodes)
     ]
 
-    if num_workers <= 1:
+    if worker_pool is None:
         results = [
             _run_one_episode(
                 model,
@@ -308,17 +369,8 @@ def collect_rollout(
         ]
     else:
         opponent_name = _resolve_opponent_name(opponent)
-        cfg_dict, sd_bytes = _serialize_model(model)
-        # `spawn` keeps workers independent of the parent's import state — safer
-        # than `fork` when torch is involved on macOS/Linux.
-        ctx = get_context("spawn")
-        with ctx.Pool(
-            processes=num_workers,
-            initializer=_worker_init,
-            initargs=(cfg_dict, sd_bytes),
-        ) as pool:
-            packed = [(opponent_name, es, st, sc) for es, st, sc in ep_args]
-            results = pool.map(_worker_run, packed)
+        packed = [(opponent_name, es, st, sc) for es, st, sc in ep_args]
+        results = worker_pool.run(packed)
 
     # Aggregate in ep_idx order; this preserves seat_swap semantics.
     buf: dict[str, list[torch.Tensor]] = {
@@ -388,4 +440,9 @@ def collect_rollout(
     )
 
 
-__all__ = ["RolloutBatch", "collect_rollout"]
+__all__ = [
+    "RolloutBatch",
+    "RolloutWorkerPool",
+    "collect_rollout",
+    "resolve_num_workers",
+]

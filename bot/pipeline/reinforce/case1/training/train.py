@@ -37,7 +37,11 @@ from pipeline.reinforce.case1.policy.model import (
 )
 from pipeline.reinforce.case1.training.env import OpponentAgent, random_noop_agent
 from pipeline.reinforce.case1.training.ppo import PPOConfig, ppo_update
-from pipeline.reinforce.case1.training.rollout import collect_rollout
+from pipeline.reinforce.case1.training.rollout import (
+    RolloutWorkerPool,
+    collect_rollout,
+    resolve_num_workers,
+)
 from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)
@@ -207,38 +211,62 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     best_win_rate = -1.0
     weights_path = run_dir / cfg["output"].get("weights_filename", "best.pt")
 
-    for it in range(iterations):
-        rollout = collect_rollout(
-            model,
-            opponent,
-            episodes_per_iter,
-            seed=seed + it * 10_000,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
-            shaping_coef=shaping_coef,
-            num_workers=rollout_workers,
+    # Persistent worker pool: built once, weights re-broadcast each iter.
+    # `num_workers <= 1` keeps the pool nil → serial path inside collect_rollout.
+    effective_workers = resolve_num_workers(rollout_workers, episodes_per_iter)
+    worker_pool: RolloutWorkerPool | None = (
+        RolloutWorkerPool(model, effective_workers) if effective_workers > 1 else None
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "worker_pool",
+                "requested": rollout_workers,
+                "effective": effective_workers,
+                "enabled": worker_pool is not None,
+            }
         )
-        stats = ppo_update(model, bc_reference, optimizer, rollout, ppo_cfg)
-        wr = _win_rate(rollout.episode_outcomes)
-        total_episodes += episodes_per_iter
-        record = {
-            "iter": float(it),
-            "transitions": float(rollout.planet_feats.shape[0]),
-            "win_rate": float(wr),
-            "policy_loss": float(stats.policy_loss),
-            "value_loss": float(stats.value_loss),
-            "entropy": float(stats.entropy),
-            "approx_kl": float(stats.approx_kl),
-            "bc_kl": float(stats.bc_kl),
-            "clip_fraction": float(stats.clip_fraction),
-            "epochs_run": float(stats.epochs_run),
-        }
-        history.append(record)
-        logger.info(json.dumps({"event": "iter", **record}))
-        _mark_progress(f"30_train_iter_{it:04d}")
-        if wr >= best_win_rate:
-            best_win_rate = wr
-            torch.save(model.state_dict(), weights_path)
+    )
+
+    try:
+        for it in range(iterations):
+            # Sync latest weights to all workers before each rollout.
+            if worker_pool is not None:
+                worker_pool.update_model(model)
+            rollout = collect_rollout(
+                model,
+                opponent,
+                episodes_per_iter,
+                seed=seed + it * 10_000,
+                gamma=gamma,
+                gae_lambda=gae_lambda,
+                shaping_coef=shaping_coef,
+                worker_pool=worker_pool,
+            )
+            stats = ppo_update(model, bc_reference, optimizer, rollout, ppo_cfg)
+            wr = _win_rate(rollout.episode_outcomes)
+            total_episodes += episodes_per_iter
+            record = {
+                "iter": float(it),
+                "transitions": float(rollout.planet_feats.shape[0]),
+                "win_rate": float(wr),
+                "policy_loss": float(stats.policy_loss),
+                "value_loss": float(stats.value_loss),
+                "entropy": float(stats.entropy),
+                "approx_kl": float(stats.approx_kl),
+                "bc_kl": float(stats.bc_kl),
+                "clip_fraction": float(stats.clip_fraction),
+                "epochs_run": float(stats.epochs_run),
+            }
+            history.append(record)
+            logger.info(json.dumps({"event": "iter", **record}))
+            _mark_progress(f"30_train_iter_{it:04d}")
+            if wr >= best_win_rate:
+                best_win_rate = wr
+                torch.save(model.state_dict(), weights_path)
+    finally:
+        if worker_pool is not None:
+            worker_pool.close()
 
     runtime = time.perf_counter() - started
     _mark_progress("50_save")

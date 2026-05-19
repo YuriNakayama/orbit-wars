@@ -23,6 +23,7 @@ import sys
 import time
 from io import StringIO
 from pathlib import Path
+from typing import Any
 
 import torch
 import typer
@@ -44,13 +45,29 @@ from pipeline.reinforce.case1.training.ppo import (  # noqa: E402
     PPOConfig,
     ppo_update,
 )
-from pipeline.reinforce.case1.training.rollout import collect_rollout  # noqa: E402
+from pipeline.reinforce.case1.training.rollout import (  # noqa: E402
+    RolloutWorkerPool,
+    collect_rollout,
+    resolve_num_workers,
+)
 
 app = typer.Typer(add_completion=False)
 logger = logging.getLogger(__name__)
 
+_DEFAULT_CONFIG = typer.Option(
+    Path("pipeline/reinforce/case1/configs/cpu_stable_v1.yaml"),
+    "--config",
+    help="Path to PPO YAML config (relative to bot/).",
+)
+_DEFAULT_EPISODES = typer.Option(4, help="Episodes to roll out (smaller = faster)")
+_DEFAULT_NO_BC = typer.Option(
+    True, help="Skip BC warm-start to isolate env/forward costs"
+)
+_DEFAULT_SKIP_UPDATE = typer.Option(False, help="Skip PPO update; measure rollout only")
+_DEFAULT_NUM_WORKERS = typer.Option(1, help="Rollout worker count (1=serial, 0=auto)")
 
-def _build_model(cfg: dict) -> ActorCritic:
+
+def _build_model(cfg: dict[str, Any]) -> ActorCritic:
     m = cfg["model"]
     model_cfg = ModelConfig(
         hidden=int(m.get("hidden", 192)),
@@ -66,19 +83,11 @@ def _build_model(cfg: dict) -> ActorCritic:
 
 @app.command()
 def main(
-    config: Path = typer.Option(
-        Path("pipeline/reinforce/case1/configs/cpu_stable_v1.yaml")
-    ),
-    episodes: int = typer.Option(4, help="Episodes to roll out (smaller = faster)"),
-    no_bc: bool = typer.Option(
-        True, help="Skip BC warm-start to isolate env/forward costs"
-    ),
-    skip_update: bool = typer.Option(
-        False, help="Skip PPO update; measure rollout only"
-    ),
-    num_workers: int = typer.Option(
-        1, help="Rollout worker count (1=serial, 0=auto)"
-    ),
+    config: Path = _DEFAULT_CONFIG,
+    episodes: int = _DEFAULT_EPISODES,
+    no_bc: bool = _DEFAULT_NO_BC,
+    skip_update: bool = _DEFAULT_SKIP_UPDATE,
+    num_workers: int = _DEFAULT_NUM_WORKERS,
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -136,26 +145,36 @@ def main(
         gamma=gamma,
         gae_lambda=gae_lambda,
         shaping_coef=shaping_coef,
-        num_workers=1,
+        worker_pool=None,
     )
     logger.info("warmup done; starting profiled rollout")
 
-    profiler = cProfile.Profile()
-    profiler.enable()
-    t0 = time.perf_counter()
-
-    rollout_t0 = time.perf_counter()
-    rollout = collect_rollout(
-        model,
-        opponent,
-        episodes,
-        seed=0,
-        gamma=gamma,
-        gae_lambda=gae_lambda,
-        shaping_coef=shaping_coef,
-        num_workers=num_workers,
+    effective_workers = resolve_num_workers(num_workers, episodes)
+    worker_pool: RolloutWorkerPool | None = (
+        RolloutWorkerPool(model, effective_workers) if effective_workers > 1 else None
     )
-    rollout_wall = time.perf_counter() - rollout_t0
+    if worker_pool is not None:
+        worker_pool.update_model(model)
+    try:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        t0 = time.perf_counter()
+
+        rollout_t0 = time.perf_counter()
+        rollout = collect_rollout(
+            model,
+            opponent,
+            episodes,
+            seed=0,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            shaping_coef=shaping_coef,
+            worker_pool=worker_pool,
+        )
+        rollout_wall = time.perf_counter() - rollout_t0
+    finally:
+        if worker_pool is not None:
+            worker_pool.close()
 
     update_wall = 0.0
     if not skip_update:
@@ -174,10 +193,17 @@ def main(
 
     transitions = rollout.planet_feats.shape[0]
     logger.info("=== wall-clock breakdown ===")
-    logger.info("rollout:    %6.2fs (%5.1f%%, %d transitions, %.3fs/ep)",
-                rollout_wall, 100 * rollout_wall / total, transitions, rollout_wall / episodes)
+    logger.info(
+        "rollout:    %6.2fs (%5.1f%%, %d transitions, %.3fs/ep)",
+        rollout_wall,
+        100 * rollout_wall / total,
+        transitions,
+        rollout_wall / episodes,
+    )
     if not skip_update:
-        logger.info("ppo update: %6.2fs (%5.1f%%)", update_wall, 100 * update_wall / total)
+        logger.info(
+            "ppo update: %6.2fs (%5.1f%%)", update_wall, 100 * update_wall / total
+        )
     logger.info("total:      %6.2fs", total)
 
     # Top 30 by cumulative time
