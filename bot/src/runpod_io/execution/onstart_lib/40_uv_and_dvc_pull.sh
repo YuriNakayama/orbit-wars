@@ -192,7 +192,13 @@ else
   # が graph 整合のため targeted pull で取得した case 別 parquet を削除して
   # しまうケースを観測 (`D data/mart/imitation/case9/train.parquet`)。
   # --allow-missing 後に case 別 mart parquet を**再 pull**して復活させる。
-  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
+  #
+  # 2026-05-19 case11 retry trap: PREPROCESS_CMD empty path では full pull
+  # を SKIP しているので「`--allow-missing` が消した」前提が成立しない。
+  # しかし MFS の遅延コミットで file 存在 check が false negative になり、
+  # 不要な re-pull が hang する。empty path では iter17 をスキップする。
+  if [ -n "<PREPROCESS_CMD>" ] && [[ "<PREPROCESS_CMD>" != *"parquet_to_npy"* ]] \
+     && [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
      && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
     NEED_REPULL=0
     [ ! -f "${CASE_MART_DIR}/train.parquet" ] && NEED_REPULL=1
