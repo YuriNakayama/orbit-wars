@@ -33,6 +33,7 @@ Memory: streams row_group by row_group, writes one column at a time using
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -182,6 +183,34 @@ def convert_split(parquet_path: Path, out_dir: Path) -> None:
         del mm
     is_noop_mm.flush()
     del is_noop_mm
+
+    # Force fsync to commit dirty pages to the (possibly network-attached)
+    # filesystem. Without this, mfs/NFS may delay-commit and the .npy files
+    # appear absent in subsequent ls calls (observed retry on 94fe40f).
+    os.sync()
+
+    # Verify presence + size so downstream `[ -d "$out_dir" ]` checks won't
+    # silently see an empty directory. If a file is missing or zero-byte,
+    # raise to make the converter fail loud rather than letting train.py
+    # discover the mismatch.
+    logger.info("verifying outputs in %s", out_dir)
+    expected_files = [f"{col}.npy" for col, _dt, _sh in _LIST_COLS] + ["is_noop.npy"]
+    missing: list[str] = []
+    zero_byte: list[str] = []
+    for name in expected_files:
+        p = out_dir / name
+        if not p.exists():
+            missing.append(name)
+            continue
+        sz = p.stat().st_size
+        if sz == 0:
+            zero_byte.append(name)
+            continue
+        logger.info("  %s: %.1f MB", name, sz / 1e6)
+    if missing or zero_byte:
+        raise RuntimeError(
+            f"verify failed: missing={missing} zero_byte={zero_byte} out_dir={out_dir}"
+        )
 
     logger.info("done split=%s -> %s", parquet_path.name, out_dir)
 
