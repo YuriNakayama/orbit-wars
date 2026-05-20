@@ -1639,7 +1639,17 @@ def destroy_cmd(
     result = terminate_pod(runpod_sdk, pod_id)
     if result.terminated:
         console.print(f"[green]terminated[/] pod={pod_id}")
-        update_run_json(run_dir, status="destroyed_manual")
+        # interactive mode では train を実行しないため run.json はローカルに
+        # 存在しないことが多い。oneshot mode でも DVC pull 前に terminate した
+        # 場合は同様。書き込めなければ status 記録は諦め、terminate は成功扱い。
+        run_json_path = run_dir / "run.json"
+        if run_json_path.is_file():
+            update_run_json(run_dir, status="destroyed_manual")
+            console.print("[dim]run.json status -> destroyed_manual[/]")
+        else:
+            console.print(
+                "[dim]run.json not present (interactive mode); skipping status update[/]"
+            )
     else:
         console.print(
             f"[red]failed to terminate[/] pod={pod_id} error={result.error!r}"

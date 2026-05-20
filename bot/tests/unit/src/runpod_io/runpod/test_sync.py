@@ -32,7 +32,8 @@ def test_build_sync_plan_push_direct() -> None:
     )
     assert plan.direction == "push"
     assert plan.src == "/repo/bot/"
-    assert plan.dst == f"1.2.3.4:{DEFAULT_REMOTE_BOT_DIR}/"
+    # direct は user@host 形式で組む必要あり (rsync がローカルユーザーで接続するのを防ぐ)
+    assert plan.dst == f"root@1.2.3.4:{DEFAULT_REMOTE_BOT_DIR}/"
     assert plan.cmd[0] == "rsync"
     assert "-avz" in plan.cmd
     # -e に ssh コマンド文字列が含まれ、末尾の user@host は除去されていること

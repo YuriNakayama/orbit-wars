@@ -67,12 +67,15 @@ def _build_rsh(endpoint: SshEndpoint) -> str:
 
 
 def _remote_target(endpoint: SshEndpoint, remote_path: str) -> str:
-    """rsync の `<host>:<path>` 形式を組む。
+    """rsync の `<[user@]host>:<path>` 形式を組む。
 
-    direct: `root@1.2.3.4:/workspace/orbit-wars/bot/`
-    proxy:  `pod-x@ssh.runpod.io:/workspace/orbit-wars/bot/`
-    どちらも `endpoint.host` は既に「rsync が期待する接続先文字列」になっている。
+    - direct: `endpoint.host` は IP のみなので `user@host:path` で連結する
+      (rsync は user 省略時にローカルログインユーザーで接続しようとしてしまう)。
+    - proxy:  `endpoint.host` は既に `<pod_id>@ssh.runpod.io` 形式なので
+      そのまま `host:path` で OK (user 部分は host に含まれる)。
     """
+    if endpoint.kind == "direct":
+        return f"{endpoint.user}@{endpoint.host}:{remote_path}"
     return f"{endpoint.host}:{remote_path}"
 
 
