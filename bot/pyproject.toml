@@ -17,7 +17,7 @@ dependencies = [
     "pyyaml>=6.0.2",
     "rich>=13.9.4",
     "typer>=0.15.2",
-    "torch>=2.3.0,<2.7",
+    "torch>=2.3.0,<3",
     "dvc[s3]>=3.55",
     "vastai>=0.3.0",
     "orbit-wars-vendor",
@@ -67,15 +67,20 @@ env = [
 cuda = [
     # GPU pod 用 CUDA12 plugin. `jax[cuda12]` の wheel は Linux x86_64 /
     # aarch64 のみで macOS 用は存在しないので `sys_platform == 'linux'`
-    # marker を必須にする。バージョンは base の jax と一致させる
-    # (`jax>=0.4.30` の解決値) — uv は base group の jax を共有するので
-    # 自動でマッチする。
+    # marker を必須にする。
     # RunPod の bench / GPU training onstart で `uv sync --group cuda
     # --no-dev` を追加実行する想定。実行時 `uv pip install --reinstall
     # jax[cuda12]` は jax 既ロード後の共有ライブラリハンドル invalid
     # 化 (SIGABRT) を踏むので避ける。
     "jax-cuda12-plugin; sys_platform == 'linux'",
     "jax-cuda12-pjrt; sys_platform == 'linux'",
+    # CuDNN 9.8 — jax-cuda12-plugin 0.10 は compile-time CuDNN 9.8 を期待
+    # するが、RunPod base image は CuDNN 9.1。そのまま実行すると
+    # `Loaded runtime CuDNN library: 9.1.0 but source was compiled with:
+    # 9.8.0` → `INTERNAL: RET_CHECK failure dnn_support != nullptr` で
+    # GPU 演算が abort する (pod 20260520-115638 で観測)。
+    # nvidia-cudnn-cu12 wheel を pin して plugin に合わせる。
+    "nvidia-cudnn-cu12>=9.8,<9.9; sys_platform == 'linux'",
 ]
 
 
