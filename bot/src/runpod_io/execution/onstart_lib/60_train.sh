@@ -55,12 +55,17 @@ echo "[onstart] system sampler pid=${SYSMON_PID} -> ${SYSMON_LOG}"
 # と train/gpu/system log snapshot を S3 artifacts prefix へアップロードする。
 (
   set -o pipefail
+  # 2026-05-20: stream best.pt directly to S3 from train.py on every
+  # best_updated event so host preempt mid-training still preserves the
+  # latest best (observed 011220: epoch 2 progress lost when pod vanished).
+  BEST_S3_URI="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>/best.pt"
   ORBIT_WARS_RUN_DIR="${RUN_DIR_ABS}" \
     ORBIT_WARS_RUN_ID="<RUN_ID>" \
     ORBIT_WARS_GIT_SHA="<COMMIT_SHA>" \
     ORBIT_WARS_GIT_BRANCH="<BRANCH>" \
     ORBIT_WARS_RUNPOD_POD_ID="${INSTANCE_ID}" \
     ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT="${SNAPSHOT_JSON}" \
+    ORBIT_WARS_BEST_S3_URI="${BEST_S3_URI}" \
     ORBIT_WARS_COMMAND="cd bot && ${PY_BIN} -m <TRAIN_MODULE> <CONFIG_ARG>" \
     bash -c "cd bot && '${PY_BIN}' -m <TRAIN_MODULE> <CONFIG_ARG>" \
     2>&1 | tee "${TRAIN_LOG}"

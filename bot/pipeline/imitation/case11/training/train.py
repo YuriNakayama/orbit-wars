@@ -871,6 +871,38 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                     }
                 )
             )
+            # 2026-05-20: RunPod Secure pods can vanish mid-training before the
+            # post-train `70_artifacts_and_dvc.sh` upload runs (observed 064334
+            # and 011220). Mirror best.pt to S3 the moment best_updated fires,
+            # so a host preempt at epoch N still leaves the best-so-far reachable.
+            # The destination URI is set by ORBIT_WARS_BEST_S3_URI from onstart;
+            # outside RunPod the var is empty and we skip.
+            best_s3_uri = os.environ.get("ORBIT_WARS_BEST_S3_URI", "").strip()
+            if best_s3_uri:
+                try:
+                    import boto3  # noqa: PLC0415
+
+                    s3 = boto3.client("s3")
+                    if best_s3_uri.startswith("s3://"):
+                        rest = best_s3_uri[len("s3://") :]
+                        bucket, _, key = rest.partition("/")
+                        s3.upload_file(str(run_weights_path), bucket, key)
+                        logger.info(
+                            json.dumps(
+                                {
+                                    "event": "best_s3_upload",
+                                    "epoch": epoch,
+                                    "s3_uri": best_s3_uri,
+                                }
+                            )
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "best.pt S3 upload failed epoch=%d uri=%s err=%s",
+                        epoch,
+                        best_s3_uri,
+                        exc,
+                    )
 
         if early_stop_metric and early_stop_patience > 0:
             es_value = _select_metric_value(val_metrics, early_stop_metric)
