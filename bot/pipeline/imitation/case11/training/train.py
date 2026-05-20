@@ -496,11 +496,19 @@ def train(cfg: dict[str, Any]) -> TrainReport:
     ablation_cfg = data_cfg.get("ablation", {}) or {}
     mask_planet_cols = list(ablation_cfg.get("planet_cols", []) or [])
     mask_global_cols = list(ablation_cfg.get("global_cols", []) or [])
+    # 2026-05-20: smoke-run support — cap row count so a full e2e pass
+    # (parquet_to_npy → train epoch → S3 best.pt upload → cleanup) finishes
+    # in minutes, not hours. data.max_train_rows / data.max_val_rows.
+    max_train_rows_cfg = data_cfg.get("max_train_rows")
+    max_val_rows_cfg = data_cfg.get("max_val_rows")
+    max_train_rows = int(max_train_rows_cfg) if max_train_rows_cfg else None
+    max_val_rows = int(max_val_rows_cfg) if max_val_rows_cfg else None
     _stamp(f"loading train_ds from {data_cfg['out_train']}")
     train_ds = CaseFourDataset(
         _abspath(data_cfg["out_train"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
+        max_rows=max_train_rows,
     )
     _stamp(f"train_ds loaded len={len(train_ds)}")
     _stamp(f"loading val_ds from {data_cfg['out_val']}")
@@ -508,6 +516,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         _abspath(data_cfg["out_val"]),
         mask_planet_cols=mask_planet_cols,
         mask_global_cols=mask_global_cols,
+        max_rows=max_val_rows,
     )
     _stamp(f"val_ds loaded len={len(val_ds)}")
 

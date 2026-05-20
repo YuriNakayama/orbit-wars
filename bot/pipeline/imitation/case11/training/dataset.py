@@ -103,6 +103,7 @@ class CaseFourDataset(Dataset[Sample]):
         parquet_path: Path | str,
         mask_planet_cols: list[int] | None = None,
         mask_global_cols: list[int] | None = None,
+        max_rows: int | None = None,
     ) -> None:
         if mask_planet_cols or mask_global_cols:
             raise NotImplementedError(
@@ -141,6 +142,8 @@ class CaseFourDataset(Dataset[Sample]):
         self._is_noop = _mm("is_noop")
 
         self._n = int(self._planet_feats.shape[0])
+        if max_rows is not None and max_rows > 0:
+            self._n = min(self._n, max_rows)
 
     def class_weight_on_slots(
         self, num_classes: int, beta: float = 0.999, ignore_index: int = -1

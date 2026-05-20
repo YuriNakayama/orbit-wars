@@ -294,6 +294,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
         "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",
     },
+    # case11 smoke variant: 20k train rows / 2k val rows / 3 epochs so a
+    # full pipeline run finishes in ~15 min and we can verify the
+    # per-epoch S3 best.pt upload flow end-to-end on real RunPod.
+    "case11_smoke": {
+        "stage": "train_imitation_case11",
+        "train_module": "pipeline.imitation.case11.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case11/configs/il_case11_per_planet_smoke.yaml"
+        ),
+        "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
+        "canonical_weights": "",
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
@@ -320,6 +332,8 @@ def case_subdir(case: str) -> str:
         return "case9"
     if case.startswith("case10_"):
         return "case10"
+    if case.startswith("case11_"):
+        return "case11"
     return case
 
 
