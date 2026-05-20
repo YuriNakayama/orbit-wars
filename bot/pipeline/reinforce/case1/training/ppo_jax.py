@@ -183,6 +183,41 @@ def _ppo_loss(
     return loss, aux
 
 
+def _minibatch_step(
+    carry: tuple[ActorCriticJax, optax.OptState, jax.Array],
+    idx: jax.Array,
+    bc_reference: ActorCriticJax | None,
+    rollout: FlatRollout,
+    cfg: PPOConfigJax,
+    optimizer: optax.GradientTransformation,
+    epoch_alive: jax.Array,
+) -> tuple[
+    tuple[ActorCriticJax, optax.OptState, jax.Array],
+    dict[str, jax.Array],
+]:
+    """One PPO minibatch step. `epoch_alive` is a bool scalar — when
+    False (target_kl breached on a prior epoch) we keep the model and
+    opt_state untouched but still compute aux stats (returning the
+    real numbers; the caller's mean weighting compensates).
+    """
+    model, opt_state, kl_acc = carry
+    grad_fn = eqx.filter_value_and_grad(_ppo_loss, has_aux=True)
+    (_loss, aux), grads = grad_fn(model, bc_reference, rollout, idx, cfg)
+    updates, new_opt_state = optimizer.update(grads, opt_state, model)
+    proposed = eqx.apply_updates(model, updates)
+    # If epoch_alive is False, snap back to the carry model & opt_state.
+    new_model = jax.tree.map(
+        lambda new, old: jnp.where(epoch_alive, new, old), proposed, model
+    )
+    new_opt_state_eff = jax.tree.map(
+        lambda new, old: jnp.where(epoch_alive, new, old),
+        new_opt_state,
+        opt_state,
+    )
+    new_kl_acc = kl_acc + aux["approx_kl"]
+    return (new_model, new_opt_state_eff, new_kl_acc), aux
+
+
 def ppo_update_jax(
     model: ActorCriticJax,
     bc_reference: ActorCriticJax | None,
@@ -194,12 +229,18 @@ def ppo_update_jax(
 ) -> tuple[ActorCriticJax, optax.OptState, PPOStatsJax]:
     """One PPO update over the full rollout (cfg.epochs × minibatches).
 
-    All state — model parameters, optimizer state, PRNG key — is
-    functional and threaded through the loop; no in-place mutation.
-    Returns the new model, opt_state, and aggregated stats.
+    All loops are inside JAX (lax.scan over epochs × scan over
+    minibatches), eliminating host↔device synchronization between
+    minibatches. target_kl early-stop is enforced via an epoch_alive
+    bool flag tracked in the scan carry; once an epoch's mean approx_kl
+    exceeds cfg.target_kl, subsequent epochs become no-ops at the
+    apply_updates step but still produce stats (the caller's
+    epochs_run reports how many epochs actually advanced).
     """
     n = rollout.planet_feats.shape[0]
-    if n == 0:
+    M = cfg.minibatch_size
+    num_mb = n // M
+    if num_mb == 0:
         zero = jnp.float32(0.0)
         return (
             model,
@@ -214,59 +255,75 @@ def ppo_update_jax(
         )
     rollout = rollout._replace(advantages=advantages)
 
-    grad_fn = eqx.filter_value_and_grad(
-        _ppo_loss, has_aux=True
+    target_kl_thresh = (
+        jnp.float32(cfg.target_kl) if cfg.target_kl is not None
+        else jnp.float32(jnp.inf)
     )
 
-    # Stats accumulators (running means).
-    stat_keys = (
-        "policy_loss",
-        "value_loss",
-        "entropy",
-        "approx_kl",
-        "bc_kl",
-        "clip_fraction",
-    )
-    stat_sums = {k: jnp.float32(0.0) for k in stat_keys}
-    n_minibatches = 0
-    epochs_run = 0
-    M = cfg.minibatch_size
-
-    for _epoch in range(cfg.epochs):
-        key, k_perm = jax.random.split(key)
+    def epoch_step(
+        carry: tuple[ActorCriticJax, optax.OptState, jax.Array, jax.Array],
+        k_perm: jax.Array,
+    ) -> tuple[
+        tuple[ActorCriticJax, optax.OptState, jax.Array, jax.Array],
+        dict[str, jax.Array],
+    ]:
+        model_c, opt_c, alive_c, epochs_done_c = carry
+        # Shuffle indices and reshape to (num_mb, M).
         perm = jax.random.permutation(k_perm, n)
-        epoch_kl_sum = jnp.float32(0.0)
-        epoch_mb_count = 0
-        for start in range(0, n, M):
-            idx = perm[start : start + M]
-            (_loss, aux), grads = grad_fn(
-                model, bc_reference, rollout, idx, cfg
-            )
-            updates, opt_state = optimizer.update(grads, opt_state, model)
-            model = eqx.apply_updates(model, updates)
-            for k in stat_keys:
-                stat_sums[k] = stat_sums[k] + aux[k]
-            epoch_kl_sum = epoch_kl_sum + aux["approx_kl"]
-            epoch_mb_count += 1
-            n_minibatches += 1
-        epochs_run += 1
-        if cfg.target_kl is not None and epoch_mb_count > 0:
-            epoch_mean_kl = epoch_kl_sum / jnp.float32(epoch_mb_count)
-            # We can't break inside a traced jit loop based on a JAX
-            # array — keep this Python-side since `cfg.target_kl` is
-            # static and `epoch_mean_kl` is a JAX scalar that we
-            # `block_until_ready` for the early-stop decision. The
-            # individual minibatch grad+update steps inside are still
-            # jit'd via eqx.filter_value_and_grad above.
-            kl_val = float(epoch_mean_kl)
-            if kl_val > cfg.target_kl:
-                break
+        idx_2d = perm[: num_mb * M].reshape((num_mb, M))
 
-    denom = jnp.float32(max(1, n_minibatches))
-    means = {k: stat_sums[k] / denom for k in stat_keys}
-    return (
+        def _body(
+            mb_carry: tuple[ActorCriticJax, optax.OptState, jax.Array],
+            mb_idx: jax.Array,
+        ) -> tuple[
+            tuple[ActorCriticJax, optax.OptState, jax.Array],
+            dict[str, jax.Array],
+        ]:
+            return _minibatch_step(
+                mb_carry,
+                mb_idx,
+                bc_reference,
+                rollout,
+                cfg,
+                optimizer,
+                alive_c,
+            )
+
+        init_mb_carry = (model_c, opt_c, jnp.float32(0.0))
+        (model_new, opt_new, kl_sum), mb_aux = jax.lax.scan(
+            _body, init_mb_carry, idx_2d
+        )
+        epoch_mean_kl = kl_sum / jnp.float32(num_mb)
+        # If we breached target_kl during this epoch, mark dead so
+        # FUTURE epochs no-op. The current epoch's updates already went
+        # through (matching PyTorch's "complete the current epoch then
+        # decide" semantics).
+        new_alive = alive_c & (epoch_mean_kl <= target_kl_thresh)
+        new_epochs_done = epochs_done_c + alive_c.astype(jnp.float32)
+        # Average the per-minibatch aux for this epoch.
+        epoch_aux = jax.tree.map(
+            lambda x: jnp.mean(x, axis=0), mb_aux
+        )
+        return (model_new, opt_new, new_alive, new_epochs_done), epoch_aux
+
+    # Per-epoch PRNG keys (distinct from `key` which is consumed).
+    epoch_keys = jax.random.split(key, cfg.epochs)
+    init_carry = (
         model,
         opt_state,
+        jnp.bool_(True),
+        jnp.float32(0.0),
+    )
+    (model_final, opt_final, _alive_final, epochs_run), epoch_aux_stack = (
+        jax.lax.scan(epoch_step, init_carry, epoch_keys)
+    )
+
+    # Means over epochs (each is already an epoch-averaged scalar).
+    means = jax.tree.map(lambda x: jnp.mean(x, axis=0), epoch_aux_stack)
+
+    return (
+        model_final,
+        opt_final,
         PPOStatsJax(
             policy_loss=means["policy_loss"],
             value_loss=means["value_loss"],
@@ -274,7 +331,7 @@ def ppo_update_jax(
             approx_kl=means["approx_kl"],
             bc_kl=means["bc_kl"],
             clip_fraction=means["clip_fraction"],
-            epochs_run=jnp.float32(epochs_run),
+            epochs_run=epochs_run,
         ),
     )
 

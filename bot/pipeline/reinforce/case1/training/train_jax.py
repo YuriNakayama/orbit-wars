@@ -64,6 +64,12 @@ from pipeline.reinforce.case1.training.rollout_jax import (
 )
 from utils.repo_root import absolute_under_repo
 
+# W6-a: wrap the entire epoch×minibatch loop in a single jit so the
+# update is compiled once per (model_pytree_shape, rollout_shape, cfg)
+# tuple. Each subsequent call reuses the compiled XLA executable —
+# critical for keeping PPO updates on-device on RunPod GPUs.
+_ppo_update_jit = eqx.filter_jit(ppo_update_jax)
+
 logger = logging.getLogger(__name__)
 
 
@@ -261,7 +267,7 @@ def _run_iter(
     flat = _flatten_rollout(rollout, gamma, gae_lambda)
 
     t0 = time.perf_counter()
-    model, opt_state, stats = ppo_update_jax(
+    model, opt_state, stats = _ppo_update_jit(
         model, bc_reference, optimizer, opt_state, flat, cfg, update_key
     )
     # Block on a small leaf to ensure compute is materialized.
