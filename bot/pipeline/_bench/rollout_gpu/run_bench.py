@@ -133,6 +133,62 @@ def _bench_full(horizons: list[int], seed: int) -> list[BenchResult]:
     return results
 
 
+def _diagnostic_log() -> None:
+    """Emit JAX env / device diagnostics + a tiny GPU smoke as the very
+    first action in `main()`. Distinguishes among:
+      (a) cuda12 plugin detected, GPU usable → bench should proceed
+      (b) devices=[CpuDevice] only → cuda12 plugin install or load failed
+      (c) `block_until_ready` hangs/crashes → cuda runtime/driver mismatch
+    Each `print` uses flush=True so the line reaches train.log before any
+    potential silent crash in subsequent JAX state.
+    """
+    print("=== JAX diagnostic start ===", flush=True)
+    import os as _os
+
+    for k in ("RUNPOD_POD_ID", "CUDA_VISIBLE_DEVICES", "JAX_PLATFORMS"):
+        print(f"env {k}={_os.environ.get(k, '<unset>')}", flush=True)
+    ldconfig_cmd = (
+        "ldconfig -p 2>/dev/null | grep libcuda.so | head -3"
+    )
+    print(
+        f"ldconfig libcuda: {_os.popen(ldconfig_cmd).read().strip()}",
+        flush=True,
+    )
+    nvsmi_cmd = (
+        "nvidia-smi --query-gpu=name,driver_version "
+        "--format=csv,noheader 2>&1 | head -1"
+    )
+    print(
+        f"nvidia-smi: {_os.popen(nvsmi_cmd).read().strip()}",
+        flush=True,
+    )
+    print("pip jax-cuda12 packages:", flush=True)
+    pip_cmd = 'uv pip list 2>&1 | grep -iE "^jax|^cuda" | head -10'
+    print(_os.popen(pip_cmd).read(), flush=True)
+
+    import jax
+
+    print(f"jax version: {jax.__version__}", flush=True)
+    try:
+        devs = jax.devices()
+        print(f"jax devices: {devs}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"jax.devices() RAISED: {exc!r}", flush=True)
+        return
+    print(f"jax default_backend: {jax.default_backend()}", flush=True)
+
+    import jax.numpy as jnp
+
+    try:
+        x = jnp.ones(1000)
+        y = (x * 2.0).sum()
+        val = float(y.block_until_ready())
+        print(f"GPU smoke OK: y={val}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"GPU smoke RAISED: {exc!r}", flush=True)
+    print("=== JAX diagnostic end ===", flush=True)
+
+
 @app.command()
 def main(
     seed: int = typer.Option(0, help="seed"),
@@ -141,6 +197,7 @@ def main(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    _diagnostic_log()
     run_dir = _run_dir()
     logger.info("run_dir=%s", run_dir)
 
