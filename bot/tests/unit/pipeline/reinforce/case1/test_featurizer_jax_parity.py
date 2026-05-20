@@ -26,12 +26,15 @@ from jax_env.step import empty_actions, step
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
     featurize,
+    update_history,
 )
 from pipeline.reinforce.case1.policy.featurizer_jax import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
     PLANET_FEAT_DIM,
     featurize_jax_w1,
+    init_history_jax,
+    update_history_jax,
 )
 
 PARITY_TOL = 1e-4
@@ -211,6 +214,116 @@ def test_planet_feats_fleet_columns(seed: int, turns: int) -> None:
                 f"seed={seed} turns={turns} slot={slot} col={col} "
                 f"(fleets): jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
             )
+
+
+# W2d: history-dependent cols (delta_t1/t2/owner_changed = 32-34;
+# global launch counts = 16-19). Run both featurizers in lockstep,
+# updating histories each turn so they reflect the same state.
+W2D_PLANET_COLS = (32, 33, 34)
+W2D_GLOBAL_COLS = (16, 17, 18, 19)
+
+
+def _seat0_action_rows(state) -> tuple[list[list[int | float]], np.ndarray, np.ndarray, np.ndarray]:
+    """Build seat 0's PyTorch-style action list and matching JAX arrays.
+
+    Returns:
+      torch_actions: list of [from_pid, angle, ships] (vendor format)
+      pid: int32 (L,) — JAX history input
+      ships: int32 (L,)
+      valid: bool (L,)
+    """
+    pid = np.asarray(state.planet_id)
+    owner = np.asarray(state.planet_owner)
+    valid = np.asarray(state.planet_valid)
+    ships = np.asarray(state.planet_ships)
+    torch_actions: list[list[int | float]] = []
+    pid_buf = []
+    ships_buf = []
+    valid_buf = []
+    for i in range(pid.shape[0]):
+        if (
+            bool(valid[i])
+            and int(owner[i]) == 0
+            and int(ships[i]) >= 2
+        ):
+            torch_actions.append([int(pid[i]), 0.0, 1])
+            pid_buf.append(int(pid[i]))
+            ships_buf.append(1)
+            valid_buf.append(True)
+            break
+    # Pad to fixed length 4 (small upper bound — seat fires at most 1 / turn).
+    while len(pid_buf) < 4:
+        pid_buf.append(-1)
+        ships_buf.append(0)
+        valid_buf.append(False)
+    return (
+        torch_actions,
+        np.asarray(pid_buf, dtype=np.int32),
+        np.asarray(ships_buf, dtype=np.int32),
+        np.asarray(valid_buf, dtype=np.bool_),
+    )
+
+
+@pytest.mark.parametrize("seed", [0, 7])
+@pytest.mark.parametrize("turns", [3, 6, 10])
+def test_planet_feats_w2d_history(seed: int, turns: int) -> None:
+    """delta_t1/t2/owner_changed + launch-count globals match after N turns.
+
+    Drives both featurizers from the same JAX env trajectory with seat 0
+    firing 1 ship from its first ready home each turn. Both histories
+    are updated in lockstep; at turn N we assert cols 32-34 (planet)
+    and 16-19 (global) match within tol.
+    """
+    js = reset(seed=seed, num_agents=2)
+    torch_history = HistoryState()
+    jax_history = init_history_jax()
+    for _ in range(turns):
+        # Mimic the reinforce/case1 rollout loop: featurize then push
+        # this turn's snapshot + launches into history.
+        obs = state_to_obs(js, player=0)
+        torch_acts, jp, js_, jv = _seat0_action_rows(js)
+        update_history(torch_history, obs, actions=torch_acts)
+        jax_history = update_history_jax(
+            jax_history,
+            js,
+            jnp.asarray(jp),
+            jnp.asarray(js_),
+            jnp.asarray(jv),
+            player=0,
+        )
+        # Step the env (both seats fire so the trajectory has fleets).
+        actions = _build_fire_actions(js)
+        js, _, _ = step(js, actions)
+
+    # Now compare final-turn featurize output.
+    obs = state_to_obs(js, player=0)
+    torch_batch, _ = featurize(obs, history=torch_history)
+    jax_batch = featurize_jax_w1(js, player=0, history=jax_history)
+    torch_p = torch_batch.planet_feats[0].cpu().numpy()
+    jax_p = np.asarray(jax_batch.planet_feats[0])
+    torch_g = torch_batch.global_feats[0].cpu().numpy()
+    jax_g = np.asarray(jax_batch.global_feats[0])
+    mask = torch_batch.planet_mask[0].cpu().numpy()
+
+    for col in W2D_PLANET_COLS:
+        for slot in range(MAX_PLANETS):
+            if not bool(mask[slot]):
+                continue
+            j = float(jax_p[slot, col])
+            t = float(torch_p[slot, col])
+            diff = abs(j - t)
+            assert diff < PARITY_TOL, (
+                f"seed={seed} turns={turns} slot={slot} col={col} "
+                f"(history): jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+            )
+    for col in W2D_GLOBAL_COLS:
+        j = float(jax_g[col])
+        t = float(torch_g[col])
+        diff = abs(j - t)
+        assert diff < PARITY_TOL, (
+            f"seed={seed} turns={turns} global col {col}: "
+            f"jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+        )
 
 
 def test_masks_match_torch() -> None:

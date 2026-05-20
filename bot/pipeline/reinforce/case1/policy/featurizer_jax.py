@@ -57,9 +57,70 @@ NEIGHBOR_RADIUS_SHORT = 8.0
 NEIGHBOR_RADIUS_LONG = 25.0
 HORIZON_TURNS = 30
 ORBIT_HORIZONS = (1, 2, 4, 8)
+HISTORY_TURNS = 4
+# Fixed-size buffers for the JAX history pytree. We retain the last
+# `N_PREV_SNAPSHOTS` planet snapshots (the featurizer reads positions -2
+# and -3, so we need 3 prior snapshots indexed by ring offset). Launch
+# events use a fixed-size ring; at 1 launch / side / step over
+# HISTORY_TURNS=4 the high-water mark is ~8 launches, well below 64.
+N_PREV_SNAPSHOTS = 3
+LAUNCH_BUFFER = 64
 TEMPLATE_CTX_DIM = 40  # NUM_TEMPLATES (8) * PER_TEMPLATE_FEATS (5)
 CAND_K = 8
 CAND_FEAT_DIM = 14
+
+
+class HistoryStateJax(NamedTuple):
+    """JAX-native history pytree mirroring PyTorch HistoryState.
+
+    Holds the last N_PREV_SNAPSHOTS planet snapshots in a ring buffer and
+    a fixed-size launch-event ring buffer. All shapes are fixed so the
+    state is jit/vmap-friendly.
+
+    Ring buffer semantics:
+      `snap_count` is the number of snapshots ever pushed (saturates at
+      N_PREV_SNAPSHOTS for indexing). `snap_head` is the index of the
+      next write slot. The most-recent snapshot is at
+      `(snap_head - 1) mod N`; the one before that is at
+      `(snap_head - 2) mod N`; etc. featurizer reads positions -2 and -3
+      mapping to `(snap_head - 2) mod N` and `(snap_head - 3) mod N`.
+    """
+
+    # Snapshot ring (3 prior states).
+    snap_ships: jax.Array  # (N_PREV_SNAPSHOTS, MAX_PLANETS) int32
+    snap_owner: jax.Array  # (N_PREV_SNAPSHOTS, MAX_PLANETS) int32
+    snap_pid: jax.Array  # (N_PREV_SNAPSHOTS, MAX_PLANETS) int32; -1 = empty slot
+    snap_valid: jax.Array  # (N_PREV_SNAPSHOTS, MAX_PLANETS) bool
+    snap_count: jax.Array  # int32 scalar (clamped at N_PREV_SNAPSHOTS)
+    snap_head: jax.Array  # int32 scalar (mod N_PREV_SNAPSHOTS)
+
+    # Launch event ring.
+    launch_step: jax.Array  # (LAUNCH_BUFFER,) int32; -1 = empty
+    launch_owner: jax.Array  # (LAUNCH_BUFFER,) int32
+    launch_ships: jax.Array  # (LAUNCH_BUFFER,) int32
+    launch_valid: jax.Array  # (LAUNCH_BUFFER,) bool
+
+
+def init_history_jax() -> HistoryStateJax:
+    """Empty history (matches PyTorch `HistoryState()` semantics)."""
+    return HistoryStateJax(
+        snap_ships=jnp.zeros((N_PREV_SNAPSHOTS, MAX_PLANETS), dtype=jnp.int32),
+        snap_owner=jnp.full(
+            (N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32
+        ),
+        snap_pid=jnp.full(
+            (N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32
+        ),
+        snap_valid=jnp.zeros(
+            (N_PREV_SNAPSHOTS, MAX_PLANETS), dtype=jnp.bool_
+        ),
+        snap_count=jnp.int32(0),
+        snap_head=jnp.int32(0),
+        launch_step=jnp.full((LAUNCH_BUFFER,), -1, dtype=jnp.int32),
+        launch_owner=jnp.full((LAUNCH_BUFFER,), -1, dtype=jnp.int32),
+        launch_ships=jnp.zeros((LAUNCH_BUFFER,), dtype=jnp.int32),
+        launch_valid=jnp.zeros((LAUNCH_BUFFER,), dtype=jnp.bool_),
+    )
 
 
 class BatchFeaturesJax(NamedTuple):
@@ -116,6 +177,7 @@ def _next_comet_eta(step: jax.Array) -> jax.Array:
 def featurize_jax_w1(
     state: EnvState,
     player: int,
+    history: HistoryStateJax | None = None,
 ) -> BatchFeaturesJax:
     """W1 implementation: global_feats + simple per-planet columns.
 
@@ -136,10 +198,14 @@ def featurize_jax_w1(
       my_planet_mask: implemented (owner == player and valid)
       target_mask: implemented (valid and not owner==player)
     """
+    if history is None:
+        history = init_history_jax()
+
     # Slice / truncate to MAX_PLANETS (= 36, smaller than jax_env's 48).
     # In practice vendor generates at most 24-32 planets at reset and the
     # game adds 4 per comet activation, capped well below 36 unless many
     # comets are simultaneously active.
+    pid_arr = state.planet_id[:MAX_PLANETS]
     owner = state.planet_owner[:MAX_PLANETS]
     xy = state.planet_xy[:MAX_PLANETS]  # (MAX_PLANETS, 2)
     radius = state.planet_radius[:MAX_PLANETS]
@@ -457,6 +523,62 @@ def featurize_jax_w1(
         feats = feats.at[:, 20 + 2 * h_idx].set(dx_h)
         feats = feats.at[:, 21 + 2 * h_idx].set(dy_h)
 
+    # ------------------------------------------------------------------
+    # W2d: history-dependent per-planet cols 32, 33, 34.
+    #
+    # PyTorch reads `prev_planet_snapshots[-2]` (snap_t1) and `[-3]`
+    # (snap_t2) by planet id. For each current planet, look up its id in
+    # both snapshots (if present); compute
+    #   delta = (current_ships - prev_ships) / max(1, current_ships)
+    #   clamped to [-3, 3] / 3
+    # delta_t1 → col 32, delta_t2 → col 33.
+    # owner_changed (col 34) = 1.0 if snap_t1 had a different owner; uses
+    # snap_t1 only.
+    snap_t1_pos = (history.snap_head - 2) % N_PREV_SNAPSHOTS
+    snap_t2_pos = (history.snap_head - 3) % N_PREV_SNAPSHOTS
+    snap_t1_available = history.snap_count >= 2
+    snap_t2_available = history.snap_count >= 3
+
+    snap_t1_pid = history.snap_pid[snap_t1_pos]  # (MAX_PLANETS,)
+    snap_t1_ships = history.snap_ships[snap_t1_pos]
+    snap_t1_owner = history.snap_owner[snap_t1_pos]
+    snap_t1_valid_mask = history.snap_valid[snap_t1_pos]
+    snap_t2_pid = history.snap_pid[snap_t2_pos]
+    snap_t2_ships = history.snap_ships[snap_t2_pos]
+    snap_t2_valid_mask = history.snap_valid[snap_t2_pos]
+
+    # For each current planet i, find row j in snap_t1 where pid matches.
+    # eq_mat[i, j] = True iff current_pid[i] == snap_t1_pid[j] AND both
+    # valid.
+    eq_t1 = (
+        pid_arr[:, None] == snap_t1_pid[None, :]
+    ) & snap_t1_valid_mask[None, :] & valid_full[:, None]
+    has_match_t1 = jnp.any(eq_t1, axis=1) & snap_t1_available
+    match_idx_t1 = jnp.argmax(eq_t1.astype(jnp.int32), axis=1)
+    prev_ships_t1 = snap_t1_ships[match_idx_t1].astype(jnp.float32)
+    prev_owner_t1 = snap_t1_owner[match_idx_t1]
+    ships_safe_p = jnp.maximum(1.0, ships_f)
+    raw_delta_t1 = (ships_f - prev_ships_t1) / ships_safe_p
+    delta_t1 = jnp.maximum(-3.0, jnp.minimum(3.0, raw_delta_t1)) / 3.0
+    delta_t1 = jnp.where(has_match_t1, delta_t1, 0.0)
+    owner_changed = jnp.where(
+        has_match_t1, (prev_owner_t1 != owner).astype(jnp.float32), 0.0
+    )
+
+    eq_t2 = (
+        pid_arr[:, None] == snap_t2_pid[None, :]
+    ) & snap_t2_valid_mask[None, :] & valid_full[:, None]
+    has_match_t2 = jnp.any(eq_t2, axis=1) & snap_t2_available
+    match_idx_t2 = jnp.argmax(eq_t2.astype(jnp.int32), axis=1)
+    prev_ships_t2 = snap_t2_ships[match_idx_t2].astype(jnp.float32)
+    raw_delta_t2 = (ships_f - prev_ships_t2) / ships_safe_p
+    delta_t2 = jnp.maximum(-3.0, jnp.minimum(3.0, raw_delta_t2)) / 3.0
+    delta_t2 = jnp.where(has_match_t2, delta_t2, 0.0)
+
+    feats = feats.at[:, 32].set(delta_t1)
+    feats = feats.at[:, 33].set(delta_t2)
+    feats = feats.at[:, 34].set(owner_changed)
+
     # idx 35..40: timeline columns — W2e
 
     # Mask invalid slots — zero out all columns for them.
@@ -482,8 +604,28 @@ def featurize_jax_w1(
     score_diff = jnp.log1p(my_ships_total) - jnp.log1p(enemy_ships_total)
     next_eta = _next_comet_eta(step).astype(jnp.float32) / 100.0
 
-    # History-dependent globals (idx 16..19) require recent_launches —
-    # zero-fill in W1. Will be added in a later sub-phase as a history pytree.
+    # Launch-history aggregates over the last HISTORY_TURNS steps (W2d).
+    # PyTorch (featurizer.py:465-478) filters launches by
+    # `ev.step >= step - HISTORY_TURNS` and bins by owner.
+    launch_threshold = step - HISTORY_TURNS
+    launch_in_window = (
+        history.launch_valid & (history.launch_step >= launch_threshold)
+    )
+    launch_is_ally = history.launch_owner == player
+    launch_is_neutral = history.launch_owner == -1
+    launch_is_enemy = ~launch_is_ally & ~launch_is_neutral
+    ally_count_lh = jnp.sum(
+        (launch_in_window & launch_is_ally).astype(jnp.int32)
+    ).astype(jnp.float32)
+    ally_ships_lh = jnp.sum(
+        jnp.where(launch_in_window & launch_is_ally, history.launch_ships, 0)
+    ).astype(jnp.float32)
+    enemy_count_lh = jnp.sum(
+        (launch_in_window & launch_is_enemy).astype(jnp.int32)
+    ).astype(jnp.float32)
+    enemy_ships_lh = jnp.sum(
+        jnp.where(launch_in_window & launch_is_enemy, history.launch_ships, 0)
+    ).astype(jnp.float32)
 
     g = jnp.zeros((GLOBAL_FEAT_DIM,), dtype=jnp.float32)
     g = g.at[0].set(step.astype(jnp.float32) / 500.0)
@@ -510,7 +652,10 @@ def featurize_jax_w1(
         jnp.where(total_prod > 0, my_prod_total / total_prod, 0.0)
     )
     g = g.at[15].set(jnp.maximum(-3.0, jnp.minimum(3.0, score_diff)) / 3.0)
-    # idx 16..19: launch counts — W1 leaves as 0
+    g = g.at[16].set(jnp.minimum(1.0, enemy_count_lh / LAUNCH_COUNT_NORM))
+    g = g.at[17].set(jnp.log1p(enemy_ships_lh) / LOG_NORM_DENOM)
+    g = g.at[18].set(jnp.minimum(1.0, ally_count_lh / LAUNCH_COUNT_NORM))
+    g = g.at[19].set(jnp.log1p(ally_ships_lh) / LOG_NORM_DENOM)
 
     # Add batch dimension. Outside vmap caller gets B=1; inside vmap the
     # caller wraps featurize_jax_w1 in jax.vmap(..., in_axes=(0, None)).
@@ -546,8 +691,119 @@ def featurize_jax_w1(
     )
 
 
+def update_history_jax(
+    history: HistoryStateJax,
+    state: EnvState,
+    actions_pid: jax.Array,
+    actions_ships: jax.Array,
+    actions_valid: jax.Array,
+    player: int,
+) -> HistoryStateJax:
+    """Update the history pytree mirroring PyTorch `update_history`.
+
+    Arguments:
+      history: previous history pytree.
+      state: current EnvState (provides planet snapshot + step).
+      actions_pid, actions_ships, actions_valid: the launcher player's
+        actions for this turn. Each is shape (L,) where L is the number
+        of launch slots. Invalid slots have actions_valid[i] == False.
+      player: viewing player (used as `owner` for the recorded launches,
+        matching PyTorch which records `history.recent_launches[i].owner
+        = player`).
+
+    Returns:
+      New HistoryStateJax with the current snapshot appended and any
+      launches inserted into the ring. Launches whose step has aged out
+      (step < current_step - HISTORY_TURNS) are *not* explicitly
+      evicted; instead the featurizer filters by step in-window when
+      reading.
+    """
+    # Push current state's planet snapshot into the ring at snap_head.
+    pos = history.snap_head
+    new_snap_ships = history.snap_ships.at[pos].set(
+        state.planet_ships[:MAX_PLANETS]
+    )
+    new_snap_owner = history.snap_owner.at[pos].set(
+        state.planet_owner[:MAX_PLANETS]
+    )
+    new_snap_pid = history.snap_pid.at[pos].set(
+        state.planet_id[:MAX_PLANETS]
+    )
+    new_snap_valid = history.snap_valid.at[pos].set(
+        state.planet_valid[:MAX_PLANETS]
+    )
+    new_snap_count = jnp.minimum(
+        jnp.int32(N_PREV_SNAPSHOTS), history.snap_count + 1
+    )
+    new_snap_head = (history.snap_head + 1) % N_PREV_SNAPSHOTS
+
+    # Append launches to the ring buffer. The number of new launch slots
+    # is L = actions_pid.shape[0]. We find the next free slots in
+    # launch_valid (sorted in any order); for simplicity, overwrite the
+    # oldest slots when full.
+    cur_step = state.step.astype(jnp.int32)
+
+    # Strategy: maintain a head pointer in launch_step's len, modulo
+    # LAUNCH_BUFFER. We'll track head implicitly by writing into the
+    # next L slots starting from `launch_head` which we store as the
+    # number of writes so far modulo LAUNCH_BUFFER. To avoid adding
+    # another scalar, we use the position of the first launch_valid =
+    # False as the head; if all valid, wrap to 0. This is approximate
+    # but works since old entries are filtered by step in-window anyway.
+    L = actions_pid.shape[0]
+    # Find the first free slot index.
+    first_free = jnp.argmax((~history.launch_valid).astype(jnp.int32))
+    # If launch_valid is all-True, argmax returns 0 (and free will be
+    # False); we wrap by always assuming first_free is a valid slot to
+    # overwrite — the featurizer's in-window step filter handles old
+    # entries.
+    indices = (first_free + jnp.arange(L, dtype=jnp.int32)) % LAUNCH_BUFFER
+
+    # Mask out invalid action slots.
+    write_mask = actions_valid
+    # Use scatter via .at[].set with where-style guard.
+    new_launch_step = history.launch_step
+    new_launch_owner = history.launch_owner
+    new_launch_ships = history.launch_ships
+    new_launch_valid = history.launch_valid
+    # We need a scatter that respects write_mask. JAX has no
+    # straightforward masked scatter, so do it as a for-loop over L
+    # (unrolled at trace time since L is static).
+    for i in range(L):
+        idx = indices[i]
+        write_now = write_mask[i]
+        new_launch_step = new_launch_step.at[idx].set(
+            jnp.where(write_now, cur_step, new_launch_step[idx])
+        )
+        new_launch_owner = new_launch_owner.at[idx].set(
+            jnp.where(write_now, jnp.int32(player), new_launch_owner[idx])
+        )
+        new_launch_ships = new_launch_ships.at[idx].set(
+            jnp.where(write_now, actions_ships[i], new_launch_ships[idx])
+        )
+        new_launch_valid = new_launch_valid.at[idx].set(
+            write_now | new_launch_valid[idx]
+        )
+
+    return HistoryStateJax(
+        snap_ships=new_snap_ships,
+        snap_owner=new_snap_owner,
+        snap_pid=new_snap_pid,
+        snap_valid=new_snap_valid,
+        snap_count=new_snap_count,
+        snap_head=new_snap_head,
+        launch_step=new_launch_step,
+        launch_owner=new_launch_owner,
+        launch_ships=new_launch_ships,
+        launch_valid=new_launch_valid,
+    )
+
+
 __all__ = [
     "BatchFeaturesJax",
+    "HistoryStateJax",
+    "init_history_jax",
+    "update_history_jax",
     "featurize_jax_w1",
     "PLANET_FEAT_DIM",
     "GLOBAL_FEAT_DIM",
