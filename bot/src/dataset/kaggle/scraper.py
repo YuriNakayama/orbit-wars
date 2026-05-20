@@ -188,7 +188,10 @@ def _fetch_planned_episode_io(
             replay_resp = replay_fetcher(session, episode_id)
         except client.KaggleEpisodeError as exc:
             logger.warning("get_episode_replay failed for %s: %s", episode_id, exc)
+            if "429" in str(exc):
+                rate_limit.report_429()
             return _FetchedEpisode(episode_id, None, None, failed=True)
+    rate_limit.report_ok()
 
     record = records.build_match_record(
         meta,
