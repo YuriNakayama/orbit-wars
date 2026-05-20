@@ -58,24 +58,38 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   # 40_uv_sync_done and the parquet_to_npy command despite the early
   # SKIP path proving it existed. MFS appears to garbage-collect symlink
   # targets across pod boundaries. Re-validate and recover via uv sync.
+  #
+  # 2026-05-20 (a9b946c smoke trap): even when bin/python exists, the
+  # site-packages can be visibly empty — `python -c 'import pyarrow'`
+  # raised ModuleNotFoundError despite uv sync having installed 265
+  # packages 60s earlier. Validate by importing a known dep, not just
+  # by file existence.
+  VENV_OK=1
   if [ ! -x bot/.venv/bin/python ]; then
-    echo "[onstart] WARN: bot/.venv/bin/python missing pre-parquet_to_npy; force uv sync" >&2
+    VENV_OK=0
+    echo "[onstart] WARN: bot/.venv/bin/python missing" >&2
+  elif ! bot/.venv/bin/python -c "import pyarrow, torch, numpy" 2>/dev/null; then
+    VENV_OK=0
+    echo "[onstart] WARN: bot/.venv site-packages incomplete (import pyarrow/torch/numpy failed)" >&2
+  fi
+  if [ "${VENV_OK}" -eq 0 ]; then
+    echo "[onstart] forcing uv sync pre-parquet_to_npy" >&2
     ls -la bot/.venv 2>&1 | head -3 || true
     if [ -L bot/.venv ]; then
       ls -la "$(readlink -f bot/.venv)" 2>&1 | head -5 || true
     fi
     rm -rf bot/.venv 2>/dev/null || true
-    if [ -d /persist/uv-venv-bot ]; then
-      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null || true
-      ln -sfn /persist/uv-venv-bot bot/.venv
-    fi
+    mkdir -p /persist/uv-venv-bot
+    find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null || true
+    ln -sfn /persist/uv-venv-bot bot/.venv
     if ! uv sync --frozen --no-dev --directory bot; then
       echo "[onstart] uv sync recovery FAILED" >&2
       mark "55_parquet_to_npy_failed"
       exit 1
     fi
-    if [ ! -x bot/.venv/bin/python ]; then
-      echo "[onstart] uv sync recovery did not produce bin/python" >&2
+    if [ ! -x bot/.venv/bin/python ] \
+       || ! bot/.venv/bin/python -c "import pyarrow, torch, numpy" 2>/dev/null; then
+      echo "[onstart] uv sync recovery did not produce a usable venv" >&2
       mark "55_parquet_to_npy_failed"
       exit 1
     fi
