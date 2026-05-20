@@ -222,7 +222,13 @@ case "<CASE>" in
       exit 1
     fi
     UV_CUDA_LOG="/tmp/uv_cuda_sync.log"
-    if ! ( cd bot && uv sync --no-dev --group cuda --frozen ) >"${UV_CUDA_LOG}" 2>&1; then
+    # Include `--group env` so a previous `uv sync --group env` (Rust
+    # path, line ~140) doesn't get clobbered. `uv sync` is declarative
+    # and replaces non-mentioned groups; pod 20260520-104336 crashed
+    # with `ModuleNotFoundError: No module named 'typer'` after this
+    # step ran with only --group cuda, dropping packages that another
+    # transitive consumer needed at train time.
+    if ! ( cd bot && uv sync --no-dev --group env --group cuda --frozen ) >"${UV_CUDA_LOG}" 2>&1; then
       echo "[onstart] install_cuda_jax FAILED — uv sync log tail:" >&2
       tail -30 "${UV_CUDA_LOG}" >&2 || true
       if command -v aws >/dev/null 2>&1; then
