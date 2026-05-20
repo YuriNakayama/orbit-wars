@@ -322,6 +322,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # bench_featurizer_gpu: GPU benchmark for the JAX featurizer
+    # (W1+W2a-d, f, final). Measures wall-clock for PyTorch baseline vs
+    # JAX (cpu wheel) vs JAX (GPU, post jax[cuda12] install) at
+    # vmap=1/16/32/64. Same family/onstart shape as bench_jax_env_gpu so
+    # the artifacts uploader and `dev/runpod pull` work unchanged.
+    "bench_featurizer_gpu": {
+        "family": "reinforce",
+        "stage": "bench_featurizer_gpu",
+        "train_module": "pipeline._bench.featurizer_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
