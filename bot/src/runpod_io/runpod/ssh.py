@@ -1,13 +1,17 @@
 """RunPod pod の SSH endpoint 解決と ssh コマンド構築。
 
-`runpod_sdk.get_pod()` が返す `runtime.ports` から TCP/22 の public host/port
-を抽出し、ローカルから `ssh -i <key> root@<host> -p <port>` で接続できる
-形に整える。`dev/runpod tail` の主な依存。
+2 経路をサポートする:
 
-- pod が RUNNING で sshd 起動完了している必要がある (onstart.sh.tmpl 冒頭で
-  start_sshd_early で立ち上げる)
-- 既定の private key path は `~/.runpod/ssh/RunPod-Key-Go` (runpodctl が
-  生成、アカウント側に登録済み)
+- **direct**: `runpod_sdk.get_pod()` の `runtime.ports` から TCP/22 の public
+  host/port を抽出し、`ssh -i KEY -p PORT root@IP` で繋ぐ。`dev/runpod tail`
+  既存実装。pod が RUNNING で sshd 起動完了している必要がある。
+- **proxy**: RunPod 公式の proxy SSH (`ssh <pod_id>@ssh.runpod.io`)。pod 内の
+  `~/.ssh/authorized_keys` に登録された SSH key で接続できる。Community
+  Cloud でも安定し、port 公開仕様の違いを意識せず使える。
+
+既定 key path:
+- direct: `~/.runpod/ssh/RunPod-Key-Go` (runpodctl 生成、アカウント側に登録済み)
+- proxy:  `~/.ssh/id_ed25519` (ユーザーアカウントの SSH key を RunPod に登録)
 """
 
 from __future__ import annotations
@@ -15,9 +19,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-DEFAULT_SSH_KEY = Path.home() / ".runpod/ssh/RunPod-Key-Go"
+DEFAULT_DIRECT_KEY = Path.home() / ".runpod/ssh/RunPod-Key-Go"
+DEFAULT_PROXY_KEY = Path.home() / ".ssh/id_ed25519"
+PROXY_SSH_HOST = "ssh.runpod.io"
+
+SshKind = Literal["direct", "proxy"]
 
 
 class SshUnavailable(RuntimeError):
@@ -26,36 +34,52 @@ class SshUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class SshEndpoint:
-    """1 つの pod に対する SSH 接続情報。"""
+    """1 つの pod に対する SSH 接続情報。
+
+    kind="direct" のとき: host=public IP, port=mapped TCP port
+    kind="proxy"  のとき: host="<pod_id>@ssh.runpod.io", port は無視 (22 固定)
+    """
 
     host: str
     port: int
     user: str = "root"
-    key_path: Path = DEFAULT_SSH_KEY
+    key_path: Path = DEFAULT_DIRECT_KEY
+    kind: SshKind = "direct"
 
     def to_command(self, remote_cmd: str | None = None) -> list[str]:
-        """`ssh -i ... root@host -p port [remote_cmd]` の引数リストを返す。"""
+        """`ssh ...` の引数リストを返す。"""
         cmd: list[str] = [
             "ssh",
             "-i",
             str(self.key_path),
-            "-p",
-            str(self.port),
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
             "UserKnownHostsFile=/tmp/runpod_known_hosts",
             "-o",
             "ConnectTimeout=10",
-            f"{self.user}@{self.host}",
         ]
+        if self.kind == "direct":
+            cmd.extend(["-p", str(self.port)])
+            cmd.append(f"{self.user}@{self.host}")
+        else:
+            # proxy: host already encodes `<pod_id>@ssh.runpod.io` form
+            cmd.append(self.host)
         if remote_cmd is not None:
             cmd.append(remote_cmd)
         return cmd
 
+    def display(self) -> str:
+        """人間可読な接続コマンド文字列 (コピペ可能)。"""
+        return " ".join(self.to_command())
 
-def parse_ssh_endpoint(pod: Mapping[str, Any]) -> SshEndpoint:
-    """`runpod.get_pod()` 応答から SshEndpoint を抽出する。
+
+def parse_ssh_endpoint(
+    pod: Mapping[str, Any],
+    *,
+    key_path: Path = DEFAULT_DIRECT_KEY,
+) -> SshEndpoint:
+    """`runpod.get_pod()` 応答から direct SshEndpoint を抽出する。
 
     `runtime.ports` の中で privatePort=22 かつ isIpPublic=True のエントリを
     探す。見つからなければ SshUnavailable。
@@ -72,31 +96,70 @@ def parse_ssh_endpoint(pod: Mapping[str, Any]) -> SshEndpoint:
         host = str(entry.get("ip") or "")
         port = int(entry.get("publicPort") or 0)
         if host and port:
-            return SshEndpoint(host=host, port=port)
+            return SshEndpoint(host=host, port=port, key_path=key_path, kind="direct")
     raise SshUnavailable(
         f"no public TCP/22 port for pod={pod.get('id')!r}; "
         "sshd may still be starting up or pod is not RUNNING"
     )
 
 
-def get_pod_ssh_endpoint(sdk: Any, pod_id: str) -> SshEndpoint:
+def build_proxy_endpoint(
+    pod_id: str,
+    *,
+    key_path: Path = DEFAULT_PROXY_KEY,
+) -> SshEndpoint:
+    """`<pod_id>@ssh.runpod.io` 形式の proxy endpoint を組み立てる。
+
+    proxy SSH は RunPod 側で pod_id をルーティングキーとして使うため、pod が
+    RUNNING でなくとも構築自体は可能 (接続時に失敗する)。
+    認証は RunPod アカウントに登録済みの公開鍵で行う (`~/.ssh/id_ed25519.pub`
+    などを https://runpod.io/console/user/settings に追加しておく)。
+    """
+    if not pod_id:
+        raise SshUnavailable("empty pod_id for proxy SSH")
+    return SshEndpoint(
+        host=f"{pod_id}@{PROXY_SSH_HOST}",
+        port=22,
+        user="root",
+        key_path=key_path,
+        kind="proxy",
+    )
+
+
+def get_pod_ssh_endpoint(
+    sdk: Any,
+    pod_id: str,
+    *,
+    via: SshKind = "direct",
+    key_path: Path | None = None,
+) -> SshEndpoint:
     """pod_id を SDK で引いて SshEndpoint に変換する。
 
-    SDK は `runpod` モジュール (module-level state を持つ) または同等の
-    `get_pod` 関数を持つもの。テスト時は MagicMock を渡せる。
+    Args:
+        via: "direct" は `runtime.ports` から TCP/22 を引く (要 RUNNING + sshd up)。
+             "proxy" は SDK 呼び出し不要で `<pod_id>@ssh.runpod.io` を組む。
+        key_path: 既定は direct→DEFAULT_DIRECT_KEY / proxy→DEFAULT_PROXY_KEY。
     """
+    if via == "proxy":
+        key = key_path or DEFAULT_PROXY_KEY
+        return build_proxy_endpoint(pod_id, key_path=key)
+
     pod = sdk.get_pod(pod_id)
     if pod is None:
         raise SshUnavailable(f"pod {pod_id!r} not found via SDK")
     if not isinstance(pod, Mapping):
         raise SshUnavailable(f"unexpected get_pod response type: {type(pod).__name__}")
-    return parse_ssh_endpoint(pod)
+    return parse_ssh_endpoint(pod, key_path=key_path or DEFAULT_DIRECT_KEY)
 
 
 __all__ = [
-    "DEFAULT_SSH_KEY",
+    "DEFAULT_DIRECT_KEY",
+    "DEFAULT_PROXY_KEY",
+    "PROXY_SSH_HOST",
     "SshEndpoint",
+    "SshKind",
     "SshUnavailable",
+    "build_proxy_endpoint",
     "get_pod_ssh_endpoint",
     "parse_ssh_endpoint",
 ]

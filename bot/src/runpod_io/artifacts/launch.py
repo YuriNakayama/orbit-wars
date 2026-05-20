@@ -32,8 +32,14 @@ def write_launch_json(
     gpu_type_id: str,
     dph_total: float,
     data_center_id: str | None = None,
+    mode: str = "oneshot",
 ) -> Path:
-    """train 直後にローカル launch metadata を書き出す。"""
+    """train 直後にローカル launch metadata を書き出す。
+
+    Args:
+        mode: "oneshot" (auto-terminate あり) / "interactive" (sleep infinity 保持)。
+            `dev/runpod ps` / `destroy` 系で参照する。
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "run_id": run_id,
@@ -45,6 +51,7 @@ def write_launch_json(
         "gpu_type_id": gpu_type_id,
         "dph_total": dph_total,
         "data_center_id": data_center_id,
+        "mode": mode,
         "launched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     path = run_dir / LAUNCH_FILENAME

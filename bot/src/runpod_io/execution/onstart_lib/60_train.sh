@@ -1,3 +1,15 @@
+# interactive モード: train を実行せず、SSH 接続待ちの状態で pod を保持する。
+# uv sync + DVC pull までは前段で完了済 (40_uv_and_dvc_pull.sh)。preprocess は
+# 50_preprocess.sh が `<PREPROCESS_CMD>` が空でない場合のみ実行済。
+# ユーザーは `dev/runpod ssh <run_id>` 経由で接続し、対話的に学習や検証を実行する。
+if [ "${RUNPOD_MODE}" = "interactive" ]; then
+  echo "[onstart] step=train_skip (interactive mode, awaiting SSH)"
+  mark "50_interactive_ready"
+  # exec で bash を sleep に置換し、trap 等が無くても pod を保持する。
+  # `runpodctl remove pod` か `dev/runpod destroy` でのみ終了する。
+  exec sleep infinity
+fi
+
 # preprocess-only mode: <TRAIN_MODULE> が空なら train セクションを全スキップ。
 # preprocess の成果物 (data/mart/...) は前段で DVC 永続化済み。
 if [ -z "<TRAIN_MODULE>" ]; then

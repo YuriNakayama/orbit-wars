@@ -105,6 +105,35 @@ Vast.ai 基盤と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` �
 
 両基盤の使い分け方針は [`docs/plans/runpod-basis/README.md`](../../docs/plans/runpod-basis/README.md) の「Vast.ai 基盤との使い分け」表を参照。
 
+### Interactive Mode (dev / debug pods)
+
+`dev/runpod dev` は **インタラクティブモード** で pod を確保し、`sleep infinity` で
+保持する。auto-cleanup / 8h timeout guard / `trap cleanup_destroy EXIT` を全て無効化
+するので、SSH 接続でコード変更・再実行・デバッグを繰り返せる。終了は明示的に
+`dev/runpod destroy <run_id>` で行う必要がある (放置すると課金が止まらない)。
+
+```bash
+# 起動 (commit を origin に push 済みであること)
+dev/runpod dev <commit-sha> [--case caseN] [--cloud-type SECURE|COMMUNITY|ALL]
+
+# 状態確認 (50_interactive_ready が出れば SSH 接続可)
+dev/runpod status <run_id> --case caseN
+
+# SSH 接続 (proxy=ssh.runpod.io 既定、direct=TCP/22 公開 port も可)
+dev/runpod ssh <run_id> [--case caseN] [--via proxy|direct] [--key PATH] [--exec "<cmd>"]
+
+# コード同期 (rsync 経由、bot/ のみ。.venv / data / __pycache__ 等は exclude)
+dev/runpod sync <run_id> [--case caseN] --push [--dry-run] [--delete]
+dev/runpod sync <run_id> [--case caseN] --pull
+
+# 明示的に terminate (interactive モードでは必須)
+dev/runpod destroy <run_id> [--case caseN] [-y]
+```
+
+oneshot モード (`dev/runpod train`) と interactive モード (`dev/runpod dev`) の比較や
+proxy SSH 用 key の登録方法は [`docs/plans/runpod-basis/07_interactive_mode.md`](../../docs/plans/runpod-basis/07_interactive_mode.md)
+を参照。`dev/runpod ps` は interactive pod を黄色で表示し destroy リマインダを出す。
+
 ## Kaggle Submission Policy
 
 Any real remote submission (`uv run python -m submit submit`, `dev/submit`, `kaggle competitions submit`, the `cd-kaggle-submit.yml` workflow_dispatch) is irreversible and consumes the daily 5-submission quota (note: `SubmissionStatus.ERROR` does NOT count against the quota — validation failures can be retried immediately). Always obtain explicit user approval immediately before executing, showing the case / message / mode to be submitted. Dry-run, archive build, and read-only history checks do NOT require approval. Prior approval covers only that single submission and does not extend to later submissions or auto-mode / autonomous loops.
