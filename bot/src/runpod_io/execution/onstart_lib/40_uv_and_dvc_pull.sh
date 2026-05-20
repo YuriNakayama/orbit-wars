@@ -102,6 +102,36 @@ echo "[onstart] iter12 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
 # 学習開始前に build する。imitation case は parquet-based BC で env を
 # 一切使わないため build 不要だった (rust .so は worktree の darwin 版が
 # git untracked で残っているのみ)。
+# Pre-check the venv before any secondary `uv sync --group <X>` call.
+# The original detection at line ~47 only runs before the FIRST sync;
+# subsequent group syncs can hit a poisoned persisted venv from a
+# previous failed bench run and die with
+# "Project virtual environment directory bot/.venv cannot be used
+#  because it is not a valid Python environment (no Python executable
+#  was found)" (observed on RunPod EU-RO-1 pods 20260520-102638 and
+# 20260520-103216 back-to-back). The reset logic is identical to the
+# first-sync block but lives in a function so we can call it before
+# both `--group env` and `--group cuda`.
+check_and_reset_broken_venv() {
+  if [ ! -x bot/.venv/bin/python ]; then
+    echo "[onstart] secondary uv sync: detected broken venv (bin/python missing); resetting"
+    rm -rf bot/.venv 2>/dev/null || true
+    if [ -d /persist/uv-venv-bot ]; then
+      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
+        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
+        || true
+      ln -sfn /persist/uv-venv-bot bot/.venv
+    fi
+    # Re-run the base sync so the env is rebuilt before we add a group.
+    echo "[onstart] secondary uv sync: rebuilding base env"
+    if ! ( cd bot && uv sync --frozen --no-dev ); then
+      echo "[onstart] secondary uv sync: base rebuild FAILED" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 if [ "<CASE_FAMILY>" = "reinforce" ]; then
   echo "[onstart] step=build_rust_sim (reinforce family のみ)"
   # reinforce は on-policy で env.step() を回すため Rust 製シミュレータの
@@ -109,6 +139,10 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   # `uv sync --group env` で入れる方が pip 経路を回避できて確実。
   # imitation case は parquet-based BC で env を使わないため env group を
   # 入れずに済む (default sync は --no-dev で env group も skip)。
+  if ! check_and_reset_broken_venv; then
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
   echo "[onstart] build_rust_sim: installing maturin via uv sync --group env"
   # Capture full output to /tmp/uv_env_sync.log so we have at least a
   # post-mortem hint when the pod gets cleaned up (onstart.log は S3 へ
@@ -183,6 +217,10 @@ fi
 case "<CASE>" in
   bench_*_gpu)
     echo "[onstart] step=install_cuda_jax (case=<CASE>): uv sync --group cuda"
+    if ! check_and_reset_broken_venv; then
+      mark "47_install_cuda_jax_failed"
+      exit 1
+    fi
     UV_CUDA_LOG="/tmp/uv_cuda_sync.log"
     if ! ( cd bot && uv sync --no-dev --group cuda --frozen ) >"${UV_CUDA_LOG}" 2>&1; then
       echo "[onstart] install_cuda_jax FAILED — uv sync log tail:" >&2
