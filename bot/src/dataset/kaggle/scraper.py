@@ -478,46 +478,25 @@ def _fetch_all(
                 _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
                 _on_processed(idx)
         else:
-            # サブミットを batch 化して、stuck worker 1 個が大量の queued
-            # task を巻き込まないようにする。各 batch 内では as_completed に
-            # 全体 timeout を付け、超過したら諦めて次の batch へ進む。
-            batch_size = max(workers * 4, 32)
-            # 1 batch あたり最大 wall-clock 上限 (rate ratio + 安全マージン)
-            batch_timeout = max(
-                120.0, batch_size / max(rate_limit.capacity, 1) * 60.0 * 3
-            )
+            # 全 plan を一括で submit し、batch 単位の as_completed timeout は
+            # 設けない。1 episode あたりの上限は `session.post(timeout=30s)` +
+            # urllib3 Retry (backoff_max=60s) の組み合わせで自然に決まり、
+            # 429 で worker が 60s 待たされても諦めずに次に進める。
+            # 全体の wall-clock 上限は呼び出し側 (GitHub Actions の
+            # `timeout-minutes`) に委ねる。
             idx = 0
-            for batch_start in range(0, total, batch_size):
-                batch = plan[batch_start : batch_start + batch_size]
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = [pool.submit(_io, p) for p in batch]
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_io, p) for p in plan]
+                for future in as_completed(futures):
+                    idx += 1
                     try:
-                        completed = list(as_completed(futures, timeout=batch_timeout))
-                    except TimeoutError:
-                        completed = [f for f in futures if f.done()]
-                        stuck = [f for f in futures if not f.done()]
-                        logger.warning(
-                            "scrape phase=fetch batch timeout: %d/%d completed, "
-                            "%d stuck — cancelling and skipping",
-                            len(completed),
-                            len(batch),
-                            len(stuck),
-                        )
-                        for f in stuck:
-                            f.cancel()
-                            acc.episodes_failed += 1
-                    for future in completed:
-                        idx += 1
-                        try:
-                            fetched = future.result(timeout=0)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "scrape phase=fetch worker exception: %s", exc
-                            )
-                            acc.episodes_failed += 1
-                            continue
-                        _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
-                        _on_processed(idx)
+                        fetched = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("scrape phase=fetch worker exception: %s", exc)
+                        acc.episodes_failed += 1
+                        continue
+                    _apply_fetched(fetched, spec=spec, acc=acc, seen_ids=seen_ids)
+                    _on_processed(idx)
     finally:
         stop_heartbeat.set()
     return total_records, total_replays

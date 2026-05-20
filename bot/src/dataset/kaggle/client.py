@@ -29,8 +29,12 @@ class KaggleEpisodeError(RuntimeError):
 class ClientConfig:
     user_agent: str = "orbit-wars-log-collector/0.1"
     timeout_sec: float = 30.0
-    max_retries: int = 3
-    backoff_factor: float = 1.0
+    # 429 で Kaggle が返す `Retry-After: 60s` を待ち切れるように
+    # total を増やし backoff_max を 60s に上げる。
+    # backoff: 2,4,8,16,32,60,60,60s → 最悪 ~4分待ってから諦める。
+    max_retries: int = 8
+    backoff_factor: float = 2.0
+    backoff_max: float = 60.0
     kaggle_config_path: str = "~/.kaggle/kaggle.json"
     pool_connections: int = 32
     pool_maxsize: int = 32
@@ -74,8 +78,10 @@ def build_session(config: ClientConfig | None = None) -> requests.Session:
     retry = Retry(
         total=cfg.max_retries,
         backoff_factor=cfg.backoff_factor,
+        backoff_max=cfg.backoff_max,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("POST", "GET"),
+        respect_retry_after_header=True,
         raise_on_status=False,
     )
     session.mount(
