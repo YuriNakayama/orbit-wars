@@ -36,18 +36,23 @@ model:
 
 train:
   case: case11
-  batch_size: 512
+  # 2026-05-20 retry #16: epoch 0 計測で rate_b_per_s=0.62 (~2.7s/batch) で
+  # 安定 → モデル forward/backward が支配的。batch_size 512 → 1024 で
+  # batches を半減 (10477 → 5239) し、num_workers も 2 → 4 に増やして
+  # DataLoader 競合を緩和。lr は linear scaling で 3e-4 → 6e-4 に追従。
+  batch_size: 1024
   # 2026-05-18 retry #13: lazy dataset で 1 epoch あたり ~2h かかる
   # (5.36M rows / 512 batch = 10.5k batches × IO overhead)。45 epoch は
   # 90h で非現実的なので 10 epoch + patience=3 に削って早期収束 or 中断。
   epochs: 10
-  lr: 3.0e-4
+  lr: 6.0e-4
   weight_decay: 1.0e-4
   # 2026-05-18 retry #15: parquet -> per-column .npy 化 (mmap_mode="r") で
   # dataset の IO を OS page cache に委譲した。mmap は fork-safe なので
   # num_workers=2 で安全に prefetch 並列化できる (parquet ParquetFile 路線
   # では fork 不可だった)。pin_memory は retry #12 で leak したため off 維持。
-  num_workers: 2
+  # 2026-05-20: batch 1024 化に伴い num_workers=4 へ増やし IO 並列を強化。
+  num_workers: 4
   pin_memory: false
   persistent_workers: true
   loss_weights:
