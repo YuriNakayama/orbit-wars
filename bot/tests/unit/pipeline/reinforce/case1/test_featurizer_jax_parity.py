@@ -16,6 +16,7 @@ this is the BC-compatibility budget.
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -35,19 +36,58 @@ from pipeline.reinforce.case1.policy.featurizer_jax import (
 
 PARITY_TOL = 1e-4
 
-# Columns implemented in W1. Anything outside this set is allowed to drift
-# in W1 (they are zero-filled in the JAX version) and will be unblocked
-# in W2.
-W1_PLANET_COLS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13)
+# Columns implemented through W2a (planet×planet) + W2b (fleet ETA).
+# Remaining: 20-27 (orbit), 32-34 (delta_t1/t2/owner_changed history),
+# 35-40 (timeline).
+W1_PLANET_COLS = (
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    28, 29, 30, 31,
+)
 W1_GLOBAL_COLS = tuple(i for i in range(GLOBAL_FEAT_DIM) if i not in (16, 17, 18, 19))
 
 
-def _featurize_both(seed: int, turns: int) -> tuple[np.ndarray, np.ndarray, dict, dict]:
-    """Run both featurizers from a fresh state with `turns` no-op steps."""
+def _build_fire_actions(state) -> jnp.ndarray:
+    """Action tensor that fires 1 ship at angle 0 from each seat's home.
+
+    Sentinel: from_planet_id == -1 means no-op. We populate row 0 of seats
+    0 and 1 with their first own-planet (ships >= 2) so both sides spawn
+    a fleet each turn, exercising the W2-fleet code path.
+    """
+    actions = np.full(empty_actions().shape, -1, dtype=np.int32)
+    pid = np.asarray(state.planet_id)
+    owner = np.asarray(state.planet_owner)
+    valid = np.asarray(state.planet_valid)
+    ships = np.asarray(state.planet_ships)
+    for seat in (0, 1):
+        for i in range(pid.shape[0]):
+            if (
+                bool(valid[i])
+                and int(owner[i]) == seat
+                and int(ships[i]) >= 2
+            ):
+                actions[seat, 0, 0] = int(pid[i])
+                actions[seat, 0, 1] = 0
+                actions[seat, 0, 2] = 1
+                break
+    return jnp.asarray(actions)
+
+
+def _featurize_both(
+    seed: int, turns: int, with_fleets: bool = False
+) -> tuple[np.ndarray, np.ndarray, dict, dict]:
+    """Run both featurizers from a fresh state with `turns` steps.
+
+    When `with_fleets=True`, both seats fire 1 ship from their home each
+    turn so the fleet ETA / incoming columns are exercised.
+    """
     js = reset(seed=seed, num_agents=2)
     ea = empty_actions()
     for _ in range(turns):
-        js, _, _ = step(js, ea)
+        if with_fleets:
+            actions = _build_fire_actions(js)
+            js, _, _ = step(js, actions)
+        else:
+            js, _, _ = step(js, ea)
     obs = state_to_obs(js, player=0)
     jax_batch = featurize_jax_w1(js, player=0)
     torch_batch, _snap = featurize(obs, history=HistoryState())
@@ -120,6 +160,34 @@ def test_w1_zero_filled_cols_are_zero_in_jax() -> None:
         assert float(global_arr[col]) == 0.0, (
             f"global col {col} should be zero in W1, got {global_arr[col]}"
         )
+
+
+# W2b: fleet ETA columns. Run with active fleets so the cols actually carry
+# information and parity is meaningful.
+W2B_PLANET_COLS = (9, 10, 17, 28, 29, 30, 31)
+# idx 16 in the with-fleets case also includes the fleet contribution.
+W2B_PLANET_COLS_FLEET_TOUCHED = W2B_PLANET_COLS + (16,)
+
+
+@pytest.mark.parametrize("seed", [0, 7, 42])
+@pytest.mark.parametrize("turns", [10, 30])
+def test_planet_feats_fleet_columns(seed: int, turns: int) -> None:
+    """Fleet-dependent columns must match within tolerance with active fleets."""
+    jax_planet, torch_planet, jx, _tx = _featurize_both(
+        seed, turns, with_fleets=True
+    )
+    valid = jx["valid"]
+    for col in W2B_PLANET_COLS_FLEET_TOUCHED:
+        for slot in range(MAX_PLANETS):
+            if not bool(valid[slot]):
+                continue
+            j = float(jax_planet[slot, col])
+            t = float(torch_planet[slot, col])
+            diff = abs(j - t)
+            assert diff < PARITY_TOL, (
+                f"seed={seed} turns={turns} slot={slot} col={col} "
+                f"(fleets): jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+            )
 
 
 def test_masks_match_torch() -> None:

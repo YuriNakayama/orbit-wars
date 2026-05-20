@@ -53,6 +53,9 @@ COMET_WINDOW = 30
 LOG_NORM_DENOM = 6.0
 LAUNCH_COUNT_NORM = 10.0
 DIAG = math.sqrt(2.0) * BOARD_SIZE
+NEIGHBOR_RADIUS_SHORT = 8.0
+NEIGHBOR_RADIUS_LONG = 25.0
+HORIZON_TURNS = 30
 TEMPLATE_CTX_DIM = 40  # NUM_TEMPLATES (8) * PER_TEMPLATE_FEATS (5)
 CAND_K = 8
 CAND_FEAT_DIM = 14
@@ -178,13 +181,196 @@ def featurize_jax_w1(
     feats = feats.at[:, 13].set(
         jnp.minimum(prod_f / jnp.maximum(1.0, ships_f), 5.0) / 5.0
     )
-    # idx 14..20: nearest_enemy_dist, support_density, threat_pressure_short,
-    # net_signed, nearest_ally_dist, nearest_neutral_dist — W2 (require
-    # planet×planet pairwise distances + fleet ETA accumulation)
-    # idx 21..28: orbit predictions — W2 (calls geometry.py predict_*)
-    # idx 29..34: ally/enemy_eta_norm, incoming_*_ships_log, delta_t1/t2,
-    # owner_changed — W2
-    # idx 35..40: timeline columns — W2
+    # idx 14, 15, 18, 19, 16 (partial): planet×planet pairwise distance
+    # block. Build a (P, P) distance matrix once and reduce.
+    #
+    # Vendor (featurizer.py:259-289): for each planet i, iterate j != i,
+    # compute hypot(xi-xj, yi-yj), maintain nearest_{ally,enemy,neutral}_dist
+    # (init = DIAG) and accumulate support_density (own planets within
+    # NEIGHBOR_RADIUS_LONG) and threat_pressure_short (enemy planets within
+    # NEIGHBOR_RADIUS_SHORT). The fleet half of threat_pressure_short is
+    # added later by the W2-fleet sub-phase; we leave idx 16 = 0 here.
+    dx = px[:, None] - px[None, :]
+    dy = py[:, None] - py[None, :]
+    dist_mat = jnp.sqrt(dx * dx + dy * dy)  # (P, P), float32
+    self_mask = jnp.eye(MAX_PLANETS, dtype=jnp.bool_)
+    # j_valid: planet j is a usable counterparty (not self, valid slot).
+    j_valid = valid_full[None, :] & ~self_mask  # (P, P)
+
+    # Owner-typed neighbor masks (planet-vs-planet, broadcasting over i).
+    j_owner = owner[None, :]
+    j_is_ally = j_valid & (j_owner == player)
+    j_is_neutral = j_valid & (j_owner == -1)
+    j_is_enemy = j_valid & (j_owner != -1) & (j_owner != player)
+
+    # Vendor initializes nearest_*_dist[i] = DIAG, then takes min over
+    # matching j. Replicate by masking non-matching to +inf and taking min.
+    large = jnp.float32(jnp.inf)
+    diag_f = jnp.float32(DIAG)
+    nearest_ally = jnp.min(
+        jnp.where(j_is_ally, dist_mat, large), axis=1
+    )
+    nearest_ally = jnp.where(jnp.isfinite(nearest_ally), nearest_ally, diag_f)
+    nearest_enemy = jnp.min(
+        jnp.where(j_is_enemy, dist_mat, large), axis=1
+    )
+    nearest_enemy = jnp.where(jnp.isfinite(nearest_enemy), nearest_enemy, diag_f)
+    nearest_neutral = jnp.min(
+        jnp.where(j_is_neutral, dist_mat, large), axis=1
+    )
+    nearest_neutral = jnp.where(
+        jnp.isfinite(nearest_neutral), nearest_neutral, diag_f
+    )
+
+    j_ships = ships.astype(jnp.float32)[None, :]
+    support_density = jnp.sum(
+        jnp.where(j_is_ally & (dist_mat <= NEIGHBOR_RADIUS_LONG), j_ships, 0.0),
+        axis=1,
+    )
+    threat_pressure_planet = jnp.sum(
+        jnp.where(
+            j_is_enemy & (dist_mat <= NEIGHBOR_RADIUS_SHORT), j_ships, 0.0
+        ),
+        axis=1,
+    )
+
+    feats = feats.at[:, 14].set(nearest_enemy / diag_f)
+    feats = feats.at[:, 15].set(jnp.log1p(support_density) / LOG_NORM_DENOM)
+    # idx 16: planet half only — vendor adds fleet contributions in W2-fleet.
+    # Leave as the planet half so subsequent W2-fleet only adds the fleet
+    # term. The PyTorch reference includes fleet contributions which are
+    # zero in the no-fleet parity fixture (W1 path).
+    feats = feats.at[:, 16].set(
+        jnp.log1p(threat_pressure_planet) / LOG_NORM_DENOM
+    )
+    # idx 17: net_signed — W2-fleet (needs incoming_*_ships)
+    feats = feats.at[:, 18].set(nearest_ally / diag_f)
+    feats = feats.at[:, 19].set(nearest_neutral / diag_f)
+    # idx 20: unused in PyTorch featurizer (always 0)
+
+    # ------------------------------------------------------------------
+    # W2b: fleet×planet ETA matrix.
+    # Vendor (featurizer.py:236-262) iterates each fleet × each planet,
+    # computing in-cone ETA via _fleet_target_eta; accumulates
+    # incoming_{ally,enemy,neutral}_ships, *_eta_min, nearest_eta, and
+    # threat_pressure_short's fleet contribution. We vectorize over the
+    # fixed-shape fleet table (MAX_FLEETS = 512 in jax_env).
+    fleet_owner = state.fleet_owner  # (F,)
+    fleet_xy_arr = state.fleet_xy  # (F, 2)
+    fleet_angle = state.fleet_angle  # (F,)
+    fleet_ships_arr = state.fleet_ships  # (F,)
+    fleet_valid = state.fleet_valid  # (F,)
+
+    fx = fleet_xy_arr[:, 0].astype(jnp.float32)
+    fy = fleet_xy_arr[:, 1].astype(jnp.float32)
+    fang = fleet_angle.astype(jnp.float32)
+    fships_f = fleet_ships_arr.astype(jnp.float32)
+    f_speed = jnp.maximum(
+        0.5, 2.0 - 0.05 * jnp.sqrt(jnp.maximum(1.0, fships_f))
+    )
+
+    dx_fp = px[None, :] - fx[:, None]  # (F, P)
+    dy_fp = py[None, :] - fy[:, None]  # (F, P)
+    dir_x = jnp.cos(fang)
+    dir_y = jnp.sin(fang)
+    proj = dx_fp * dir_x[:, None] + dy_fp * dir_y[:, None]  # (F, P)
+    perp_sq = dx_fp * dx_fp + dy_fp * dy_fp - proj * proj
+    radius_sq = (radius_f * radius_f)[None, :]
+    in_cone = (proj >= 0) & (perp_sq < radius_sq)
+    hit_d = jnp.maximum(
+        0.0, proj - jnp.sqrt(jnp.maximum(0.0, radius_sq - perp_sq))
+    )
+    eta_mat = hit_d / f_speed[:, None]  # (F, P)
+    # vendor: skip if eta > HORIZON_TURNS or out of cone, also require
+    # planet valid and fleet valid.
+    in_horizon = (
+        in_cone
+        & (eta_mat <= HORIZON_TURNS)
+        & fleet_valid[:, None]
+        & valid_full[None, :]
+    )
+    eta_masked = jnp.where(in_horizon, eta_mat, jnp.float32(jnp.inf))
+
+    fl_is_ally = fleet_owner[:, None] == player
+    fl_is_neutral_only = fleet_owner[:, None] == -1
+    fl_is_enemy = ~fl_is_ally & ~fl_is_neutral_only
+
+    incoming_ally = jnp.sum(
+        jnp.where(in_horizon & fl_is_ally, fships_f[:, None], 0.0), axis=0
+    )
+    incoming_enemy = jnp.sum(
+        jnp.where(in_horizon & fl_is_enemy, fships_f[:, None], 0.0), axis=0
+    )
+    # incoming_neutral is used by the timeline (W2e), not the planet feats
+    # directly. Skip until W2e.
+
+    horizon_default = jnp.float32(HORIZON_TURNS + 1.0)
+    nearest_eta = jnp.min(eta_masked, axis=0)
+    nearest_eta = jnp.where(
+        jnp.isfinite(nearest_eta), nearest_eta, horizon_default
+    )
+    ally_eta_min = jnp.min(
+        jnp.where(fl_is_ally, eta_masked, jnp.float32(jnp.inf)), axis=0
+    )
+    ally_eta_min = jnp.where(
+        jnp.isfinite(ally_eta_min), ally_eta_min, horizon_default
+    )
+    enemy_eta_min = jnp.min(
+        jnp.where(fl_is_enemy, eta_masked, jnp.float32(jnp.inf)), axis=0
+    )
+    enemy_eta_min = jnp.where(
+        jnp.isfinite(enemy_eta_min), enemy_eta_min, horizon_default
+    )
+
+    # Fleet contribution to threat_pressure_short (idx 16): enemy fleets
+    # within NEIGHBOR_RADIUS_SHORT of each planet (raw Euclidean, not ETA).
+    fleet_planet_dist = jnp.sqrt(dx_fp * dx_fp + dy_fp * dy_fp)  # (F, P)
+    fl_threat_mask = (
+        fl_is_enemy
+        & fleet_valid[:, None]
+        & valid_full[None, :]
+        & (fleet_planet_dist <= NEIGHBOR_RADIUS_SHORT)
+    )
+    threat_pressure_fleet = jnp.sum(
+        jnp.where(fl_threat_mask, fships_f[:, None], 0.0), axis=0
+    )
+    # Replace idx 16 with planet half + fleet half summed *before* log1p.
+    feats = feats.at[:, 16].set(
+        jnp.log1p(threat_pressure_planet + threat_pressure_fleet)
+        / LOG_NORM_DENOM
+    )
+
+    # idx 9: log1p(incoming_enemy) - log1p(incoming_ally)
+    feats = feats.at[:, 9].set(
+        jnp.log1p(incoming_enemy) - jnp.log1p(incoming_ally)
+    )
+    # idx 10: eta_norm = min(nearest_eta, HORIZON+1) / (HORIZON+1)
+    feats = feats.at[:, 10].set(
+        jnp.minimum(nearest_eta, horizon_default) / horizon_default
+    )
+    # idx 17: net_signed = (incoming_enemy - incoming_ally) / max(1, ships)
+    # then clamp to [-3, 3] and divide by 3
+    ships_safe = jnp.maximum(1.0, ships_f)
+    net_signed = (incoming_enemy - incoming_ally) / ships_safe
+    feats = feats.at[:, 17].set(
+        jnp.maximum(-3.0, jnp.minimum(3.0, net_signed)) / 3.0
+    )
+    # idx 28: ally_eta_norm
+    feats = feats.at[:, 28].set(
+        jnp.minimum(ally_eta_min, horizon_default) / horizon_default
+    )
+    # idx 29: enemy_eta_norm
+    feats = feats.at[:, 29].set(
+        jnp.minimum(enemy_eta_min, horizon_default) / horizon_default
+    )
+    # idx 30: log1p(incoming_ally) / LOG_NORM_DENOM
+    feats = feats.at[:, 30].set(jnp.log1p(incoming_ally) / LOG_NORM_DENOM)
+    # idx 31: log1p(incoming_enemy) / LOG_NORM_DENOM
+    feats = feats.at[:, 31].set(jnp.log1p(incoming_enemy) / LOG_NORM_DENOM)
+    # idx 32, 33: delta_t1, delta_t2 — W2-history (require prior snapshots)
+    # idx 34: owner_changed — W2-history
+    # idx 20..27: orbit predictions — W2c
+    # idx 35..40: timeline columns — W2e
 
     # Mask invalid slots — zero out all columns for them.
     feats = feats * valid_full[:, None].astype(jnp.float32)
