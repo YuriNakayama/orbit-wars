@@ -884,32 +884,56 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             # post-train `70_artifacts_and_dvc.sh` upload runs (observed 064334
             # and 011220). Mirror best.pt to S3 the moment best_updated fires,
             # so a host preempt at epoch N still leaves the best-so-far reachable.
-            # The destination URI is set by ORBIT_WARS_BEST_S3_URI from onstart;
-            # outside RunPod the var is empty and we skip.
-            best_s3_uri = os.environ.get("ORBIT_WARS_BEST_S3_URI", "").strip()
-            if best_s3_uri:
+            #
+            # ORBIT_WARS_BEST_S3_PREFIX is set by onstart and points at the
+            # per-run artifacts directory (no trailing filename). We upload
+            # TWO objects per best_updated:
+            #
+            #   <prefix>/best_e{N}_vftf{val:.4f}.pt   — per-epoch history
+            #     so every best ever produced this run survives in S3
+            #     (preempt-resistant even if a later epoch overwrites
+            #     `best.pt`). Filename embeds epoch + val_target_fire_acc
+            #     so a glance tells you what each checkpoint is worth.
+            #
+            #   <prefix>/best.pt                       — latest-best alias
+            #     for tooling that just wants "the" best.pt.
+            #
+            # Outside RunPod the var is empty and we skip silently.
+            best_s3_prefix = os.environ.get("ORBIT_WARS_BEST_S3_PREFIX", "").strip()
+            if best_s3_prefix and best_s3_prefix.startswith("s3://"):
+                rest = best_s3_prefix[len("s3://") :].rstrip("/")
+                bucket, _, key_prefix = rest.partition("/")
+                # NB: best_metric_value is val_target_fire_acc when the
+                # config uses the default early-stop metric (case11 does).
+                # If the metric ever changes, the filename token still
+                # reads as `vftf` for simplicity — the actual metric name
+                # is recorded in the JSON event right above.
+                history_name = (
+                    f"best_e{epoch}_vftf{best_metric_value:.4f}.pt"
+                )
+                history_key = f"{key_prefix}/{history_name}"
+                latest_key = f"{key_prefix}/best.pt"
                 try:
                     import boto3  # noqa: PLC0415
 
                     s3 = boto3.client("s3")
-                    if best_s3_uri.startswith("s3://"):
-                        rest = best_s3_uri[len("s3://") :]
-                        bucket, _, key = rest.partition("/")
-                        s3.upload_file(str(run_weights_path), bucket, key)
-                        logger.info(
-                            json.dumps(
-                                {
-                                    "event": "best_s3_upload",
-                                    "epoch": epoch,
-                                    "s3_uri": best_s3_uri,
-                                }
-                            )
+                    s3.upload_file(str(run_weights_path), bucket, history_key)
+                    s3.upload_file(str(run_weights_path), bucket, latest_key)
+                    logger.info(
+                        json.dumps(
+                            {
+                                "event": "best_s3_upload",
+                                "epoch": epoch,
+                                "history_uri": f"s3://{bucket}/{history_key}",
+                                "latest_uri": f"s3://{bucket}/{latest_key}",
+                            }
                         )
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "best.pt S3 upload failed epoch=%d uri=%s err=%s",
+                        "best.pt S3 upload failed epoch=%d prefix=%s err=%s",
                         epoch,
-                        best_s3_uri,
+                        best_s3_prefix,
                         exc,
                     )
 
