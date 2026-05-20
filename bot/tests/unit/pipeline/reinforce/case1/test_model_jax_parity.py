@@ -64,10 +64,6 @@ def test_forward_parity(seed: int, torch_seed: int) -> None:
     torch_batch, _ = featurize(obs, history=HistoryState())
     jax_batch = featurize_jax_w1(state, player=0)
 
-    # Zero timeline cols 35-40 in torch input so both featurizers agree.
-    # (W2e timeline port is deferred.)
-    torch_batch.planet_feats[:, :, 35:41] = 0
-
     with torch.no_grad():
         torch_out = torch_model(torch_batch)
     jax_out = jax_model(jax_batch)

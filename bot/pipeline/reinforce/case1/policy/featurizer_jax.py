@@ -65,6 +65,12 @@ NEIGHBOR_RADIUS_SHORT = 8.0
 NEIGHBOR_RADIUS_LONG = 25.0
 HORIZON_TURNS = 30
 ORBIT_HORIZONS = (1, 2, 4, 8)
+TIMELINE_HORIZON = 30
+SHORT_WINDOW = 3  # `loss_3turn` window in summarize_timeline
+KEEP_BSEARCH_ITERS = 10  # log2(max ships ~= 400) rounded up
+OWNER_ALLY = 0
+OWNER_ENEMY = 1
+OWNER_NEUTRAL = 2
 HISTORY_TURNS = 4
 # Fixed-size buffers for the JAX history pytree. We retain the last
 # `N_PREV_SNAPSHOTS` planet snapshots (the featurizer reads positions -2
@@ -619,6 +625,374 @@ def _build_candidate_block(
     return cand_feats, cand_mask, cand_pid
 
 
+def _resolve_arrival_step(
+    owner_cls: jax.Array,  # int32 scalar in {0, 1, 2}
+    garrison: jax.Array,  # float32 scalar
+    arrivals_3: jax.Array,  # float32 (3,) — ships by owner class
+) -> tuple[jax.Array, jax.Array]:
+    """JAX equivalent of `resolve_arrival_event` collapsed to 3 owner classes.
+
+    Mirrors the vendor logic: aggregate ships by attacker class, find top
+    and second-by-ships, compute survivor = (top_owner, top - second) with
+    tie → (-1, 0). Combine survivor with the existing garrison: same
+    owner → garrison + survivor_ships; different owner → garrison -=
+    survivor_ships, flipping owner if garrison goes negative.
+
+    NEUTRAL acts as a "no survivor" sentinel here; survivor_ships <= 0
+    keeps the existing (owner_cls, garrison) untouched (after the
+    `max(0, garrison)` floor that PyTorch applies on the empty path).
+    """
+    # Total ships per class (ally, enemy, neutral).
+    # Sort to find top, second. Use jnp.sort descending.
+    sorted_vals = jnp.sort(arrivals_3)[::-1]  # (3,) descending
+    top_val = sorted_vals[0]
+    second_val = sorted_vals[1]
+    # top_idx = argmax (ties: first occurrence — matches PyTorch's sorted
+    # stable order when ships are equal).
+    top_idx = jnp.argmax(arrivals_3).astype(jnp.int32)
+    nonzero_any = top_val > 0
+    # any-other-nonzero = (sum of 3 - top) > 0 → second_val > 0 since
+    # sorted descending. Vendor uses len(sorted_players) > 1 which is True
+    # iff at least 2 classes have nonzero arrivals.
+    has_second = second_val > 0
+    tie = has_second & (top_val == second_val)
+    survivor_ships = jnp.where(
+        tie,
+        jnp.float32(0.0),
+        jnp.where(has_second, top_val - second_val, top_val),
+    )
+    # When tie, survivor_owner becomes "neutral" (-1 in vendor → no
+    # ownership change). When no attackers, the carry is untouched. We
+    # use OWNER_NEUTRAL (2) as the tie sentinel; the consumer below
+    # ignores survivor when survivor_ships <= 0.
+    survivor_owner = jnp.where(
+        tie, jnp.int32(OWNER_NEUTRAL), top_idx
+    )
+
+    # Apply to current (owner_cls, garrison).
+    no_change = (~nonzero_any) | (survivor_ships <= 0)
+    same_owner = survivor_owner == owner_cls
+    # garrison if same_owner: garrison + survivor_ships
+    # else: garrison - survivor_ships; if negative, flip owner & take |neg|
+    g_same = garrison + survivor_ships
+    g_minus = garrison - survivor_ships
+    flip = g_minus < 0
+    new_owner_flip = survivor_owner
+    new_garrison_flip = -g_minus
+    new_owner_no_flip = owner_cls
+    new_garrison_no_flip = g_minus
+
+    new_owner_attack = jnp.where(flip, new_owner_flip, new_owner_no_flip)
+    new_garrison_attack = jnp.where(flip, new_garrison_flip, new_garrison_no_flip)
+
+    new_owner = jnp.where(
+        no_change,
+        owner_cls,
+        jnp.where(same_owner, owner_cls, new_owner_attack),
+    )
+    new_garrison = jnp.where(
+        no_change,
+        jnp.maximum(0.0, garrison),
+        jnp.where(same_owner, g_same, new_garrison_attack),
+    )
+    return new_owner, new_garrison
+
+
+def _simulate_one_timeline(
+    init_owner_cls: jax.Array,  # int32 scalar
+    init_ships: jax.Array,  # float32 scalar
+    production: jax.Array,  # float32 scalar
+    arrivals_per_turn: jax.Array,  # float32 (HORIZON+1, 3)
+    initial_garrison: jax.Array | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Simulate per-planet timeline; return ships_at, owner_at,
+    min_owned (if planet was ally at t=0), fall_seen, fall_turn.
+
+    Returns:
+      ships_at:        (HORIZON+1,) float32
+      owner_at:        (HORIZON+1,) int32
+      min_owned_final: float32 (scalar) — min ally garrison across times
+                       when owner == ALLY; 0 if planet was never ALLY.
+      fall_seen:       bool — True iff planet flipped from ALLY to non-ALLY
+      fall_turn:       int32 — first turn of the fall (HORIZON+1 if never)
+    """
+    horizon = TIMELINE_HORIZON
+
+    if initial_garrison is None:
+        initial_garrison = jnp.maximum(0.0, init_ships)
+
+    init_min_owned = jnp.where(
+        init_owner_cls == OWNER_ALLY, initial_garrison, jnp.float32(0.0)
+    )
+
+    def step(
+        carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+        x: tuple[jax.Array, jax.Array],  # (arrivals_3, turn_idx)
+    ) -> tuple[
+        tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+        tuple[jax.Array, jax.Array],
+    ]:
+        owner_cls, garrison, min_owned, fall_seen, fall_turn = carry
+        arrivals_3, turn_idx = x
+
+        # Production: vendor adds production if owner != -1 (neutral). In
+        # our 3-class encoding, NEUTRAL is class 2.
+        garrison = garrison + jnp.where(
+            owner_cls != OWNER_NEUTRAL, production, jnp.float32(0.0)
+        )
+
+        prev_owner = owner_cls
+        new_owner, new_garrison = _resolve_arrival_step(
+            owner_cls, garrison, arrivals_3
+        )
+
+        # Track fall: was ally, now not ally.
+        was_ally = prev_owner == OWNER_ALLY
+        now_not_ally = new_owner != OWNER_ALLY
+        new_fall_this_turn = was_ally & now_not_ally
+        new_fall_seen = fall_seen | new_fall_this_turn
+        # First fall turn: keep first occurrence (only update if we haven't
+        # seen one yet).
+        new_fall_turn = jnp.where(
+            new_fall_seen & ~fall_seen, turn_idx, fall_turn
+        )
+
+        # min_owned: min garrison while owner is ALLY.
+        new_min_owned = jnp.where(
+            new_owner == OWNER_ALLY,
+            jnp.minimum(min_owned, new_garrison),
+            min_owned,
+        )
+
+        new_carry = (
+            new_owner,
+            new_garrison,
+            new_min_owned,
+            new_fall_seen,
+            new_fall_turn,
+        )
+        return new_carry, (new_garrison, new_owner)
+
+    turns = jnp.arange(1, horizon + 1, dtype=jnp.int32)
+    # arrivals_per_turn includes turn 0 (no arrivals applied at t=0).
+    # Scan over turns 1..horizon → use arrivals_per_turn[1..horizon].
+    init_carry = (
+        init_owner_cls,
+        initial_garrison,
+        init_min_owned,
+        jnp.bool_(False),
+        jnp.int32(horizon + 1),
+    )
+    (
+        final_owner,
+        final_garrison,
+        final_min_owned,
+        final_fall_seen,
+        final_fall_turn,
+    ), (ships_seq, owner_seq) = jax.lax.scan(
+        step, init_carry, (arrivals_per_turn[1:], turns)
+    )
+
+    # Prepend t=0 frame.
+    ships_at = jnp.concatenate([initial_garrison[None], ships_seq], axis=0)
+    owner_at = jnp.concatenate([init_owner_cls[None], owner_seq], axis=0)
+    return ships_at, owner_at, final_min_owned, final_fall_seen, final_fall_turn
+
+
+def _build_timeline_cols(
+    px: jax.Array,
+    py: jax.Array,
+    owner: jax.Array,  # int32 (P,) raw player id (0/1/.../-1)
+    ships_f: jax.Array,  # float32 (P,)
+    prod_f: jax.Array,  # float32 (P,) production
+    valid_full: jax.Array,
+    player: int,
+    eta_mat: jax.Array,  # float32 (F, P)
+    in_horizon: jax.Array,  # bool (F, P)
+    fl_is_ally: jax.Array,  # bool (F, 1)
+    fl_is_enemy: jax.Array,  # bool (F, 1)
+    fl_is_neutral_only: jax.Array,  # bool (F, 1)
+    fships_f: jax.Array,  # float32 (F,)
+) -> jax.Array:
+    """Return (P, 6) timeline summary cols: loss_3turn, ttf_norm, min_owned,
+    surplus, fall_predicted, keep_needed (already log1p'd / normalized where
+    applicable to match the planet_feats spec).
+    """
+    P = MAX_PLANETS
+    H = TIMELINE_HORIZON
+
+    # Per-planet 3-class initial owner.
+    init_owner_cls = jnp.where(
+        owner == player,
+        jnp.int32(OWNER_ALLY),
+        jnp.where(owner == -1, jnp.int32(OWNER_NEUTRAL), jnp.int32(OWNER_ENEMY)),
+    )  # (P,)
+
+    # Per-fleet integer eta: max(1, ceil(eta)). Vendor's normalize_arrivals
+    # uses ceil. Mask to horizon.
+    eta_int = jnp.maximum(1, jnp.ceil(eta_mat)).astype(jnp.int32)
+    valid_arr = in_horizon & (eta_int <= H)  # (F, P)
+
+    # Owner class per (F, P): broadcast fleet owner; planet doesn't matter.
+    # fl_is_* are (F, 1) so broadcast to (F, P).
+    fl_cls = jnp.where(
+        fl_is_ally,
+        jnp.int32(OWNER_ALLY),
+        jnp.where(
+            fl_is_neutral_only, jnp.int32(OWNER_NEUTRAL), jnp.int32(OWNER_ENEMY)
+        ),
+    )  # (F, 1)
+    fl_cls_b = jnp.broadcast_to(fl_cls, (eta_mat.shape[0], P))
+
+    # Build (P, H+1, 3) arrivals: for each (planet, turn, owner_class),
+    # sum fleet ships matching that bucket.
+    # Approach: scatter-add via segment_sum or vectorized where.
+    # The (F, P) eta_int can be encoded as a one-hot turn mask, multiplied
+    # by ships and class mask, then reduced over fleets.
+    # Memory: F * P * (H+1) = 512 * 36 * 31 = ~570k entries; acceptable.
+    turn_onehot = (
+        eta_int[..., None] == jnp.arange(0, H + 1, dtype=jnp.int32)
+    )  # (F, P, H+1) bool
+    cls_onehot = (
+        fl_cls_b[..., None] == jnp.arange(0, 3, dtype=jnp.int32)
+    )  # (F, P, 3) bool
+
+    # We want arrivals[p, t, c] = sum_f ships_f[f] * valid_arr[f, p] *
+    #                                turn_onehot[f, p, t] *
+    #                                cls_onehot[f, p, c]
+    # Combine first: (F, P, H+1, 3)
+    ships_fp = (
+        fships_f[:, None, None, None] * valid_arr[..., None, None]
+    )  # (F, P, 1, 1)
+    selectors = (
+        turn_onehot[..., None] & cls_onehot[..., None, :]
+    )  # (F, P, H+1, 3)
+    arrivals_ptc = jnp.sum(
+        ships_fp * selectors.astype(jnp.float32), axis=0
+    )  # (P, H+1, 3)
+
+    # Run the per-planet scan via vmap over P.
+    def _run(owner_cls, ships, prod, arrivals):
+        return _simulate_one_timeline(owner_cls, ships, prod, arrivals)
+
+    ships_at, owner_at, min_owned, fall_seen, fall_turn = jax.vmap(_run)(
+        init_owner_cls, ships_f, prod_f, arrivals_ptc
+    )
+    # ships_at: (P, H+1), owner_at: (P, H+1).
+
+    # Summarize:
+    s0 = ships_at[:, 0]  # = init garrison
+    s_short = ships_at[:, jnp.minimum(SHORT_WINDOW, H)]  # (P,)
+    owner_short = owner_at[:, jnp.minimum(SHORT_WINDOW, H)]
+    same_owner_short = owner_at[:, 0] == owner_short
+    loss_3turn = jnp.where(
+        same_owner_short,
+        jnp.maximum(0.0, s0 - s_short),
+        jnp.maximum(0.0, s0),
+    )
+
+    ttf_norm = jnp.where(
+        fall_seen,
+        jnp.maximum(
+            0.0,
+            jnp.minimum(
+                1.0,
+                fall_turn.astype(jnp.float32)
+                / jnp.float32(jnp.maximum(1, H)),
+            ),
+        ),
+        jnp.float32(1.0),
+    )
+
+    s_h = ships_at[:, H]
+    own_h = owner_at[:, H]
+    surplus = jnp.where(own_h == owner_at[:, 0], s_h, jnp.float32(0.0))
+    fall_predicted = fall_seen.astype(jnp.float32)
+
+    # min_owned: floor & clamp (vendor: max(0, int(floor(min_owned))))
+    min_owned_clamped = jnp.maximum(
+        jnp.float32(0.0), jnp.floor(min_owned)
+    )
+    # Vendor returns 0 if planet.owner != player (init_owner_cls != ALLY).
+    min_owned_clamped = jnp.where(
+        init_owner_cls == OWNER_ALLY, min_owned_clamped, jnp.float32(0.0)
+    )
+
+    # keep_needed binary search: only for ally planets. Run KEEP_BSEARCH_ITERS
+    # iterations of bsearch; track whether full ships works.
+    def _survives_with_keep(
+        owner_cls, keep, prod, arrivals
+    ) -> jax.Array:
+        # Replicate vendor `survives_with_keep`: simulate with garrison=keep
+        # and check if owner stays ALLY across the full horizon AND ends
+        # ALLY. Vendor's `survives_with_keep` returns True iff owner remains
+        # ALLY throughout (including final).
+        # We use _simulate_one_timeline with initial_garrison = keep, then
+        # check fall_seen == False AND owner_at[H] == ALLY.
+        ships_at_k, owner_at_k, _mo, fs, _ft = _simulate_one_timeline(
+            owner_cls,
+            jnp.float32(keep),
+            prod,
+            arrivals,
+            initial_garrison=jnp.float32(keep),
+        )
+        return (~fs) & (owner_at_k[H] == OWNER_ALLY)
+
+    def _keep_needed_one(owner_cls, ships, prod, arrivals):
+        # Only valid for ally planets; non-ally returns 0.
+        is_ally = owner_cls == OWNER_ALLY
+        full_ships = jnp.float32(ships)
+        survives_full = _survives_with_keep(owner_cls, full_ships, prod, arrivals)
+        # Binary search [0, ships]; result is min keep that survives.
+        # We use fixed-iter binary search.
+        def cond(_state):
+            return True  # unused; using lax.fori_loop fixed iters
+
+        def body(_i, state):
+            lo, hi = state
+            mid = (lo + hi) // 2
+            ok = _survives_with_keep(owner_cls, mid, prod, arrivals)
+            new_lo = jnp.where(ok, lo, mid + 1)
+            new_hi = jnp.where(ok, mid, hi)
+            return (new_lo, new_hi)
+
+        lo_init = jnp.int32(0)
+        hi_init = jnp.maximum(jnp.int32(0), ships.astype(jnp.int32))
+        lo_f, _hi_f = jax.lax.fori_loop(
+            0, KEEP_BSEARCH_ITERS, body, (lo_init, hi_init)
+        )
+        keep_needed = jnp.where(
+            survives_full, lo_f.astype(jnp.float32), full_ships
+        )
+        return jnp.where(is_ally, keep_needed, jnp.float32(0.0))
+
+    keep_needed = jax.vmap(_keep_needed_one)(
+        init_owner_cls, ships_f, prod_f, arrivals_ptc
+    )
+
+    # Assemble (P, 6) according to featurizer.py:374-413 order:
+    # idx 35: log1p(loss_3turn)
+    # idx 36: ttf_norm
+    # idx 37: log1p(min_owned)
+    # idx 38: log1p(surplus)
+    # idx 39: fall_predicted
+    # idx 40: log1p(keep_needed)
+    out = jnp.stack(
+        [
+            jnp.log1p(loss_3turn),
+            ttf_norm,
+            jnp.log1p(min_owned_clamped),
+            jnp.log1p(surplus),
+            fall_predicted,
+            jnp.log1p(keep_needed),
+        ],
+        axis=-1,
+    )
+    # Zero out invalid planets (PyTorch only fills for valid slots).
+    out = out * valid_full[:, None].astype(jnp.float32)
+    return out
+
+
 def featurize_jax_w1(
     state: EnvState,
     player: int,
@@ -882,6 +1256,25 @@ def featurize_jax_w1(
     feats = feats.at[:, 31].set(jnp.log1p(incoming_enemy) / LOG_NORM_DENOM)
     # idx 32, 33: delta_t1, delta_t2 — W2-history (require prior snapshots)
     # idx 34: owner_changed — W2-history
+
+    # ------------------------------------------------------------------
+    # W2e: timeline cols 35..40.
+    timeline_cols = _build_timeline_cols(
+        px,
+        py,
+        owner,
+        ships_f,
+        prod_f,
+        valid_full,
+        player,
+        eta_mat,
+        in_horizon,
+        fl_is_ally,
+        fl_is_enemy,
+        fl_is_neutral_only,
+        fships_f,
+    )
+    feats = feats.at[:, 35:41].set(timeline_cols)
 
     # ------------------------------------------------------------------
     # W2c: orbit predictions (cols 20..27).
