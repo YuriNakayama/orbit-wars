@@ -9,76 +9,38 @@ fi
 
 mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
-# venv が persist 経由で残っているかを log に残す。lock 不変なら uv sync は
-# 「何もしない」ので、この行は分単位の高速化指標として後段の解析に役立つ。
-if [ -L bot/.venv ] && [ -f bot/.venv/pyvenv.cfg ]; then
-  echo "[onstart] uv venv reuse: bot/.venv -> $(readlink bot/.venv) (pre-existing)"
-else
-  echo "[onstart] uv venv fresh: building bot/.venv from scratch"
+# 2026-05-20: venv on /persist (MFS network volume) repeatedly produced
+# ImportError (libgomp .so unloadable; pyarrow missing despite install
+# log showing 265 packages installed). Build venv on container-local
+# disk instead. Cost: ~30-45s `uv sync` per pod (vs ~5s SKIP), but
+# eliminates the dominant failure class.
+#
+# Remove any stale /persist symlink left by older onstart scripts so
+# uv creates a real container-local directory.
+if [ -L bot/.venv ]; then
+  echo "[onstart] removing stale /persist symlink bot/.venv -> $(readlink bot/.venv)"
+  rm -f bot/.venv
 fi
 UV_SYNC_START=$(date +%s)
-
-# Fast path: bot/uv.lock の hash が前回 sync 時と同じで、persisted venv
-# (/persist/uv-venv-bot) に working python が居るなら uv sync を完全 skip。
-# attempt 5 (38c84d9) で uv sync が 291s かかっていた根本原因は
-# `Removed virtual environment` が走り全 wheel を install し直したこと。
-# lock 不変条件下では venv をそのまま再利用するのが最速 (~数秒)。
-LOCK_HASH=""
-LOCK_HASH_FILE="/persist/uv-venv-bot/.uv_lock_sha256"
-if [ -f bot/uv.lock ] && command -v sha256sum >/dev/null 2>&1; then
-  LOCK_HASH=$(sha256sum bot/uv.lock | awk '{print $1}')
-fi
-SKIP_UV_SYNC=0
-if [ -d /persist ] && [ -n "${LOCK_HASH}" ] \
-   && [ -f "${LOCK_HASH_FILE}" ] \
-   && [ "$(cat "${LOCK_HASH_FILE}" 2>/dev/null)" = "${LOCK_HASH}" ] \
-   && [ -x bot/.venv/bin/python ]; then
-  echo "[onstart] uv sync SKIP: lock hash unchanged (${LOCK_HASH:0:12}), venv intact"
-  SKIP_UV_SYNC=1
-fi
-
-if [ "${SKIP_UV_SYNC}" -eq 0 ]; then
-  echo "[onstart] uv sync RUN: lock hash=${LOCK_HASH:0:12} (file=${LOCK_HASH_FILE})"
-  # iter13 fix (case9 retry 2026-05-06 11:33): broken venv detection.
-  # bot/.venv (or its target) が中身は持つが bin/python が無い壊れた状態だと
-  # uv sync が "not a valid Python environment" で 3 retry 全失敗する。
-  # 復旧: bin/python が無ければ bot/.venv (symlink ごと) と persist 側を
-  # 強制的に空に戻して fresh build に倒す。
-  if [ ! -x bot/.venv/bin/python ]; then
-    echo "[onstart] uv sync: detected broken venv (bin/python missing); resetting"
-    rm -rf bot/.venv 2>/dev/null || true
-    # /persist/uv-venv-bot 自体が消えているケースもある (2026-05-19 commit
-    # cba789f で observed: `ln: failed to create symbolic link 'bot/.venv':
-    # No such file or directory`)。-d check 後の else 分岐が無いと symlink
-    # を張らず uv sync が暗黙の path に書こうとして即死する。
-    mkdir -p /persist/uv-venv-bot
-    find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
-      || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
-      || true
-    ln -sfn /persist/uv-venv-bot bot/.venv
+for attempt in 1 2 3; do
+  if uv sync --frozen --no-dev --directory bot; then
+    break
   fi
-  for attempt in 1 2 3; do
-    # --frozen は --locked より厳格 (lock の依存解決を一切再計算しない)。
-    # 既存 lock を信用するので smoke run のような短命 pod では正しい挙動。
-    if uv sync --frozen --no-dev --directory bot; then
-      break
-    fi
-    echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
-    sleep 30
-    if [ "${attempt}" -eq 3 ]; then
-      echo "[onstart] uv_sync exhausted retries"
-      exit 1
-    fi
-  done
-  # lock hash を /persist に書き出して次回 run 用にメモ。
-  if [ -d /persist/uv-venv-bot ] && [ -n "${LOCK_HASH}" ]; then
-    echo "${LOCK_HASH}" > "${LOCK_HASH_FILE}" 2>/dev/null \
-      && echo "[onstart] uv lock hash recorded -> ${LOCK_HASH_FILE}" \
-      || echo "[onstart] uv lock hash record FAILED (non-fatal)" >&2
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
   fi
-fi
+done
 UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
-echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s (skip=${SKIP_UV_SYNC})"
+echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s (container-local)"
+# Sanity check: site-packages actually usable. Catches partial installs
+# or future MFS-style breakage early so 50/60 don't have to retry.
+if ! bot/.venv/bin/python -c "import pyarrow, torch, numpy, sklearn" 2>&1; then
+  echo "[onstart] FATAL: venv import smoke failed post uv sync" >&2
+  exit 1
+fi
 
 mark "40_uv_sync_done"
 
