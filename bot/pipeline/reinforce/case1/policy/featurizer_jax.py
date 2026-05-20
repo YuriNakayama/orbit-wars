@@ -56,6 +56,7 @@ DIAG = math.sqrt(2.0) * BOARD_SIZE
 NEIGHBOR_RADIUS_SHORT = 8.0
 NEIGHBOR_RADIUS_LONG = 25.0
 HORIZON_TURNS = 30
+ORBIT_HORIZONS = (1, 2, 4, 8)
 TEMPLATE_CTX_DIM = 40  # NUM_TEMPLATES (8) * PER_TEMPLATE_FEATS (5)
 CAND_K = 8
 CAND_FEAT_DIM = 14
@@ -162,6 +163,7 @@ def featurize_jax_w1(
     radius_f = radius.astype(jnp.float32)
     ships_f = ships.astype(jnp.float32)
     prod_f = prod.astype(jnp.float32)
+    ang_vel = state.angular_velocity.astype(jnp.float32)
 
     feats = feats.at[:, 0].set(px / BOARD_SIZE)
     feats = feats.at[:, 1].set(py / BOARD_SIZE)
@@ -369,7 +371,92 @@ def featurize_jax_w1(
     feats = feats.at[:, 31].set(jnp.log1p(incoming_enemy) / LOG_NORM_DENOM)
     # idx 32, 33: delta_t1, delta_t2 — W2-history (require prior snapshots)
     # idx 34: owner_changed — W2-history
-    # idx 20..27: orbit predictions — W2c
+
+    # ------------------------------------------------------------------
+    # W2c: orbit predictions (cols 20..27).
+    # For each planet, predict its position at +1/+2/+4/+8 turns and emit
+    # (dx, dy)/BOARD_SIZE pairs.
+    #
+    # Vendor (featurizer.py:_orbit_predictions): non-comet planets use
+    # closed-form rotation around CENTER; comet planets look up
+    # comet_paths[c, q, path_index + turns]. Both paths emit
+    # ((nx - x)/B, (ny - y)/B). Static planets (init_orbital + r >= limit)
+    # return (current x, current y), so delta is zero.
+    init_xy = state.planet_initial_xy[:MAX_PLANETS].astype(jnp.float32)
+    init_x = init_xy[:, 0]
+    init_y = init_xy[:, 1]
+    init_orbital = jnp.sqrt((init_x - CENTER) ** 2 + (init_y - CENTER) ** 2)
+    # is_rotating mirrors reset.py's pre-computed flag but recomputed from
+    # initial xy + radius so it stays correct under comet planets (which
+    # have their own initial_xy after activation).
+    is_rotating = (init_orbital + radius_f) < ROTATION_RADIUS_LIMIT
+
+    # Current angle of each rotating planet from CENTER.
+    # NOTE: cur_ang must use (current xy - CENTER), matching vendor
+    # geometry.py line 105 (`math.atan2(planet.y - CENTER_Y, planet.x -
+    # CENTER_X)`). For invalid slots cur_ang is garbage but it's masked
+    # later.
+    cur_ang = jnp.arctan2(py - CENTER, px - CENTER)
+    # r for the orbit is computed from initial_xy → CENTER, matching
+    # vendor (`r = dist(init.x, init.y, CENTER_X, CENTER_Y)`).
+    r = init_orbital
+
+    # Build comet path lookup: for each planet slot, the (c, q) it
+    # belongs to (or -1 if not a comet). Reuse the same eq_mask trick
+    # as in step.py:_compute_planet_new_xy.
+    flat_slots = state.comet_planet_slot.reshape(-1)  # (C*4,)
+    planet_idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
+    eq_mask = (planet_idx[:, None] == flat_slots[None, :]) & (
+        flat_slots[None, :] >= 0
+    )
+    has_comet_entry = jnp.any(eq_mask, axis=-1)  # (P,)
+    pick_idx = jnp.argmax(eq_mask.astype(jnp.int32), axis=-1)  # (P,) into C*4
+    c_of_p = pick_idx // 4
+    q_of_p = pick_idx % 4
+    # path_index of the comet that owns this planet (0 if no comet).
+    path_index_p = jnp.where(
+        has_comet_entry, state.comet_path_index[c_of_p], jnp.int32(0)
+    )
+    path_len_p = jnp.where(
+        has_comet_entry, state.comet_path_len[c_of_p], jnp.int32(0)
+    )
+
+    # Compute predictions for each horizon and write to feats cols 20..27.
+    for h_idx, turns in enumerate(ORBIT_HORIZONS):
+        # Rotating planets — closed form.
+        new_ang = cur_ang + ang_vel * turns
+        rot_nx = CENTER + r * jnp.cos(new_ang)
+        rot_ny = CENTER + r * jnp.sin(new_ang)
+        rot_dx = (rot_nx - px) / BOARD_SIZE
+        rot_dy = (rot_ny - py) / BOARD_SIZE
+        # Static or unknown → (0, 0)
+        rot_dx = jnp.where(is_rotating, rot_dx, 0.0)
+        rot_dy = jnp.where(is_rotating, rot_dy, 0.0)
+
+        # Comet planets — lookup comet_paths[c, q, path_index + turns].
+        # NOTE: vendor's `predict_comet_position` reads `paths[idx]`
+        # as raw `(nx, ny)` *without* the per-quadrant swap that
+        # `_compute_planet_new_xy` applies when writing planet_xy. This
+        # means torch's orbit prediction delta is mathematically
+        # inconsistent with the actual planet motion at q=0 and q=3, but
+        # the BC weights were trained against this exact featurizer
+        # output, so we must replicate the bug.
+        future_idx = path_index_p + jnp.int32(turns)
+        in_range = (future_idx >= 0) & (future_idx < path_len_p)
+        safe_idx = jnp.clip(future_idx, 0, state.comet_paths.shape[2] - 1)
+        comet_xy = state.comet_paths[c_of_p, q_of_p, safe_idx]
+        comet_dx = (comet_xy[:, 0] - px) / BOARD_SIZE
+        comet_dy = (comet_xy[:, 1] - py) / BOARD_SIZE
+        # Vendor returns (0, 0) if future_idx out of range.
+        comet_dx = jnp.where(in_range, comet_dx, 0.0)
+        comet_dy = jnp.where(in_range, comet_dy, 0.0)
+
+        is_comet_planet = has_comet_entry & is_comet
+        dx_h = jnp.where(is_comet_planet, comet_dx, rot_dx)
+        dy_h = jnp.where(is_comet_planet, comet_dy, rot_dy)
+        feats = feats.at[:, 20 + 2 * h_idx].set(dx_h)
+        feats = feats.at[:, 21 + 2 * h_idx].set(dy_h)
+
     # idx 35..40: timeline columns — W2e
 
     # Mask invalid slots — zero out all columns for them.
@@ -377,7 +464,6 @@ def featurize_jax_w1(
 
     # Global features.
     step = state.step.astype(jnp.int32)
-    ang_vel = state.angular_velocity.astype(jnp.float32)
 
     my_ships_total = jnp.sum(jnp.where(is_mine, ships_f, 0.0))
     enemy_ships_total = jnp.sum(jnp.where(is_enemy, ships_f, 0.0))

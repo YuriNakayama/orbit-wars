@@ -36,12 +36,12 @@ from pipeline.reinforce.case1.policy.featurizer_jax import (
 
 PARITY_TOL = 1e-4
 
-# Columns implemented through W2a (planet×planet) + W2b (fleet ETA).
-# Remaining: 20-27 (orbit), 32-34 (delta_t1/t2/owner_changed history),
-# 35-40 (timeline).
+# Columns implemented through W2a (planet×planet) + W2b (fleet ETA) +
+# W2c (orbit predictions). Remaining: 32-34 (delta_t1/t2/owner_changed
+# history), 35-40 (timeline).
 W1_PLANET_COLS = (
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-    28, 29, 30, 31,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 )
 W1_GLOBAL_COLS = tuple(i for i in range(GLOBAL_FEAT_DIM) if i not in (16, 17, 18, 19))
 
@@ -167,6 +167,29 @@ def test_w1_zero_filled_cols_are_zero_in_jax() -> None:
 W2B_PLANET_COLS = (9, 10, 17, 28, 29, 30, 31)
 # idx 16 in the with-fleets case also includes the fleet contribution.
 W2B_PLANET_COLS_FLEET_TOUCHED = W2B_PLANET_COLS + (16,)
+
+
+# W2c parity past the first comet spawn (step 50) so the comet orbit
+# branch (cols 20-27 for comet planets) is exercised. Restricted to
+# seeds where Rust matches Python vendor in comet rejection sampling.
+@pytest.mark.parametrize("seed", [0, 7])
+@pytest.mark.parametrize("turns", [60, 80])
+def test_planet_feats_w2c_comet_orbit(seed: int, turns: int) -> None:
+    """Orbit columns (20-27) must match for comet planets after step 50."""
+    jax_planet, torch_planet, jx, _tx = _featurize_both(seed, turns)
+    valid = jx["valid"]
+    orbit_cols = tuple(range(20, 28))
+    for col in orbit_cols:
+        for slot in range(MAX_PLANETS):
+            if not bool(valid[slot]):
+                continue
+            j = float(jax_planet[slot, col])
+            t = float(torch_planet[slot, col])
+            diff = abs(j - t)
+            assert diff < PARITY_TOL, (
+                f"seed={seed} turns={turns} slot={slot} col={col} "
+                f"(orbit): jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+            )
 
 
 @pytest.mark.parametrize("seed", [0, 7, 42])
