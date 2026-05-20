@@ -789,19 +789,55 @@ def dev_cmd(
         env_dict["GIT_PAT"] = git_pat
     env = build_env_dict(env_dict)
 
-    pod_id = create_pod(
-        sdk,
-        name=label or f"dev-{run_id}",
-        gpu_type_id=chosen.gpu_type_id,
-        cloud_type=chosen.cloud_type,
-        onstart_script=onstart_cmd,
-        env=env,
-        image=image,
-        container_disk_gb=disk_gb,
-        network_volume_id=volume_id_resolved,
-        volume_mount_path=mount_path,
-        data_center_id=data_center_id,
-    )
+    # train_cmd と同じ fallback chain: 在庫切れ (QueryError "no longer any
+    # instances available") に当たったら cheapest-first 順で次の offer を試す。
+    from runpod.error import QueryError as _RunPodQueryError
+
+    fallback_chain: list[Any] = [chosen]
+    for o in offers:
+        if o is not chosen:
+            fallback_chain.append(o)
+    pod_id: str | None = None
+    last_err: Exception | None = None
+    used_offer = chosen
+    for attempt_idx, offer_try in enumerate(fallback_chain, start=1):
+        try:
+            pod_id = create_pod(
+                sdk,
+                name=label or f"dev-{run_id}",
+                gpu_type_id=offer_try.gpu_type_id,
+                cloud_type=offer_try.cloud_type,
+                onstart_script=onstart_cmd,
+                env=env,
+                image=image,
+                container_disk_gb=disk_gb,
+                network_volume_id=volume_id_resolved,
+                volume_mount_path=mount_path,
+                data_center_id=data_center_id,
+            )
+            used_offer = offer_try
+            if attempt_idx > 1:
+                console.print(
+                    f"[green]launched on fallback #{attempt_idx}:[/] "
+                    f"{offer_try.gpu_type_id} ({offer_try.cloud_type})"
+                )
+            break
+        except _RunPodQueryError as exc:
+            last_err = exc
+            console.print(
+                f"[yellow]offer {offer_try.gpu_type_id} unavailable "
+                f"(attempt {attempt_idx}/{len(fallback_chain)}):[/] {exc}"
+            )
+            continue
+    if pod_id is None:
+        console.print(
+            "[red]all offers exhausted; no pod was created.[/] "
+            "Try later, broaden --gpu-name, or switch --cloud-type=ALL."
+        )
+        if last_err is not None:
+            raise last_err
+        raise typer.Exit(code=1)
+    chosen = used_offer
     run_dir_local = find_run_dir(_repo_root(), run_id, case)
     write_launch_json(
         run_dir_local,
