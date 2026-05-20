@@ -6,14 +6,18 @@ PREPROCESS_RAN=0
 # the parquet, so we just run the converter once and proceed to train.
 if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   echo "[onstart] step=parquet_to_npy case=<CASE> (skip parquet-skip + dvc-track)"
-  # The .npy files are 100GB+ uncompressed. Container disk on most pods
-  # (RTX 4090 SECURE: ~30GB) is too small, causing SIGBUS on mmap write.
-  # Force out-root onto /persist (network volume, 300GB). Also keep
-  # train_parquet / val_parquet as inputs read from the symlinked mart dir.
-  NPY_OUT_ROOT="/persist/data-mart-imitation/<CASE>"
+  # case11_smoke shares case11's on-disk mart subdir; strip the _smoke
+  # suffix so npy out_root + parquet inputs point at data/mart/imitation/case11.
+  CASE_DIR_50=$(echo '<CASE>' | sed 's/_smoke$//')
+  # The .npy files are 100GB+ uncompressed (case11 full mart). Container
+  # disk on most pods (RTX 4090 SECURE: ~30GB) is too small, causing
+  # SIGBUS on mmap write. Force out-root onto /persist (network volume,
+  # 300GB). Also keep train_parquet / val_parquet as inputs read from
+  # the symlinked mart dir.
+  NPY_OUT_ROOT="/persist/data-mart-imitation/${CASE_DIR_50}"
   mkdir -p "${NPY_OUT_ROOT}"
-  TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/train.parquet"
-  VAL_PQ_ABS="$(pwd)/data/mart/imitation/<CASE>/val.parquet"
+  TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/${CASE_DIR_50}/train.parquet"
+  VAL_PQ_ABS="$(pwd)/data/mart/imitation/${CASE_DIR_50}/val.parquet"
   # Cleanup stale .npy directories from prior runs. The network volume
   # has a 300GB quota that is shared across runs (orbit_wars), so the
   # previous run's train_npy (~174GB) lingers and triggers "Disk quota
@@ -91,10 +95,19 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
     done
   ) &
   HB_PID=$!
+  # For *_smoke cases cap the convert volume so the whole pipeline
+  # (preprocess + train + S3 best.pt upload + cleanup) fits in ~15min,
+  # which is the verification window. Otherwise pass no caps (full conversion).
+  PQ_EXTRA_ARGS=""
+  if [[ "<CASE>" == *"_smoke" ]]; then
+    PQ_EXTRA_ARGS="--max-train-rows 20000 --max-val-rows 2000"
+    echo "[onstart] parquet_to_npy SMOKE caps: ${PQ_EXTRA_ARGS}"
+  fi
   if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> \
       --train-parquet "${TRAIN_PQ_ABS}" \
       --val-parquet "${VAL_PQ_ABS}" \
-      --out-root "${NPY_OUT_ROOT}" ); then
+      --out-root "${NPY_OUT_ROOT}" \
+      ${PQ_EXTRA_ARGS} ); then
     kill "${HB_PID}" 2>/dev/null || true
     echo "[onstart] step=parquet_to_npy FAILED (exit code != 0)" >&2
     mark "55_parquet_to_npy_failed"
@@ -104,7 +117,7 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
   # Symlink the per-split npy dirs back under data/mart/imitation/<CASE>/
   # so the dataset's `_npy_dir_for` resolution (sibling of train.parquet)
   # picks them up without code changes.
-  MART_CASE_DIR="$(pwd)/data/mart/imitation/<CASE>"
+  MART_CASE_DIR="$(pwd)/data/mart/imitation/${CASE_DIR_50}"
   echo "[onstart] NPY_OUT_ROOT contents pre-symlink:"
   ls -la "${NPY_OUT_ROOT}" 2>&1 | head -10 || true
   for split in train val; do

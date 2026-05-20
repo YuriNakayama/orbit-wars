@@ -148,7 +148,7 @@ else
   # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
   # を **--allow-missing の前** に 1 段追加する (--allow-missing 後に置くと
   # block 自体に到達しない事故が retry3 で発生)。
-  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//;s/_sweep_.*$//;s/_base_preprocess$//;s/_template_ships$//')
+  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//;s/_sweep_.*$//;s/_base_preprocess$//;s/_template_ships$//;s/_smoke$//')
   CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
   echo "[onstart] iter15 targeted pull: case='<CASE>' subdir='${CASE_SUBDIR}' dir='${CASE_MART_DIR}'"
   ls -la "${CASE_MART_DIR}/" 2>&1 | head -10
@@ -227,7 +227,9 @@ echo "[onstart] step=mkdir_run"
 # 絶対 path で固定: train.py は ORBIT_WARS_RUN_DIR を Path.resolve() するので
 # 相対 path だと cwd (uv run --directory bot) 基準になり bot/data/... に
 # ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
-RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# case11_smoke shares case11 on-disk subdir; strip _smoke suffix.
+RUN_DIR_CASE_40=$(echo '<CASE>' | sed 's/_smoke$//')
+RUN_DIR_ABS="$(pwd)/data/output/models/imitation/${RUN_DIR_CASE_40}/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
 # iter4 fix: preprocess の前に mart symlink を物理 dir に materialize する。

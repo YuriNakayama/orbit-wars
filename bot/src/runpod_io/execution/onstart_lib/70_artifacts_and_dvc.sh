@@ -32,7 +32,10 @@ echo "[onstart] step=dvc_add_run"
 # 完了後 (push 成否に関わらず) symlink を再構築する。観測: 2026-05-05 case7
 # Step B 試行 #2 で `dvc_add_run` が `Cannot add files inside symlinked
 # directories` で fatal exit。mart_dvc_persist と同じ pattern。
-RUN_DIR_REL="data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+# case11_smoke shares case11 on disk; strip _smoke suffix so dvc add path matches
+# the runs dir that 40_uv_and_dvc_pull.sh's RUN_DIR_ABS uses (also stripped).
+CASE_DIR_70=$(echo '<CASE>' | sed 's/_smoke$//')
+RUN_DIR_REL="data/output/models/imitation/${CASE_DIR_70}/runs/<RUN_ID>"
 OUTPUT_LINK_TARGET=""
 if [ -L data/output/models/imitation ]; then
   OUTPUT_LINK_TARGET=$(readlink data/output/models/imitation)

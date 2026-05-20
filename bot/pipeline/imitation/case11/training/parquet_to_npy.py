@@ -114,22 +114,32 @@ def _default_for_missing(
     raise KeyError(f"no default registered for missing column: {col}")
 
 
-def convert_split(parquet_path: Path, out_dir: Path) -> None:
-    """Stream a single split parquet -> per-column .npy under out_dir."""
+def convert_split(
+    parquet_path: Path, out_dir: Path, max_rows: int | None = None
+) -> None:
+    """Stream a single split parquet -> per-column .npy under out_dir.
+
+    If ``max_rows`` is given, stop after writing that many rows. Used for
+    smoke runs so the full 14-min conversion isn't required to verify
+    downstream logic.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     pf = pq.ParquetFile(str(parquet_path))
     schema_names = set(pf.schema_arrow.names)
-    n_rows = int(pf.metadata.num_rows)
+    full_rows = int(pf.metadata.num_rows)
+    n_rows = full_rows if max_rows is None else min(full_rows, int(max_rows))
     n_groups = pf.num_row_groups
     logger.info(
-        "convert split=%s rows=%d groups=%d -> %s",
+        "convert split=%s rows=%d (full=%d cap=%s) groups=%d -> %s",
         parquet_path.name,
         n_rows,
+        full_rows,
+        str(max_rows),
         n_groups,
         out_dir,
     )
 
-    # Pre-allocate memmaps for each column.
+    # Pre-allocate memmaps for each column (sized to the capped row count).
     memmaps: dict[str, np.memmap] = {}
     for col, dtype, shape_per_row in _LIST_COLS:
         out_path = out_dir / f"{col}.npy"
@@ -150,30 +160,41 @@ def convert_split(parquet_path: Path, out_dir: Path) -> None:
 
     cursor = 0
     for g in range(n_groups):
+        if cursor >= n_rows:
+            break
         table = pf.read_row_group(g)
         rg_rows = int(pf.metadata.row_group(g).num_rows)
-        if g % 50 == 0 or g == n_groups - 1:
+        # Trim the last row_group if it would overshoot the cap.
+        remaining = n_rows - cursor
+        take = min(rg_rows, remaining)
+        if g % 50 == 0 or g == n_groups - 1 or take < rg_rows:
             logger.info(
-                "  group %d/%d rows %d-%d", g, n_groups, cursor, cursor + rg_rows
+                "  group %d/%d rows %d-%d (take=%d/%d)",
+                g,
+                n_groups,
+                cursor,
+                cursor + take,
+                take,
+                rg_rows,
             )
 
         for col, dtype, shape_per_row in _LIST_COLS:
             if col not in schema_names:
-                memmaps[col][cursor : cursor + rg_rows] = _default_for_missing(
-                    col, rg_rows, dtype, shape_per_row
+                memmaps[col][cursor : cursor + take] = _default_for_missing(
+                    col, take, dtype, shape_per_row
                 )
                 continue
             buf = _chunk_to_numpy(table[col], dtype).reshape((rg_rows,) + shape_per_row)
-            memmaps[col][cursor : cursor + rg_rows] = buf
+            memmaps[col][cursor : cursor + take] = buf[:take]
 
         is_noop_chunk = np.array(
             table["is_noop"].to_numpy(zero_copy_only=False),
             dtype=np.bool_,
             copy=True,
         )
-        is_noop_mm[cursor : cursor + rg_rows] = is_noop_chunk
+        is_noop_mm[cursor : cursor + take] = is_noop_chunk[:take]
 
-        cursor += rg_rows
+        cursor += take
         del table
     assert cursor == n_rows, f"row mismatch: cursor={cursor} expected={n_rows}"
 
@@ -267,6 +288,12 @@ def main(
     out_root: Path = typer.Option(  # noqa: B008
         Path("data/mart/imitation/case11"), "--out-root"
     ),
+    max_train_rows: int = typer.Option(
+        0, "--max-train-rows", help="cap train rows (0 = unlimited, smoke-only)"
+    ),
+    max_val_rows: int = typer.Option(
+        0, "--max-val-rows", help="cap val rows (0 = unlimited, smoke-only)"
+    ),
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     # Resolve relative to the repo root (one level above `bot/`) so the
@@ -274,8 +301,16 @@ def main(
     train_parquet = _abs(train_parquet)
     val_parquet = _abs(val_parquet)
     out_root = _abs(out_root)
-    convert_split(train_parquet, out_root / "train_npy")
-    convert_split(val_parquet, out_root / "val_npy")
+    convert_split(
+        train_parquet,
+        out_root / "train_npy",
+        max_rows=max_train_rows if max_train_rows > 0 else None,
+    )
+    convert_split(
+        val_parquet,
+        out_root / "val_npy",
+        max_rows=max_val_rows if max_val_rows > 0 else None,
+    )
 
 
 if __name__ == "__main__":
