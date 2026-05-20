@@ -1701,6 +1701,29 @@ wheels = [
 ]
 
 [[package]]
+name = "jax-cuda12-pjrt"
+version = "0.10.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/1b/98575de81c20ce4142ea3e9b3a7416182427565617bf1afa319e1b66130b/jax_cuda12_pjrt-0.10.0-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:36ac316c588a0e08eb64f868270526adca3856d4b70b13760b7e9b73be85d2cf", size = 159005873, upload-time = "2026-04-16T12:32:15.486Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/78/a3d9ceda0793f4fb43daa292af7b801932611a1aed442636ddfc93d58c7a/jax_cuda12_pjrt-0.10.0-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:309515453f59caad95bf76c8bc649c24bc0e3d12d07baf3cf792be082abdee3b", size = 164780016, upload-time = "2026-04-16T12:32:21.028Z" },
+]
+
+[[package]]
+name = "jax-cuda12-plugin"
+version = "0.10.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax-cuda12-pjrt", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/e0/05aa6b3d3749441842143666105a5be7e7bd92d08df0f50f319ff854ee7b/jax_cuda12_plugin-0.10.0-cp313-cp313-manylinux_2_27_aarch64.whl", hash = "sha256:7479e67d9d98d4a0f525f94f8b81880dcc058631f6de118b91de91db1b4095ed", size = 6682499, upload-time = "2026-04-16T12:32:31.857Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/b5/55ebd12c92c079e13e9ab5e61dee1df7764273fbfb7b5b044ca292a108a3/jax_cuda12_plugin-0.10.0-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:ed074d37967bce61c1bafddf9dd0a8302306c12f90700ca5adfa3d08fdd4aee7", size = 6721082, upload-time = "2026-04-16T12:32:33.627Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/d6/688c70714e44e9e12ba4fa3444940cc0c83cc5e29279d944b57439eff710/jax_cuda12_plugin-0.10.0-cp313-cp313t-manylinux_2_27_aarch64.whl", hash = "sha256:95e77953e774004488edfe953dae5b5c3891571a9a2d44727150410fc4a6de45", size = 6696411, upload-time = "2026-04-16T12:32:35.216Z" },
+    { url = "https://files.pythonhosted.org/packages/81/12/776b17d958a1e739f6ce52218b34df202bb1dbb2d24300595d76df7f408f/jax_cuda12_plugin-0.10.0-cp313-cp313t-manylinux_2_27_x86_64.whl", hash = "sha256:7f892ba9e317b12d8cd09f7a62e3c0bee12709609a49c580092138864e898250", size = 6729448, upload-time = "2026-04-16T12:32:37.305Z" },
+]
+
+[[package]]
 name = "jaxlib"
 version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2604,6 +2627,10 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+cuda = [
+    { name = "jax-cuda12-pjrt", marker = "sys_platform == 'linux'" },
+    { name = "jax-cuda12-plugin", marker = "sys_platform == 'linux'" },
+]
 dev = [
     { name = "maturin" },
     { name = "mypy" },
@@ -2658,6 +2685,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+cuda = [
+    { name = "jax-cuda12-pjrt", marker = "sys_platform == 'linux'" },
+    { name = "jax-cuda12-plugin", marker = "sys_platform == 'linux'" },
+]
 dev = [
     { name = "maturin", specifier = ">=1.7,<2" },
     { name = "mypy", specifier = ">=1.15.0" },

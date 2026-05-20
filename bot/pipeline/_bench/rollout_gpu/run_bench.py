@@ -17,13 +17,11 @@ baseline.
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
 import platform
 import socket
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -56,36 +54,6 @@ def _run_dir() -> Path:
     fallback = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
-
-
-def _install_cuda_jax() -> None:
-    logger.info("installing jax[cuda12] via uv pip…")
-    proc = subprocess.run(
-        ["uv", "pip", "install", "--reinstall", "jax[cuda12]"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        logger.error(
-            "uv pip install jax[cuda12] failed: %s", (proc.stderr or "")[-500:]
-        )
-        proc.check_returncode()
-    logger.info("jax[cuda12] install OK")
-
-
-def _reload_jax() -> Any:
-    for mod in list(sys.modules):
-        if (
-            mod == "jax"
-            or mod.startswith(("jax.", "jaxlib", "jax_env"))
-            or mod.startswith("pipeline.reinforce.case1.policy.featurizer_jax")
-            or mod.startswith("pipeline.reinforce.case1.policy.model_jax")
-            or mod.startswith("pipeline.reinforce.case1.policy.sampling_jax")
-            or mod.startswith("pipeline.reinforce.case1.training.rollout_jax")
-        ):
-            sys.modules.pop(mod, None)
-    return importlib.import_module("jax")
 
 
 def _bench_jax(episodes: int, horizon: int, seed: int) -> BenchResult:
@@ -137,22 +105,22 @@ def _bench_full(horizons: list[int], seed: int) -> list[BenchResult]:
             logger.info("result: %s", asdict(r))
 
     if not os.environ.get("RUNPOD_POD_ID"):
-        logger.info(
-            "not running on RunPod; skipping jax[cuda12] install + GPU bench"
-        )
+        logger.info("not running on RunPod; skipping GPU bench")
         return results
 
-    try:
-        _install_cuda_jax()
-    except subprocess.CalledProcessError as exc:
-        logger.warning("jax[cuda12] install failed, skipping GPU bench: %s", exc)
-        return results
+    # The cuda12 plugin (jax-cuda12-plugin + jax-cuda12-pjrt) is now
+    # installed by onstart via `uv sync --group cuda`, BEFORE this
+    # bench process starts and BEFORE jax is imported. We can detect
+    # it directly via `jax.devices()`. The earlier in-process
+    # `uv pip install --reinstall jax[cuda12]` triggered SIGABRT (the
+    # already-loaded jax process can't survive its jaxlib shared
+    # library being replaced).
+    import jax
 
-    jax = _reload_jax()
     devices = jax.devices()
-    logger.info("jax devices after cuda install: %s", devices)
+    logger.info("jax devices: %s", devices)
     if not any(d.platform == "gpu" for d in devices):
-        logger.warning("no GPU device after install — skipping GPU bench")
+        logger.warning("no GPU device present — skipping GPU bench")
         return results
 
     for episodes in (1, 16):

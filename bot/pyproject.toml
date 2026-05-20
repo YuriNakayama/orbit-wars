@@ -64,6 +64,19 @@ env = [
     # imitation case は使わないので install_dependency_groups=[] で必要時のみ.
     "maturin>=1.7,<2",
 ]
+cuda = [
+    # GPU pod 用 CUDA12 plugin. `jax[cuda12]` の wheel は Linux x86_64 /
+    # aarch64 のみで macOS 用は存在しないので `sys_platform == 'linux'`
+    # marker を必須にする。バージョンは base の jax と一致させる
+    # (`jax>=0.4.30` の解決値) — uv は base group の jax を共有するので
+    # 自動でマッチする。
+    # RunPod の bench / GPU training onstart で `uv sync --group cuda
+    # --no-dev` を追加実行する想定。実行時 `uv pip install --reinstall
+    # jax[cuda12]` は jax 既ロード後の共有ライブラリハンドル invalid
+    # 化 (SIGABRT) を踏むので避ける。
+    "jax-cuda12-plugin; sys_platform == 'linux'",
+    "jax-cuda12-pjrt; sys_platform == 'linux'",
+]
 
 
 [tool.ruff]

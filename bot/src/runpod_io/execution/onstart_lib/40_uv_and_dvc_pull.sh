@@ -173,6 +173,33 @@ if [ "<CASE_FAMILY>" = "reinforce" ]; then
   fi
 fi
 
+# CUDA12 jax plugin for GPU bench cases. Installing via `uv sync --group
+# cuda` ensures the jax-cuda12-plugin + jax-cuda12-pjrt wheels are present
+# when the bench process imports jax — avoids the SIGABRT trap of
+# `uv pip install --reinstall jax[cuda12]` after jax is already loaded
+# (which invalidates the existing jaxlib shared library handle).
+# Group `cuda` declares `sys_platform == 'linux'` markers so this is a
+# no-op on macOS development hosts.
+case "<CASE>" in
+  bench_*_gpu)
+    echo "[onstart] step=install_cuda_jax (case=<CASE>): uv sync --group cuda"
+    UV_CUDA_LOG="/tmp/uv_cuda_sync.log"
+    if ! ( cd bot && uv sync --no-dev --group cuda --frozen ) >"${UV_CUDA_LOG}" 2>&1; then
+      echo "[onstart] install_cuda_jax FAILED — uv sync log tail:" >&2
+      tail -30 "${UV_CUDA_LOG}" >&2 || true
+      if command -v aws >/dev/null 2>&1; then
+        aws s3 cp "${UV_CUDA_LOG}" \
+          "s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>/uv_cuda_sync.log" \
+          2>&1 | head -3 || true
+      fi
+      mark "47_install_cuda_jax_failed"
+      exit 1
+    fi
+    echo "[onstart] install_cuda_jax ok"
+    mark "47_install_cuda_jax_done"
+    ;;
+esac
+
 echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE> family=<CASE_FAMILY>"
 # case0 は RunPod 基盤の E2E smoke 専用なので、dvc pull 経路の正常性検証だけ
 # 行い、他 case の outs を巻き込まない (memory: runpod_5_traps)。
