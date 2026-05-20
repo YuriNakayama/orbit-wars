@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case1 ppo_stabilization
 
 > 作成日: 2026-05-18
-> 最終更新: 2026-05-18
+> 最終更新: 2026-05-18 (iter1 analysis 完了)
 > 状態: in_progress
 > 最大 iteration: 10 (deepen も許可)
 > 主要メトリクス: 安定化合成指標 — (a) `max approx_kl` が全 iter で < 0.1、(b) `win_rate vs baseline_v1` の iter 間 std が単調 ↓、を同時に評価
@@ -42,7 +42,7 @@ case1 は **PPO 学習の安定化** にスコープを絞る。以下は **固�
 
 ## 仮説リスト (priority 順)
 
-- [ ] (P1) **H1: target_kl early stopping** — `ppo_update` に `target_kl=0.05` を追加し、各 epoch の minibatch loop 内で平均 approx_kl が target_kl を超えたら当該 epoch を即 break。PPO 標準実装 (CleanRL / SB3) で、clipping 単独では守れない trust region を hard 保証。**期待効果**: 高 approx_kl が観測された後に更にダメージを拡大しない、bc_kl の monotonic 低下を回復
+- [x] (P1) **H1: target_kl early stopping** — `ppo_update` に `target_kl=0.05` を追加し、各 epoch の minibatch loop 内で平均 approx_kl が target_kl を超えたら当該 epoch を即 break。PPO 標準実装 (CleanRL / SB3) で、clipping 単独では守れない trust region を hard 保証。**期待効果**: 高 approx_kl が観測された後に更にダメージを拡大しない、bc_kl の monotonic 低下を回復 — **inconclusive (iter1)**: 機構は機能 (epochs_run mean=1.43/2、57/100 iter で early stop)、bc_kl std=0.14 で安定化方向。しかし max approx_kl=1.57 で primary metric (a) 未達成。判定が epoch 単位 minibatch 平均粒度のため、epoch 内単発 spike を抑止できない。target_kl=0.05 設定は副作用なしで継続。
 
 - [ ] (P1) **H2: lr 1.0e-4 → 3.0e-5 (低い lr) **— `training.lr` を 3.3× 下げる。per-update の weight 変動を小さくし、approx_kl の山を平坦化。配布値 (Schulman 2017 や CleanRL の MuJoCo recipe) を下回る attempt。**期待効果**: max approx_kl の急峻なピークが消える代わりに学習速度が遅くなる
 
@@ -62,8 +62,9 @@ case1 は **PPO 学習の安定化** にスコープを絞る。以下は **固�
 
 (各 iter 完了時に experiment-analysis / experiment が追記)
 
-| iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
-|---|---|---|---|---|---|---|---|
+| iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path | analysis path |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 2026-05-18 | H1 (target_kl=0.05) | iter1_plan.md | 20260518-013025__feature-reinforce-learning-case0__f406f85__seed0 | max approx_kl=1.57 (>0.1: 27/100), bc_kl std=0.14, epochs_run mean=1.43/2 | inconclusive | iter1_result.md | iter1_analysis.md |
 
 ## 参考 (References)
 
