@@ -215,3 +215,41 @@ def test_onstart_template_bash_syntax() -> None:
         text=True,
     )
     assert result.returncode == 0, f"bash -n failed: {result.stderr}"
+
+
+def test_render_onstart_default_mode_is_oneshot() -> None:
+    """既定 mode は oneshot で trap cleanup_destroy EXIT が残ること。"""
+    rendered = render_onstart(TEMPLATE_PATH, **_valid_kwargs())
+    assert 'RUNPOD_MODE="oneshot"' in rendered
+    # oneshot 経路では cleanup trap セットが活きる
+    assert "trap cleanup_destroy EXIT" in rendered
+
+
+def test_render_onstart_interactive_mode_skips_train_and_trap() -> None:
+    """mode=interactive で train を実行せず sleep infinity に入る分岐が見える。"""
+    rendered = render_onstart(
+        TEMPLATE_PATH,
+        mode="interactive",
+        **_valid_kwargs(),
+    )
+    assert 'RUNPOD_MODE="interactive"' in rendered
+    # interactive 分岐の目印
+    assert "interactive mode, awaiting SSH" in rendered
+    assert "50_interactive_ready" in rendered
+    # bash -n が通ること (構文破壊していない)
+    result = subprocess.run(
+        ["bash", "-n"],
+        input=rendered,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"bash -n failed: {result.stderr}"
+
+
+def test_render_onstart_rejects_unknown_mode() -> None:
+    with pytest.raises(TemplateError):
+        render_onstart(
+            TEMPLATE_PATH,
+            mode="debug",  # 未対応の値
+            **_valid_kwargs(),
+        )

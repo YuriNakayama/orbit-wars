@@ -8,8 +8,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from runpod_io.runpod.ssh import (
+    DEFAULT_PROXY_KEY,
+    PROXY_SSH_HOST,
     SshEndpoint,
     SshUnavailable,
+    build_proxy_endpoint,
     get_pod_ssh_endpoint,
     parse_ssh_endpoint,
 )
@@ -89,3 +92,33 @@ def test_get_pod_ssh_endpoint_pod_missing() -> None:
     sdk.get_pod.return_value = None
     with pytest.raises(SshUnavailable, match="not found"):
         get_pod_ssh_endpoint(sdk, "pod-x")
+
+
+def test_build_proxy_endpoint_uses_official_host() -> None:
+    ep = build_proxy_endpoint("dgzwmgkrfu5evg-644111a5")
+    assert ep.kind == "proxy"
+    assert ep.host == f"dgzwmgkrfu5evg-644111a5@{PROXY_SSH_HOST}"
+    assert ep.key_path == DEFAULT_PROXY_KEY
+
+
+def test_proxy_endpoint_command_omits_port_flag() -> None:
+    ep = build_proxy_endpoint("dgzwmgkrfu5evg-644111a5", key_path=Path("/tmp/k"))
+    cmd = ep.to_command()
+    # proxy SSH に -p は付けない (ssh.runpod.io の標準 22 経由)
+    assert "-p" not in cmd
+    assert cmd[-1] == f"dgzwmgkrfu5evg-644111a5@{PROXY_SSH_HOST}"
+    assert "/tmp/k" in cmd
+
+
+def test_get_pod_ssh_endpoint_via_proxy_skips_sdk() -> None:
+    sdk = MagicMock()
+    ep = get_pod_ssh_endpoint(sdk, "pod-x", via="proxy")
+    assert ep.kind == "proxy"
+    assert ep.host == f"pod-x@{PROXY_SSH_HOST}"
+    # proxy 経路では SDK 呼び出し不要 (pod が READY でなくても endpoint は組める)
+    sdk.get_pod.assert_not_called()
+
+
+def test_build_proxy_endpoint_empty_pod_id() -> None:
+    with pytest.raises(SshUnavailable):
+        build_proxy_endpoint("")
