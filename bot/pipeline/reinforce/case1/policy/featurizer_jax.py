@@ -174,6 +174,194 @@ def _next_comet_eta(step: jax.Array) -> jax.Array:
     )
 
 
+def _build_template_ctx(
+    px: jax.Array,  # (P,) float32
+    py: jax.Array,  # (P,) float32
+    ships_f: jax.Array,  # (P,) float32
+    prod_f: jax.Array,  # (P,) float32
+    owner: jax.Array,  # (P,) int32
+    valid_full: jax.Array,  # (P,) bool
+    is_mine: jax.Array,  # (P,) bool
+    player: int,
+) -> jax.Array:
+    """JAX equivalent of `templates.template_context_features_parsed`.
+
+    Returns (P, TEMPLATE_CTX_DIM=40) array of per-src per-template feats.
+    Only own (is_mine) sources are populated; other slots stay zero,
+    mirroring PyTorch which only calls `template_context_features` from
+    inside the `if is_mine` branch of the planet loop.
+    """
+    P = MAX_PLANETS
+    diag = jnp.float32(DIAG)
+
+    # Build pairwise (P_src, P_tgt) distance with src != tgt mask.
+    dx = px[:, None] - px[None, :]
+    dy = py[:, None] - py[None, :]
+    dist_st = jnp.sqrt(dx * dx + dy * dy)  # (P, P)
+    self_mask = jnp.eye(P, dtype=jnp.bool_)
+    tgt_valid = valid_full[None, :] & ~self_mask  # (P_src, P_tgt)
+
+    # Per-target owner classifications (broadcast to (P_src, P_tgt)).
+    t_owner = owner[None, :]  # (1, P)
+    t_is_neutral = tgt_valid & (t_owner == -1)
+    t_is_enemy = tgt_valid & (t_owner != player) & (t_owner != -1)
+    # mine_other (== ally other) — used by templates 4 and 5; computed
+    # later as `mine_other_mask_2d`.
+
+    INF = jnp.float32(jnp.inf)
+    NEG_INF = jnp.float32(-jnp.inf)
+
+    def masked_argmin(values: jax.Array, mask: jax.Array) -> tuple[
+        jax.Array, jax.Array
+    ]:
+        """Return (idx, has_any) per row. idx is 0 when has_any=False."""
+        masked = jnp.where(mask, values, INF)
+        idx = jnp.argmin(masked, axis=-1)
+        has_any = jnp.any(mask, axis=-1)
+        return idx, has_any
+
+    def masked_argmax_prod(
+        prod: jax.Array, dist: jax.Array, mask: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
+        """argmax by (prod, -dist) lexicographic. Implemented as argmax
+        over a composite key prod * BIG - dist where BIG >> max(dist).
+        """
+        BIG = jnp.float32(1.0e6)
+        key = prod[None, :] * BIG - dist
+        key = jnp.where(mask, key, NEG_INF)
+        idx = jnp.argmax(key, axis=-1)
+        has_any = jnp.any(mask, axis=-1)
+        return idx, has_any
+
+    # T0 NEAREST_NEUTRAL_LOW: nearest neutral with ships <= max(1, src.ships)
+    # Fallback to nearest neutral if no low-ships candidate.
+    cap_per_src = jnp.maximum(1.0, ships_f)  # (P,)
+    low_neutral_mask = t_is_neutral & (
+        ships_f[None, :] <= cap_per_src[:, None]
+    )
+    idx_low, has_low = masked_argmin(dist_st, low_neutral_mask)
+    idx_any_neutral, has_neutral = masked_argmin(dist_st, t_is_neutral)
+    t0_idx = jnp.where(has_low, idx_low, idx_any_neutral)
+    t0_has = has_low | has_neutral
+
+    # T1 NEAREST_ENEMY
+    t1_idx, t1_has = masked_argmin(dist_st, t_is_enemy)
+
+    # T2 HIGH_PROD_NEUTRAL: argmax by (prod, -dist)
+    t2_idx, t2_has = masked_argmax_prod(prod_f, dist_st, t_is_neutral)
+
+    # T3 HIGH_PROD_ENEMY
+    t3_idx, t3_has = masked_argmax_prod(prod_f, dist_st, t_is_enemy)
+
+    # T4 REINFORCE_FRONTLINE: enemy centroid → nearest mine_other to it.
+    # If no mine_other OR no enemy, fall back to nearest mine_other.
+    mine_other_mask_2d = tgt_valid & (t_owner == player)
+    enemy_mask_2d = t_is_enemy
+    enemy_count_global = jnp.sum(
+        (valid_full & (owner != player) & (owner != -1)).astype(jnp.float32)
+    )
+    enemy_x_sum = jnp.sum(
+        jnp.where(valid_full & (owner != player) & (owner != -1), px, 0.0)
+    )
+    enemy_y_sum = jnp.sum(
+        jnp.where(valid_full & (owner != player) & (owner != -1), py, 0.0)
+    )
+    safe_enemy_count = jnp.maximum(1.0, enemy_count_global)
+    ex = enemy_x_sum / safe_enemy_count
+    ey = enemy_y_sum / safe_enemy_count
+    # Per-src per-tgt distance from each tgt's xy to (ex, ey).
+    # The distance only depends on tgt, but we need shape (P_src, P_tgt).
+    tgt_to_centroid = jnp.sqrt((px - ex) ** 2 + (py - ey) ** 2)  # (P,)
+    t4_centroid_dist = jnp.broadcast_to(
+        tgt_to_centroid[None, :], (P, P)
+    )
+    # Per-src branching: if no enemy OR no mine_other, use nearest
+    # mine_other by src-distance (matches PyTorch fallback).
+    nearest_mine_idx, has_mine_other = masked_argmin(
+        dist_st, mine_other_mask_2d
+    )
+    frontline_idx, _ = masked_argmin(
+        t4_centroid_dist, mine_other_mask_2d
+    )
+    # Has enemy globally? has_any_enemy across all sources is the same
+    # value, but we compute per-row via reduction over the tgt mask.
+    has_any_enemy_per_src = jnp.any(enemy_mask_2d, axis=-1)
+    use_centroid = has_any_enemy_per_src & has_mine_other
+    t4_idx = jnp.where(use_centroid, frontline_idx, nearest_mine_idx)
+    t4_has = has_mine_other
+
+    # T5 REINFORCE_WEAKEST: min ships among mine_other.
+    t5_idx, t5_has = masked_argmin(
+        jnp.broadcast_to(ships_f[None, :], (P, P)), mine_other_mask_2d
+    )
+
+    # T6 WEAKEST_ENEMY: min ships among enemy.
+    t6_idx, t6_has = masked_argmin(
+        jnp.broadcast_to(ships_f[None, :], (P, P)), enemy_mask_2d
+    )
+
+    # Pack template results: (T, P_src) of (target_idx, has_any).
+    target_idx = jnp.stack(
+        [t0_idx, t1_idx, t2_idx, t3_idx, t4_idx, t5_idx, t6_idx], axis=0
+    )  # (7, P)
+    target_has = jnp.stack(
+        [t0_has, t1_has, t2_has, t3_has, t4_has, t5_has, t6_has], axis=0
+    )  # (7, P)
+
+    # Compute per-template per-src features.
+    # Build per-(t, src) target info by gather.
+    src_idx_grid = jnp.arange(P, dtype=jnp.int32)[None, :]  # (1, P)
+    tgt_x = px[target_idx]  # (7, P)
+    tgt_y = py[target_idx]
+    tgt_ships = ships_f[target_idx]
+    tgt_prod = prod_f[target_idx]
+    tgt_owner = owner[target_idx]
+
+    d = jnp.sqrt((px[None, :] - tgt_x) ** 2 + (py[None, :] - tgt_y) ** 2)
+    prox = jnp.maximum(0.0, 1.0 - d / diag)
+    src_ships_b = ships_f[None, :]
+    ratio = (src_ships_b + 1.0) / (tgt_ships + 1.0)
+    ship_adv = ratio / (1.0 + ratio)
+    prod_norm = jnp.minimum(1.0, tgt_prod / 10.0)
+    score = 0.5 * prox + 0.3 * ship_adv + 0.2 * prod_norm
+    tgt_is_enemy_per = (tgt_owner != player) & (tgt_owner != -1)
+    tgt_is_mine_per = tgt_owner == player
+
+    # Filter out cases where target == src (PyTorch skips with `if rid
+    # is None or rid == src.id`). target_idx points to a planet index;
+    # src is the row index, both in same P-space, so equality of indices.
+    skip_self = target_idx == src_idx_grid
+    write_mask = target_has & ~skip_self  # (7, P)
+
+    # Assemble template_ctx by writing per-template 5-tuple at offset
+    # (t * 5 .. (t+1) * 5). Vectorize by building a (T, P, 5) tensor,
+    # masking, then reshape/transpose.
+    per_t_feats = jnp.stack(
+        [
+            score,
+            prox,
+            ship_adv,
+            tgt_is_enemy_per.astype(jnp.float32),
+            tgt_is_mine_per.astype(jnp.float32),
+        ],
+        axis=-1,
+    )  # (7, P, 5)
+    per_t_feats = per_t_feats * write_mask[..., None].astype(jnp.float32)
+
+    # Reshape: (7, P, 5) -> (P, 7, 5) -> (P, 35). Concat NO_OP slot.
+    per_p = jnp.transpose(per_t_feats, (1, 0, 2)).reshape(P, 7 * 5)
+    any_candidate = jnp.any(write_mask, axis=0)  # (P,)
+    noop = jnp.zeros((P, 5), dtype=jnp.float32)
+    noop = noop.at[:, 0].set(
+        jnp.where(any_candidate, 0.0, 1.0).astype(jnp.float32)
+    )
+    full = jnp.concatenate([per_p, noop], axis=1)  # (P, 40)
+
+    # Only own planets get template_ctx (PyTorch only writes for is_mine).
+    full = jnp.where(is_mine[:, None], full, 0.0)
+    return full
+
+
 def featurize_jax_w1(
     state: EnvState,
     player: int,
@@ -579,7 +767,29 @@ def featurize_jax_w1(
     feats = feats.at[:, 33].set(delta_t2)
     feats = feats.at[:, 34].set(owner_changed)
 
-    # idx 35..40: timeline columns — W2e
+    # idx 35..40: timeline columns — W2e (deferred, complex per-turn
+    # multi-attacker resolution + binary search for keep_needed). The
+    # PyTorch path emits 6 cols here; we leave them zero for now and will
+    # come back if BC accuracy degrades.
+
+    # ------------------------------------------------------------------
+    # W2f: per-source template-context block (template_ctx, MAX_PLANETS
+    # × 40 = 8 templates × 5 feats).
+    # For each "own" planet i (src), resolve 7 template targets (id 0-6)
+    # against all other planets and emit per-template
+    # (score, prox, ship_adv, tgt_is_enemy, tgt_is_mine). NO_OP slot
+    # (template id 7) emits 1.0 in its score column when no template
+    # found a target, else 0.0.
+    template_ctx_arr = _build_template_ctx(
+        px,
+        py,
+        ships_f,
+        prod_f,
+        owner,
+        valid_full,
+        is_mine,
+        player,
+    )
 
     # Mask invalid slots — zero out all columns for them.
     feats = feats * valid_full[:, None].astype(jnp.float32)
@@ -665,9 +875,7 @@ def featurize_jax_w1(
     batch_target_mask = (valid_full & ~is_mine)[None, ...]
     batch_global_feats = g[None, ...]
     # W2 placeholders.
-    batch_template_ctx = jnp.zeros(
-        (1, MAX_PLANETS, TEMPLATE_CTX_DIM), dtype=jnp.float32
-    )
+    batch_template_ctx = template_ctx_arr[None, ...]
     batch_candidate_feats = jnp.zeros(
         (1, MAX_PLANETS, CAND_K, CAND_FEAT_DIM), dtype=jnp.float32
     )

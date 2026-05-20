@@ -326,6 +326,38 @@ def test_planet_feats_w2d_history(seed: int, turns: int) -> None:
         )
 
 
+# W2f: template_ctx (40-dim per own planet). Verified at empty-history /
+# no-fleet path (simpler) and with active fleets.
+@pytest.mark.parametrize("seed", [0, 7, 13, 42])
+@pytest.mark.parametrize("turns", [0, 5, 20])
+def test_template_ctx_matches_torch(seed: int, turns: int) -> None:
+    """template_ctx must match torch for every own planet × every col."""
+    jax_p_unused, _, _, _ = _featurize_both(seed, turns)  # warmup
+    js = reset(seed=seed, num_agents=2)
+    ea = empty_actions()
+    for _ in range(turns):
+        js, _, _ = step(js, ea)
+    obs = state_to_obs(js, player=0)
+    torch_batch, _ = featurize(obs, history=HistoryState())
+    jax_batch = featurize_jax_w1(js, player=0)
+    torch_ctx = torch_batch.template_ctx[0].cpu().numpy()
+    jax_ctx = np.asarray(jax_batch.template_ctx[0])
+    mask_mine = np.asarray(jax_batch.my_planet_mask[0])
+
+    for slot in range(MAX_PLANETS):
+        if not bool(mask_mine[slot]):
+            # Non-own slots are zero in both; skip.
+            continue
+        for col in range(40):
+            j = float(jax_ctx[slot, col])
+            t = float(torch_ctx[slot, col])
+            diff = abs(j - t)
+            assert diff < PARITY_TOL, (
+                f"seed={seed} turns={turns} slot={slot} col={col} "
+                f"(template_ctx): jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+            )
+
+
 def test_masks_match_torch() -> None:
     """planet_mask / my_planet_mask / target_mask must agree with PyTorch."""
     js = reset(seed=0, num_agents=2)
