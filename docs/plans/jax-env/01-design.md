@@ -240,3 +240,72 @@ JAX env で 0.06-0.1s/ep が達成できれば **150-280× 高速化**、保守�
 - (B) もし不整合があれば、reset 時に各 spawn step 用に planet 進行を simulate して事前生成
 
 → 公式 sim 行 313-321 を読むと `game_step = spawn_step - 1 + k` で内部計算しているので、spawn 時点の planet 位置は generate_comet_paths が自己完結で計算 → **(A) で OK**。
+
+---
+
+## Phase C: PPO Rollout Integration (2026-05-20 追加)
+
+> 動機: 既存 Phase B (env-side parity) は完了済 (590 tests pass)。実 wall-clock 短縮は rollout に統合し vmap で 16 ep 並列実行して初めて出る。featurizer/forward もバッチ化しないと env step だけでは <20% しか短縮しない (cProfile より env step は全体 16%)。
+
+### C-1: env-only spike (1-2 day)
+
+目的: JAX env 統合インフラ確認 + env-step alone での speedup 上限測定。
+
+実装範囲:
+- `src/jax_env/observation.py` に `comet_planet_ids`, `comets`, `initial_planets` フィールド追加
+- `pipeline/reinforce/case1/training/jax_env.py` を新設: `OrbitWarsEpisode` 互換 API を JAX 内部実装で提供
+- `rollout.py` に `use_jax_env: bool` フラグを追加 (default false)
+- vmap は **行わず**、まず 1 env で wall-clock 同等性 (CPU 単発) を確認
+
+success criteria:
+- 既存 parity test (60-turn fixture) で JAX env 出力が vendor obs と同一 featurizer 出力を生成 (bit-equal)
+- 1-ep wall-clock が ±20% 以内 (CPU)
+
+failure exit:
+- もし featurizer-input 形式が JAX env から再現不可能なら全体撤回
+
+### C-2: featurizer JAX 化 (~1 週間)
+
+目的: featurizer の planet 41-dim / global 20-dim / template_ctx 40-dim / candidate 14×8 を全て `jnp` ベースで再実装し、`vmap(ep_axis=0)` で 16-ep バッチ化可能にする。
+
+最大の難所:
+- 現 featurizer は Python loop + dict + dataclass を多用。JAX に持ち込めない:
+  - `defaultdict(list)` で `arrivals_by_slot` を構築 → JAX は dynamic shape 不可 → `jnp.scatter` + fixed-shape buffer に置換
+  - template resolution の `min(cands, key=...)` → masked argmin
+  - `simulate_planet_timeline` の Python while-loop → `jax.lax.scan` 化
+- **BC 重み bit-互換性必須**: float32 順序の違いで微小な drift が出る。許容差を 1e-6 で固定し、それ以上の場合は BC 重みを retrain (cost 数 GPU-h)
+
+success criteria:
+- `tests/unit/pipeline/reinforce/case1/test_featurizer_parity.py` を JAX 実装でも pass (許容差 1e-6)
+- microbench で featurize 単発が CPU で ±50% 以内 / GPU vmap(16) で 5×+
+
+failure exit:
+- bit-parity を諦め、BC 重みを retrain (時間とコストの追加見積もり 1 週間 / GPU 数十 \$)
+- それでも GPU vmap で 5× 未満なら A2 中止、別アプローチ (truncated episodes など) に転換
+
+### C-3: rollout + ppo_update batched (~3-5 day)
+
+目的: rollout を `vmap(16)` で書き換え、trajectory を `[ep, step]` 固定 shape tensor 化。`ppo_update` も batched tensor 前提。
+
+実装範囲:
+- `rollout.py`: `collect_rollout_jax(model, opponent, episodes_per_iter, ...)` を新設。env_state を `jnp.stack([reset(seed+i) for i in range(N)])` で 16 並列初期化、各 step を `jax.vmap(env_step)` で並列実行
+- per-step の policy forward は PyTorch 維持 (numpy 経由で device 跨ぎ。1 forward = 16 ep batch を 1 GPU 呼び出し)
+- early-termination は mask で扱う、max_steps=500 で固定 shape
+- `ppo.py`: tensor 入力に統一、minibatch sampling も flattened (ep × step) で実施
+
+success criteria:
+- iter1 wall-clock が **RunPod GPU で 50s 以下** (= 5×+ speedup vs 270s serial baseline)
+- BC 重み + 同 hyperparam で iter1 win-rate が ±2pp 以内 (機能等価性)
+
+failure exit:
+- 50s 未達なら原因分析 (forward bottleneck / vmap overhead / mask cost) → 部分採用 or 撤退
+
+### Phase C 全体の進行ルール
+
+各 phase 完了時に **ユーザに進行確認**:
+- C-1 完了 → 「JAX env で featurizer-input 再現可能。続けて C-2 に進む?」
+- C-2 完了 → 「featurizer JAX 化済、parity 1e-6。続けて C-3 統合に進む?」
+- C-3 完了 → 「iter1 = 50s 達成。bench config で full 5-iter 検証する?」
+
+途中で failure exit に該当した場合、即座に報告して中止判断を仰ぐ。
+
