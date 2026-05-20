@@ -335,6 +335,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # bench_rollout_gpu: GPU bench for the W4 JAX rollout (featurize +
+    # model forward + env step end-to-end). Same shape as
+    # bench_featurizer_gpu so artifacts upload + dev/runpod pull work.
+    "bench_rollout_gpu": {
+        "family": "reinforce",
+        "stage": "bench_rollout_gpu",
+        "train_module": "pipeline._bench.rollout_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
