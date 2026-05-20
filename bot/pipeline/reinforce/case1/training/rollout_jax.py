@@ -98,15 +98,21 @@ def _ship_totals(
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
-    seed: int,
+    init_state: EnvState,
     horizon: int,
     shaping_coef: float,
     seat: int,
 ) -> JaxRolloutBatch:
-    """Single-env rollout via `lax.scan`. The outer vmap broadcasts model
-    parameters across episodes; per-ep state, history, and PRNG are
-    threaded through scan's carry."""
-    init_state = reset(seed=seed, num_agents=2)
+    """Single-env rollout via `lax.scan`.
+
+    `init_state` is a JAX `EnvState` that the caller already built (via
+    `reset(seed=...)` on host). Threading it as a JAX array — instead
+    of taking `seed: int` and calling `reset` inside the body — keeps
+    the jit cache to ONE trace regardless of how many distinct seeds
+    we run. The earlier `seed: int` arg caused per-seed recompilation
+    and ate >3 GB of cache on RunPod (root cause of the
+    `bench_rollout_gpu` SIGABRT during the 16-ep variant).
+    """
     init_history = init_history_jax()
 
     # Initial ship diff for shaping reward.
@@ -305,34 +311,22 @@ def collect_rollout_jax(
     baseline_v1 / random opponent support is a follow-up.
     """
     keys = jax.random.split(key, episodes_per_iter)
-    seeds = jnp.arange(seed, seed + episodes_per_iter, dtype=jnp.int32)
-
-    # Note: reset is host-side (uses Python `random.Random`), so we can't
-    # vmap it. Instead we map the per-episode reset on host then stack.
-    # _rollout_one_env's body is fully jitable, so we vmap over (key,
-    # seed) and `_rollout_one_env` builds its own reset state.
-    def run_one(k: jax.Array, s: int) -> JaxRolloutBatch:
-        # `s` is a traced int32 scalar inside vmap, but `reset` wants a
-        # Python int. We close over the static call by deferring reset
-        # to outside vmap; here we tail-call _rollout_one_env which
-        # itself triggers host-side reset. JAX trace will fail on
-        # traced seed → host call.
-        return _rollout_one_env(model, k, int(s), horizon, shaping_coef, seat)
-
-    # We can't vmap due to host-side reset; loop instead. With
-    # `jax.jit` on the body the cost is just launch overhead × N, and
-    # the env step inside still benefits from jit. For real vmap we
-    # need a JAX-native reset (deferred — not blocking for this spike).
-    outs = []
-    for k, s in zip(list(keys), [int(s) for s in seeds.tolist()], strict=True):
-        outs.append(_rollout_one_env(model, k, s, horizon, shaping_coef, seat))
-    # Stack along a new leading axis.
-    return JaxRolloutBatch(
-        **{
-            field: jnp.stack([getattr(o, field) for o in outs], axis=0)
-            for field in JaxRolloutBatch._fields
-        }
+    # Build all N initial states on host (reset is Python-side), then
+    # stack into a single batched EnvState so vmap can broadcast model
+    # parameters across the episode axis. This keeps the jit cache to
+    # ONE compilation regardless of episode count.
+    init_states = [
+        reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)
+    ]
+    batched_state = jax.tree.map(
+        lambda *xs: jnp.stack(xs, axis=0), *init_states
     )
+
+    # vmap over (key, init_state); model is broadcast (in_axes=None).
+    vmapped = jax.vmap(
+        _rollout_one_env, in_axes=(None, 0, 0, None, None, None)
+    )
+    return vmapped(model, keys, batched_state, horizon, shaping_coef, seat)
 
 
 __all__ = [
