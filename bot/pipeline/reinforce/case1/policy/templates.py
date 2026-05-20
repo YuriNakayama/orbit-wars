@@ -56,24 +56,32 @@ def _to_p(row: list[float]) -> _P:
     )
 
 
+def parse_planet_rows(planet_rows: list[list[float]]) -> list[_P]:
+    """Parse the obs planet rows into _P structs once per turn.
+
+    Hoisted from `resolve_template` / `template_context_features` to avoid
+    re-parsing on every template / src combination (previously ~2.7M
+    redundant `_to_p` calls during a typical 16-episode rollout).
+    """
+    return [_to_p(r) for r in planet_rows]
+
+
 def _dist(a: _P, b: _P) -> float:
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
 
 
-def resolve_template(
+def resolve_template_parsed(
     template_id: int,
-    src_row: list[float],
-    planet_rows: list[list[float]],
+    src: _P,
+    planets: list[_P],
     player: int,
 ) -> int | None:
-    """Resolve a template id to a target planet id given the current obs.
+    """Identical to `resolve_template` but with pre-parsed `_P` inputs.
 
-    Returns None if no valid candidate exists or template_id == NO_OP.
+    `planets` must include `src` itself; the function filters it out.
     """
     if template_id == T_NO_OP:
         return None
-    src = _to_p(src_row)
-    planets = [_to_p(r) for r in planet_rows]
     others = [p for p in planets if p.id != src.id]
     if not others:
         return None
@@ -121,34 +129,43 @@ def resolve_template(
     return chosen.id if chosen is not None else None
 
 
+def resolve_template(
+    template_id: int,
+    src_row: list[float],
+    planet_rows: list[list[float]],
+    player: int,
+) -> int | None:
+    """Legacy entry that parses inputs each call; prefer `resolve_template_parsed`."""
+    if template_id == T_NO_OP:
+        return None
+    src = _to_p(src_row)
+    planets = parse_planet_rows(planet_rows)
+    return resolve_template_parsed(template_id, src, planets, player)
+
+
 PER_TEMPLATE_FEATS = 5  # score, prox, ship_adv, tgt_is_enemy, tgt_is_mine
 TEMPLATE_CTX_DIM = NUM_TEMPLATES * PER_TEMPLATE_FEATS  # 8 * 5 = 40
 
 
-def template_context_features(
-    src_row: list[float],
-    planet_rows: list[list[float]],
+def template_context_features_parsed(
+    src: _P,
+    planets: list[_P],
+    planets_by_id: dict[int, _P],
     player: int,
     board_size: float = 100.0,
 ) -> list[float]:
-    """Per-source per-template feature block (NUM_TEMPLATES * PER_TEMPLATE_FEATS).
+    """Parsed variant of `template_context_features`.
 
-    For each template we resolve its target and emit PER_TEMPLATE_FEATS features:
-    [score, prox, ship_adv, tgt_is_enemy, tgt_is_mine]. This gives the model
-    *per-source* awareness of which physical target each template would fire at
-    (the geometry information missing in the original 1-scalar context — the
-    cause of target-collapse identified in 2026-04-19 diagnosis).
-    The NO_OP slot's "score" is set to 1.0 when no template has a candidate.
+    Caller passes a pre-parsed planet list and id→planet map so we avoid
+    re-parsing on every src/template combination. Output is bit-equal to the
+    legacy `template_context_features` since the per-template arithmetic is
+    unchanged.
     """
     out = [0.0] * TEMPLATE_CTX_DIM
-    src = _to_p(src_row)
-    planets = [_to_p(r) for r in planet_rows]
-    planets_by_id = {p.id: p for p in planets}
-
     diag = math.sqrt(2.0) * board_size
     any_candidate = False
     for tid in range(NUM_TEMPLATES - 1):
-        rid = resolve_template(tid, src_row, planet_rows, player)
+        rid = resolve_template_parsed(tid, src, planets, player)
         if rid is None or rid == src.id:
             continue
         tgt = planets_by_id.get(rid)
@@ -173,6 +190,21 @@ def template_context_features(
     no_op_base = (NUM_TEMPLATES - 1) * PER_TEMPLATE_FEATS
     out[no_op_base + 0] = 0.0 if any_candidate else 1.0
     return out
+
+
+def template_context_features(
+    src_row: list[float],
+    planet_rows: list[list[float]],
+    player: int,
+    board_size: float = 100.0,
+) -> list[float]:
+    """Legacy entry that parses inputs each call; prefer the parsed variant."""
+    src = _to_p(src_row)
+    planets = parse_planet_rows(planet_rows)
+    planets_by_id = {p.id: p for p in planets}
+    return template_context_features_parsed(
+        src, planets, planets_by_id, player, board_size
+    )
 
 
 def classify_actual_target(

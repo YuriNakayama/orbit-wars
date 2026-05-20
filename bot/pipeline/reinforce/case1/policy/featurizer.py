@@ -24,7 +24,11 @@ from .geometry import (
     predict_comet_position,
     predict_planet_position,
 )
-from .templates import TEMPLATE_CTX_DIM, template_context_features
+from .templates import (
+    TEMPLATE_CTX_DIM,
+    parse_planet_rows,
+    template_context_features_parsed,
+)
 from .timeline import (
     DEFAULT_HORIZON as TIMELINE_HORIZON,
 )
@@ -214,6 +218,12 @@ def featurize(
     initial_by_id: dict[int, Planet] = {
         int(row[0]): _build_planet_obj(list(row)) for row in raw_initial_planets
     }
+
+    # Hoist planet parsing once per turn. Used by template_context_features
+    # (previously re-parsed for every src planet × every template, accounting
+    # for ~2.7M _to_p calls / ~4M structify recursions in a 16-ep rollout).
+    parsed_planets = parse_planet_rows(raw_planets)
+    parsed_planets_by_id = {p.id: p for p in parsed_planets}
 
     incoming_ally_ships = [0.0] * MAX_PLANETS
     incoming_enemy_ships = [0.0] * MAX_PLANETS
@@ -414,8 +424,12 @@ def featurize(
             candidate_feats[slot] = torch.from_numpy(cand_feats_np)
             candidate_mask[slot] = torch.from_numpy(cand_mask_np)
             candidate_pid[slot] = torch.tensor(cand_pids, dtype=torch.int64)
-            tctx = template_context_features(
-                list(raw_planets[slot]), raw_planets, player, BOARD_SIZE
+            tctx = template_context_features_parsed(
+                parsed_planets[slot],
+                parsed_planets,
+                parsed_planets_by_id,
+                player,
+                BOARD_SIZE,
             )
             for j in range(TEMPLATE_CTX_DIM):
                 template_ctx[slot, j] = tctx[j]
