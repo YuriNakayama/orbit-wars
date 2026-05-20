@@ -53,6 +53,14 @@ COMET_WINDOW = 30
 LOG_NORM_DENOM = 6.0
 LAUNCH_COUNT_NORM = 10.0
 DIAG = math.sqrt(2.0) * BOARD_SIZE
+SUN_X = CENTER
+SUN_Y = CENTER
+SUN_R = 10.0
+LAUNCH_CLEARANCE = 0.1
+ROTATION_LIMIT = 50.0
+MAX_SHIPS = 400.0
+MAX_PRODUCTION = 5.0
+SHIPS_NEEDED = 5  # candidates.fixed_ship_count default when env var unset
 NEIGHBOR_RADIUS_SHORT = 8.0
 NEIGHBOR_RADIUS_LONG = 25.0
 HORIZON_TURNS = 30
@@ -360,6 +368,255 @@ def _build_template_ctx(
     # Only own planets get template_ctx (PyTorch only writes for is_mine).
     full = jnp.where(is_mine[:, None], full, 0.0)
     return full
+
+
+def _build_candidate_block(
+    px: jax.Array,
+    py: jax.Array,
+    pid_arr: jax.Array,
+    radius_f: jax.Array,
+    ships_arr: jax.Array,  # int32 (P,) — for ships_needed comparison
+    ships_f: jax.Array,  # float32 (P,) — for normalization
+    prod_f: jax.Array,
+    owner: jax.Array,
+    valid_full: jax.Array,
+    is_mine: jax.Array,
+    player: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """JAX equivalent of `candidates.build_candidate_block` for all own srcs.
+
+    Returns:
+      cand_feats: (P, CAND_K, CAND_FEAT_DIM) float32
+      cand_mask:  (P, CAND_K) bool
+      cand_pid:   (P, CAND_K) int32 (-1 = no-op slot or unfilled)
+    """
+    P = MAX_PLANETS
+    F = CAND_FEAT_DIM
+
+    # Per-(src, tgt) basics.
+    dx = px[None, :] - px[:, None]  # (P_src, P_tgt)
+    dy = py[None, :] - py[:, None]
+    dist_st = jnp.sqrt(dx * dx + dy * dy)
+    self_mask = jnp.eye(P, dtype=jnp.bool_)
+    tgt_valid = valid_full[None, :] & ~self_mask
+
+    t_owner = owner[None, :]
+    is_enemy_t = tgt_valid & (t_owner != player) & (t_owner != -1)
+    is_neutral_t = tgt_valid & (t_owner == -1)
+    is_friendly_t = tgt_valid & (t_owner == player)
+
+    # Vendor sort key: (dist, id) ascending. Composite as
+    # `dist * BIG_ID_MULT + pid` so id breaks ties without changing
+    # dist ordering. BIG must exceed max-id (< 100).
+    BIG_ID_MULT = jnp.float32(1.0e6)
+    pid_f = pid_arr[None, :].astype(jnp.float32)  # (1, P_tgt)
+    sort_key = dist_st * BIG_ID_MULT + pid_f  # (P_src, P_tgt)
+
+    INF = jnp.float32(jnp.inf)
+
+    def topk_indices(mask: jax.Array, k: int) -> jax.Array:
+        """Top-k smallest sort_key per src, masked. Returns (P, k) int32.
+
+        Invalid slots (mask all False at the corresponding rank) get
+        target_idx of an arbitrary slot; caller must consult per-slot
+        validity via the consumed mask.
+        """
+        keys = jnp.where(mask, sort_key, INF)
+        idx = jnp.argsort(keys, axis=-1)  # ascending
+        return idx[:, :k]
+
+    enemy_top = topk_indices(is_enemy_t, 2)  # (P, 2)
+    neutral_top = topk_indices(is_neutral_t, 2)
+    friendly_top = topk_indices(is_friendly_t, 3)
+
+    # Per-slot validity flag from the bucket mask (top-k returns
+    # arbitrary indices when fewer than k valid targets exist).
+    def picked_valid(idx_block: jax.Array, mask: jax.Array) -> jax.Array:
+        row_idx = jnp.arange(P, dtype=jnp.int32)[:, None]
+        return mask[row_idx, idx_block]
+
+    enemy_valid = picked_valid(enemy_top, is_enemy_t)  # (P, 2)
+    neutral_valid = picked_valid(neutral_top, is_neutral_t)
+    friendly_valid = picked_valid(friendly_top, is_friendly_t)
+
+    # Replicate PyTorch's `chosen = enemies + neutrals + friendlies`
+    # then `chosen.extend(fallback[: 7 - len(chosen)])`. Variable-length
+    # concatenation in fixed-shape JAX = sequential append driven by
+    # bucket validity flags.
+    final_idx = jnp.full((P, 7), -1, dtype=jnp.int32)
+    final_valid = jnp.zeros((P, 7), dtype=jnp.bool_)
+    write_pos = jnp.zeros((P,), dtype=jnp.int32)
+
+    def _append(
+        final_idx: jax.Array,
+        final_valid: jax.Array,
+        write_pos: jax.Array,
+        cand_idx_col: jax.Array,
+        cand_valid_col: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Append (cand_idx_col, cand_valid_col) to final_*, advancing
+        write_pos per-row when valid. cand_*_col are (P,)."""
+        wp = write_pos
+        # Only write when both the candidate is valid AND we still have
+        # room (wp < 7). PyTorch caps the chosen list at 7 by
+        # `fallback[: target_count - len(chosen)]`, dropping later
+        # fallback entries.
+        room = wp < 7
+        effective_valid = cand_valid_col & room
+        wp_safe = jnp.minimum(wp, 6)
+        rows = jnp.arange(P, dtype=jnp.int32)
+        new_idx = final_idx.at[rows, wp_safe].set(
+            jnp.where(effective_valid, cand_idx_col, final_idx[rows, wp_safe])
+        )
+        new_valid = final_valid.at[rows, wp_safe].set(
+            final_valid[rows, wp_safe] | effective_valid
+        )
+        new_wp = wp + effective_valid.astype(jnp.int32)
+        return new_idx, new_valid, new_wp
+
+    # Phase 1: enemies (2 slots).
+    for s in range(2):
+        final_idx, final_valid, write_pos = _append(
+            final_idx, final_valid, write_pos,
+            enemy_top[:, s], enemy_valid[:, s],
+        )
+    # Phase 2: neutrals (2 slots).
+    for s in range(2):
+        final_idx, final_valid, write_pos = _append(
+            final_idx, final_valid, write_pos,
+            neutral_top[:, s], neutral_valid[:, s],
+        )
+    # Phase 3: friendlies (3 slots).
+    for s in range(3):
+        final_idx, final_valid, write_pos = _append(
+            final_idx, final_valid, write_pos,
+            friendly_top[:, s], friendly_valid[:, s],
+        )
+
+    # Phase 4: fallback. Build the "remaining" pool by excluding everything
+    # written so far (final_idx where valid). Then top-k by (dist, id).
+    picked_mask = jnp.zeros((P, P), dtype=jnp.bool_)
+    rows = jnp.arange(P, dtype=jnp.int32)
+    for s in range(7):
+        was_valid = final_valid[:, s]
+        col = final_idx[:, s]
+        # Clamp invalid (col=-1) to 0 to avoid OOB; result is gated by where.
+        col_safe = jnp.maximum(col, 0)
+        new_picked = picked_mask.at[rows, col_safe].set(True)
+        picked_mask = jnp.where(was_valid[:, None], new_picked, picked_mask)
+    fallback_pool = tgt_valid & ~picked_mask
+    fallback_top = topk_indices(fallback_pool, 7)
+    fallback_top_valid = picked_valid(fallback_top, fallback_pool)
+    for s in range(7):
+        final_idx, final_valid, write_pos = _append(
+            final_idx, final_valid, write_pos,
+            fallback_top[:, s], fallback_top_valid[:, s],
+        )
+
+    # Gather per-(src, slot) target attributes.
+    tgt_x = px[final_idx]  # (P, 7)
+    tgt_y = py[final_idx]
+    tgt_radius = radius_f[final_idx]
+    tgt_ships_f = ships_f[final_idx]
+    tgt_prod = prod_f[final_idx]
+    tgt_owner_g = owner[final_idx]
+    tgt_pid_g = pid_arr[final_idx]
+
+    src_x = px[:, None]  # (P, 1)
+    src_y = py[:, None]
+    src_ships_f = ships_f[:, None]
+    src_ships_i = ships_arr[:, None]
+    src_radius_b = radius_f[:, None]
+
+    d_x = tgt_x - src_x
+    d_y = tgt_y - src_y
+    dist_full = jnp.sqrt(d_x * d_x + d_y * d_y)
+    angle = jnp.arctan2(d_y, d_x)
+
+    # Per-target is_neutral/is_mine/is_enemy/is_rotating.
+    is_neutral_g = tgt_owner_g == -1
+    is_mine_g = tgt_owner_g == player
+    is_enemy_g = (~is_neutral_g) & (~is_mine_g)
+    tgt_to_sun = jnp.sqrt((tgt_x - SUN_X) ** 2 + (tgt_y - SUN_Y) ** 2)
+    is_rotating_t = (tgt_to_sun + tgt_radius) < ROTATION_LIMIT
+
+    # _shot_crosses_sun: point-to-segment distance from sun to the line
+    # from (start_x, start_y) to (tgt_x, tgt_y). start is src + radius +
+    # LAUNCH_CLEARANCE along the angle.
+    start_x = src_x + jnp.cos(angle) * (src_radius_b + LAUNCH_CLEARANCE)
+    start_y = src_y + jnp.sin(angle) * (src_radius_b + LAUNCH_CLEARANCE)
+    sx_dx = tgt_x - start_x
+    sy_dy = tgt_y - start_y
+    seg_len_sq = sx_dx * sx_dx + sy_dy * sy_dy
+    seg_safe = jnp.maximum(seg_len_sq, 1e-9)
+    t_param = (
+        (SUN_X - start_x) * sx_dx + (SUN_Y - start_y) * sy_dy
+    ) / seg_safe
+    t_param = jnp.maximum(0.0, jnp.minimum(1.0, t_param))
+    cx = start_x + t_param * sx_dx
+    cy = start_y + t_param * sy_dy
+    dist_sun_seg = jnp.sqrt((SUN_X - cx) ** 2 + (SUN_Y - cy) ** 2)
+    # When seg_len_sq is tiny, vendor falls back to point distance
+    # hypot(px - x1, py - y1). Replicate that branch.
+    fallback_d = jnp.sqrt((SUN_X - start_x) ** 2 + (SUN_Y - start_y) ** 2)
+    dist_sun = jnp.where(seg_len_sq <= 1e-9, fallback_d, dist_sun_seg)
+    crosses = dist_sun < SUN_R
+
+    # Build the 14-dim feature row per (src, slot).
+    feats_block = jnp.zeros((P, 7, F), dtype=jnp.float32)
+    feats_block = feats_block.at[:, :, 0].set(final_valid.astype(jnp.float32))
+    feats_block = feats_block.at[:, :, 1].set(is_neutral_g.astype(jnp.float32))
+    feats_block = feats_block.at[:, :, 2].set(is_mine_g.astype(jnp.float32))
+    feats_block = feats_block.at[:, :, 3].set(is_enemy_g.astype(jnp.float32))
+    feats_block = feats_block.at[:, :, 4].set(tgt_x / BOARD_SIZE)
+    feats_block = feats_block.at[:, :, 5].set(tgt_y / BOARD_SIZE)
+    feats_block = feats_block.at[:, :, 6].set(d_x / BOARD_SIZE)
+    feats_block = feats_block.at[:, :, 7].set(d_y / BOARD_SIZE)
+    feats_block = feats_block.at[:, :, 8].set(dist_full / BOARD_SIZE)
+    feats_block = feats_block.at[:, :, 9].set(
+        jnp.minimum(tgt_ships_f, MAX_SHIPS) / MAX_SHIPS
+    )
+    feats_block = feats_block.at[:, :, 10].set(tgt_prod / MAX_PRODUCTION)
+    feats_block = feats_block.at[:, :, 11].set(
+        is_rotating_t.astype(jnp.float32)
+    )
+    feats_block = feats_block.at[:, :, 12].set(crosses.astype(jnp.float32))
+    feats_block = feats_block.at[:, :, 13].set(
+        jnp.minimum(src_ships_f, MAX_SHIPS) / MAX_SHIPS
+    )
+    # Zero out invalid slots (PyTorch leaves them at 0 because they were
+    # never populated).
+    feats_block = feats_block * final_valid[..., None].astype(jnp.float32)
+
+    # Slot 0 = no-op. is_valid=1, mask=True, pid=-1.
+    noop_feats = jnp.zeros((P, 1, F), dtype=jnp.float32).at[:, 0, 0].set(1.0)
+    cand_feats = jnp.concatenate([noop_feats, feats_block], axis=1)  # (P, 8, F)
+
+    # cand_mask: slot 0 always True; slot 1..7 = ships_needed > 0 AND not
+    # crosses AND src.ships >= ships_needed.
+    can_fire = (
+        (jnp.int32(SHIPS_NEEDED) > 0)
+        & ~crosses
+        & (src_ships_i >= jnp.int32(SHIPS_NEEDED))
+    )
+    slot_mask = final_valid & can_fire
+    noop_mask = jnp.ones((P, 1), dtype=jnp.bool_)
+    cand_mask = jnp.concatenate([noop_mask, slot_mask], axis=1)  # (P, 8)
+
+    # cand_pid: slot 0 = -1, slot 1..7 = tgt_pid if valid else -1.
+    noop_pid = jnp.full((P, 1), -1, dtype=jnp.int32)
+    slot_pid = jnp.where(final_valid, tgt_pid_g, jnp.int32(-1))
+    cand_pid = jnp.concatenate([noop_pid, slot_pid], axis=1)
+
+    # Only own planets actually get populated. PyTorch sets to zero for
+    # non-mine slots (never populated).
+    mine_b = is_mine[:, None, None]
+    cand_feats = jnp.where(mine_b, cand_feats, 0.0)
+    mine_b_2d = is_mine[:, None]
+    cand_mask = jnp.where(mine_b_2d, cand_mask, jnp.bool_(False))
+    cand_pid = jnp.where(mine_b_2d, cand_pid, jnp.int32(-1))
+
+    return cand_feats, cand_mask, cand_pid
 
 
 def featurize_jax_w1(
@@ -791,6 +1048,22 @@ def featurize_jax_w1(
         player,
     )
 
+    # ------------------------------------------------------------------
+    # W2-final: candidate block (CAND_K=8 per own src × 14 feats each).
+    cand_feats_arr, cand_mask_arr, cand_pid_arr = _build_candidate_block(
+        px,
+        py,
+        pid_arr,
+        radius_f,
+        ships,
+        ships_f,
+        prod_f,
+        owner,
+        valid_full,
+        is_mine,
+        player,
+    )
+
     # Mask invalid slots — zero out all columns for them.
     feats = feats * valid_full[:, None].astype(jnp.float32)
 
@@ -874,17 +1147,10 @@ def featurize_jax_w1(
     batch_my_planet_mask = is_mine[None, ...]
     batch_target_mask = (valid_full & ~is_mine)[None, ...]
     batch_global_feats = g[None, ...]
-    # W2 placeholders.
     batch_template_ctx = template_ctx_arr[None, ...]
-    batch_candidate_feats = jnp.zeros(
-        (1, MAX_PLANETS, CAND_K, CAND_FEAT_DIM), dtype=jnp.float32
-    )
-    batch_candidate_mask = jnp.zeros(
-        (1, MAX_PLANETS, CAND_K), dtype=jnp.bool_
-    )
-    batch_candidate_pid = jnp.full(
-        (1, MAX_PLANETS, CAND_K), -1, dtype=jnp.int32
-    )
+    batch_candidate_feats = cand_feats_arr[None, ...]
+    batch_candidate_mask = cand_mask_arr[None, ...]
+    batch_candidate_pid = cand_pid_arr[None, ...]
 
     return BatchFeaturesJax(
         planet_feats=batch_planet_feats,

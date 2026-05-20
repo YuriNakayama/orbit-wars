@@ -358,6 +358,50 @@ def test_template_ctx_matches_torch(seed: int, turns: int) -> None:
             )
 
 
+# W2-final: candidate block (per own src × CAND_K=8 candidates × 14 feats).
+@pytest.mark.parametrize("seed", [0, 7, 13, 42])
+@pytest.mark.parametrize("turns", [0, 5, 20])
+def test_candidate_block_matches_torch(seed: int, turns: int) -> None:
+    """candidate_feats / candidate_mask / candidate_pid must match torch."""
+    js = reset(seed=seed, num_agents=2)
+    ea = empty_actions()
+    for _ in range(turns):
+        js, _, _ = step(js, ea)
+    obs = state_to_obs(js, player=0)
+    torch_batch, _ = featurize(obs, history=HistoryState())
+    jax_batch = featurize_jax_w1(js, player=0)
+    t_feats = torch_batch.candidate_feats[0].cpu().numpy()
+    j_feats = np.asarray(jax_batch.candidate_feats[0])
+    t_mask = torch_batch.candidate_mask[0].cpu().numpy()
+    j_mask = np.asarray(jax_batch.candidate_mask[0])
+    t_pid = torch_batch.candidate_pid[0].cpu().numpy()
+    j_pid = np.asarray(jax_batch.candidate_pid[0])
+    mine = np.asarray(jax_batch.my_planet_mask[0])
+
+    for slot in range(MAX_PLANETS):
+        if not bool(mine[slot]):
+            continue
+        # mask / pid are integer — exact match required.
+        assert (j_mask[slot] == t_mask[slot]).all(), (
+            f"seed={seed} turns={turns} slot={slot}: "
+            f"candidate_mask jax={j_mask[slot]} torch={t_mask[slot]}"
+        )
+        assert (j_pid[slot] == t_pid[slot]).all(), (
+            f"seed={seed} turns={turns} slot={slot}: "
+            f"candidate_pid jax={j_pid[slot]} torch={t_pid[slot]}"
+        )
+        # feats — tol=1e-4.
+        for k in range(8):
+            for c in range(14):
+                j = float(j_feats[slot, k, c])
+                t = float(t_feats[slot, k, c])
+                diff = abs(j - t)
+                assert diff < PARITY_TOL, (
+                    f"seed={seed} turns={turns} slot={slot} k={k} c={c}: "
+                    f"jax={j:.6f} torch={t:.6f} diff={diff:.3e}"
+                )
+
+
 def test_masks_match_torch() -> None:
     """planet_mask / my_planet_mask / target_mask must agree with PyTorch."""
     js = reset(seed=0, num_agents=2)
