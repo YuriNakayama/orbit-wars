@@ -106,13 +106,12 @@ def build_snapshot(
             shutil.copy2(wheel, wheels_dir / wheel.name)
 
     if include_mart_files:
+        # Kaggle は top-level に `data/` というディレクトリ名を予約しており
+        # upload 時に sub directory が drop される (実測: data.zip upload 成功
+        # 表示でも file list に出現しない)。`mart/` に rewrite して回避する。
+        # kernel 側は cell B で mirror 時に mart/ -> data/ にリネームする。
         for src in include_mart_files:
-            # `..` を lexical 正規化しつつ symlink は follow しない正規化版を
-            # 作る。
             src_norm = Path(os.path.normpath(str(src.absolute())))
-            # 実体ファイルは src.resolve() で symlink を辿った先に存在する
-            # ことがある (worktree の data/ -> main の data/ symlink 配下)。
-            # src_norm でも src.resolve() でも一方が file であれば OK。
             src_real = src.resolve()
             if src_norm.is_file():
                 src_for_copy = src_norm
@@ -122,20 +121,20 @@ def build_snapshot(
                 raise FileNotFoundError(
                     f"mart file not found at {src_norm} (real: {src_real})"
                 )
-            # repo_root 相対 path は src_norm (lexical) から計算する。
-            # 失敗時は data/ 部分以降を抜き出して dest に配置する。
             try:
                 rel_path = src_norm.relative_to(repo_root)
             except ValueError:
-                # data/mart/.../<name>.parquet の "data/" 以降を rel_path
-                # として採用 (Kaggle 側 cwd の data/ に置けば dataset.py が
-                # 拾える)。
                 parts = src_norm.parts
                 if "data" in parts:
                     idx = parts.index("data")
                     rel_path = Path(*parts[idx:])
                 else:
                     raise
+            # rel_path は "data/mart/imitation/case11/train.parquet"。
+            # 先頭の "data" を "mart_payload" に rewrite (Kaggle 予約名回避)。
+            parts = rel_path.parts
+            if parts and parts[0] == "data":
+                rel_path = Path("mart_payload", *parts[1:])
             target = dest_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_for_copy, target)
