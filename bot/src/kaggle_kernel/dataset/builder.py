@@ -106,18 +106,22 @@ def build_snapshot(
 
     if include_mart_files:
         for src in include_mart_files:
-            src = src.resolve()
-            if not src.is_file():
-                raise FileNotFoundError(f"mart file not found: {src}")
+            # worktree 配下では data/ が main repo data/ への symlink になる
+            # ことがある。relative_to は symlink を follow しないため、
+            # absolute() (lexical) で worktree 相対 path を計算してから、
+            # コピー時のみ resolve() で実体ファイルを参照する。
+            src_abs = src.absolute()
+            if not src_abs.is_file():
+                raise FileNotFoundError(f"mart file not found: {src_abs}")
             try:
-                rel_path = src.relative_to(repo_root)
+                rel_path = src_abs.relative_to(repo_root)
             except ValueError as e:
                 raise ValueError(
-                    f"mart file {src} is not under repo_root {repo_root}"
+                    f"mart file {src_abs} is not under repo_root {repo_root}"
                 ) from e
             target = dest_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+            shutil.copy2(src_abs.resolve(), target)
 
     git_dir = dest_dir / ".git"
     git_dir.mkdir(exist_ok=True)
