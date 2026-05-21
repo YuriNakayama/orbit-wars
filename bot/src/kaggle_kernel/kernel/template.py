@@ -292,17 +292,12 @@ def _needs_parquet_to_npy(case: str) -> bool:
 def _cell_parquet_to_npy(ctx: RenderContext) -> str:
     """case11 mart parquet を per-column .npy に変換 (cell D の直前で実行)。
 
-    case_subdir() で smoke variant を case11 にマップしてから、その下の
-    train.parquet / val.parquet を /tmp/orbit-wars-repo 配下の同じ場所に
-    展開する。出力 npy は dataset.py の _npy_dir_for() が見るパス
-    (<stem>_npy/) に揃える。
+    case と同名の subdir を見る (smoke 用は data/mart/imitation/case11_smoke/、
+    本番は data/mart/imitation/case11/)。出力 npy は dataset.py の
+    _npy_dir_for() が見るパス (<stem>_npy/) に揃える。
     """
     case = ctx.case
-    if case.startswith("case11_"):
-        case_subdir = "case11"
-    else:
-        case_subdir = case
-    mart_dir = f"/tmp/orbit-wars-repo/data/mart/imitation/{case_subdir}"
+    mart_dir = f"/tmp/orbit-wars-repo/data/mart/imitation/{case}"
     return (
         "# cell C2: parquet -> per-column .npy (case11 only)\n"
         "import os, sys, subprocess\n"

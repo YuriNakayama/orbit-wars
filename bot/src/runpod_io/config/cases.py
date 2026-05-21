@@ -295,14 +295,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
         "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",
     },
-    # case11 smoke variant: 20k train rows / 2k val rows / 3 epochs so a
-    # full pipeline run finishes in ~15 min and we can verify the
-    # per-epoch S3 best.pt upload flow end-to-end on real RunPod.
+    # case11 smoke variant: 100 episodes (~25k train rows / ~3k val rows)
+    # × 1 epoch で kernel e2e パイプラインを 10-15 分で検証する用。
+    # mart は data/mart/imitation/case11_smoke/ に置かれている。
     "case11_smoke": {
         "stage": "train_imitation_case11",
         "train_module": "pipeline.imitation.case11.training.train",
         "config_arg": (
-            "--config pipeline/imitation/case11/configs/il_case11_per_planet_smoke.yaml"
+            "--config pipeline/imitation/case11/configs/"
+            "il_case11_per_planet_recent10d_rank30_smoke.yaml"
         ),
         "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
         "canonical_weights": "",
