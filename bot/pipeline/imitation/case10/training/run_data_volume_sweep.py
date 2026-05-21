@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -130,14 +131,15 @@ def _eval(
     )
 
 
-def _read_eval_summary(tag: str) -> dict:
+def _read_eval_summary(tag: str) -> dict[str, Any]:
     p = SUMMARY_PATH.parent / f"eval_{tag}.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text())
+    result: dict[str, Any] = json.loads(p.read_text())
+    return result
 
 
-def _read_train_metrics(weights: Path) -> dict:
+def _read_train_metrics(weights: Path) -> dict[str, Any]:
     """Look for a train_metrics.json next to the weights file (run_dir)."""
     candidates = [
         weights.with_suffix(".json"),
@@ -146,7 +148,8 @@ def _read_train_metrics(weights: Path) -> dict:
     for c in candidates:
         if c.exists():
             try:
-                return json.loads(c.read_text())
+                result: dict[str, Any] = json.loads(c.read_text())
+                return result
             except json.JSONDecodeError:
                 continue
     return {}
@@ -162,10 +165,10 @@ def _run_one_point(
     episodes_per_side: int,
     skip_train: bool,
     skip_eval: bool,
-) -> dict:
+) -> dict[str, Any]:
     cfg_path = _materialize_config(base_cfg_path, tag, top_K, use_loser_swap)
     weights = WEIGHTS_DIR / f"weights_{tag}.pt"
-    record: dict = {
+    record: dict[str, Any] = {
         "tag": tag,
         "top_submission_limit": top_K,
         "use_loser_swap": use_loser_swap,
@@ -234,7 +237,7 @@ def main() -> None:
 
     if SUMMARY_PATH.exists():
         try:
-            results: list[dict] = json.loads(SUMMARY_PATH.read_text())
+            results: list[dict[str, Any]] = json.loads(SUMMARY_PATH.read_text())
         except json.JSONDecodeError:
             results = []
     else:

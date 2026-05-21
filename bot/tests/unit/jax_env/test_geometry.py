@@ -83,7 +83,7 @@ def test_swept_pair_hit_no_motion_inside_radius() -> None:
     A = B = _jx(50.0, 50.0)
     P0 = P1 = _jx(50.5, 50.0)
     r = 1.0
-    assert bool(swept_pair_hit(A, B, P0, P1, r))
+    assert bool(swept_pair_hit(A, B, P0, P1, jnp.float32(r)))
     assert vendor_swept((50.0, 50.0), (50.0, 50.0), (50.5, 50.0), (50.5, 50.0), r)
 
 
@@ -91,7 +91,7 @@ def test_swept_pair_hit_no_motion_outside_radius() -> None:
     A = B = _jx(0.0, 0.0)
     P0 = P1 = _jx(50.0, 0.0)
     r = 1.0
-    assert not bool(swept_pair_hit(A, B, P0, P1, r))
+    assert not bool(swept_pair_hit(A, B, P0, P1, jnp.float32(r)))
     assert not vendor_swept((0.0, 0.0), (0.0, 0.0), (50.0, 0.0), (50.0, 0.0), r)
 
 
@@ -101,7 +101,7 @@ def test_swept_pair_hit_passing_through() -> None:
     B = _jx(10.0, 0.0)
     P0 = P1 = _jx(5.0, 0.5)  # static, very close to mid path
     r = 1.0
-    assert bool(swept_pair_hit(A, B, P0, P1, r))
+    assert bool(swept_pair_hit(A, B, P0, P1, jnp.float32(r)))
     assert vendor_swept((0.0, 0.0), (10.0, 0.0), (5.0, 0.5), (5.0, 0.5), r)
 
 
@@ -111,7 +111,7 @@ def test_swept_pair_hit_misses_after_t1() -> None:
     B = _jx(1.0, 0.0)
     P0 = P1 = _jx(10.0, 0.0)
     r = 0.5
-    assert not bool(swept_pair_hit(A, B, P0, P1, r))
+    assert not bool(swept_pair_hit(A, B, P0, P1, jnp.float32(r)))
     assert not vendor_swept((0.0, 0.0), (1.0, 0.0), (10.0, 0.0), (10.0, 0.0), r)
 
 
@@ -125,5 +125,5 @@ def test_swept_pair_hit_random_parity(seed: int) -> None:
         P1 = (P0[0] + rng.uniform(-3, 3), P0[1] + rng.uniform(-3, 3))
         r = rng.uniform(0.5, 5.0)
         expected = vendor_swept(A, B, P0, P1, r)
-        got = bool(swept_pair_hit(_jx(*A), _jx(*B), _jx(*P0), _jx(*P1), r))
+        got = bool(swept_pair_hit(_jx(*A), _jx(*B), _jx(*P0), _jx(*P1), jnp.float32(r)))
         assert got == expected, (A, B, P0, P1, r, got, expected)

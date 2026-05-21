@@ -16,12 +16,15 @@ this is the BC-compatibility budget.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from jax_env.observation import state_to_obs
 from jax_env.reset import reset
+from jax_env.state import EnvState
 from jax_env.step import empty_actions, step
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
@@ -85,7 +88,7 @@ W1_PLANET_COLS = (
 W1_GLOBAL_COLS = tuple(i for i in range(GLOBAL_FEAT_DIM) if i not in (16, 17, 18, 19))
 
 
-def _build_fire_actions(state) -> jnp.ndarray:
+def _build_fire_actions(state: EnvState) -> jnp.ndarray:
     """Action tensor that fires 1 ship at angle 0 from each seat's home.
 
     Sentinel: from_planet_id == -1 means no-op. We populate row 0 of seats
@@ -109,7 +112,7 @@ def _build_fire_actions(state) -> jnp.ndarray:
 
 def _featurize_both(
     seed: int, turns: int, with_fleets: bool = False
-) -> tuple[np.ndarray, np.ndarray, dict, dict]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any], dict[str, Any]]:
     """Run both featurizers from a fresh state with `turns` steps.
 
     When `with_fleets=True`, both seats fire 1 ship from their home each
@@ -259,7 +262,7 @@ W2D_GLOBAL_COLS = (16, 17, 18, 19)
 
 
 def _seat0_action_rows(
-    state,
+    state: EnvState,
 ) -> tuple[list[list[int | float]], np.ndarray, np.ndarray, np.ndarray]:
     """Build seat 0's PyTorch-style action list and matching JAX arrays.
 

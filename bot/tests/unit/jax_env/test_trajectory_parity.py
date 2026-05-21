@@ -27,6 +27,8 @@ the deep-horizon assertion.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from env.orbit_wars import make_orbit_wars_env
@@ -39,7 +41,7 @@ from jax_env.step import empty_actions, step
 PRE_COMET_TOL = 5e-4
 
 
-def _run_both(seed: int, turns: int) -> tuple[dict, dict]:
+def _run_both(seed: int, turns: int) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run JAX env + vendor sim with no-op actions and return final obs."""
     js = reset(seed=seed, num_agents=2)
     env = make_orbit_wars_env(agents=2, seed=seed)

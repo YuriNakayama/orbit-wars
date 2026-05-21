@@ -34,8 +34,7 @@ def _ctx(**overrides: object) -> InteractiveContext:
 
 def test_render_returns_valid_notebook() -> None:
     nb = render_interactive_notebook(_ctx())
-    parsed = nbformat.from_dict(nb)
-    nbformat.validate(parsed)
+    nbformat.validate(nb)
     assert nb["nbformat"] == 4
 
 

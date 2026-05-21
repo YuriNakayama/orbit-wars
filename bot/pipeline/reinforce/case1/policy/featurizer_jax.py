@@ -855,7 +855,12 @@ def _build_timeline_cols(
     )  # (P, H+1, 3)
 
     # Run the per-planet scan via vmap over P.
-    def _run(owner_cls, ships, prod, arrivals):
+    def _run(
+        owner_cls: jax.Array,
+        ships: jax.Array,
+        prod: jax.Array,
+        arrivals: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         return _simulate_one_timeline(owner_cls, ships, prod, arrivals)
 
     ships_at, owner_at, min_owned, fall_seen, fall_turn = jax.vmap(_run)(
@@ -900,7 +905,12 @@ def _build_timeline_cols(
 
     # keep_needed binary search: only for ally planets. Run KEEP_BSEARCH_ITERS
     # iterations of bsearch; track whether full ships works.
-    def _survives_with_keep(owner_cls, keep, prod, arrivals) -> jax.Array:
+    def _survives_with_keep(
+        owner_cls: jax.Array,
+        keep: jax.Array,
+        prod: jax.Array,
+        arrivals: jax.Array,
+    ) -> jax.Array:
         # Replicate vendor `survives_with_keep`: simulate with garrison=keep
         # and check if owner stays ALLY across the full horizon AND ends
         # ALLY. Vendor's `survives_with_keep` returns True iff owner remains
@@ -916,7 +926,12 @@ def _build_timeline_cols(
         )
         return (~fs) & (owner_at_k[H] == OWNER_ALLY)
 
-    def _keep_needed_one(owner_cls, ships, prod, arrivals):
+    def _keep_needed_one(
+        owner_cls: jax.Array,
+        ships: jax.Array,
+        prod: jax.Array,
+        arrivals: jax.Array,
+    ) -> jax.Array:
         # Only valid for ally planets; non-ally returns 0.
         is_ally = owner_cls == OWNER_ALLY
         full_ships = jnp.float32(ships)
@@ -924,10 +939,12 @@ def _build_timeline_cols(
 
         # Binary search [0, ships]; result is min keep that survives.
         # We use fixed-iter binary search.
-        def cond(_state):
+        def cond(_state: tuple[jax.Array, jax.Array]) -> bool:
             return True  # unused; using lax.fori_loop fixed iters
 
-        def body(_i, state):
+        def body(
+            _i: jax.Array, state: tuple[jax.Array, jax.Array]
+        ) -> tuple[jax.Array, jax.Array]:
             lo, hi = state
             mid = (lo + hi) // 2
             ok = _survives_with_keep(owner_cls, mid, prod, arrivals)
