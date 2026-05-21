@@ -63,8 +63,9 @@ jobs:
       # CI 環境にも extension を install する。CI では速度より test 動作の
       # ほうが重要なので debug build (release より ~4× 速くビルド) を採用。
       - name: Build + install Rust extension into bot venv (debug for speed)
+        # maturin は bot/pyproject.toml の `env` group (dev に include) で
+        # venv に install 済み。`uv run` 経由で呼べば PATH に乗る。
         run: |
-          uv run --directory bot python -m pip install --quiet 'maturin>=1.7,<2'
           cd simulator/rust
           VIRTUAL_ENV="${{ github.workspace }}/bot/.venv" \
             "${{ github.workspace }}/bot/.venv/bin/maturin" develop --quiet
