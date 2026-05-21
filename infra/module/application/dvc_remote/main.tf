@@ -50,8 +50,21 @@ data "aws_iam_policy_document" "dvc_remote_rw" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
+      "s3:DeleteObject",
     ]
-    resources = ["${aws_s3_bucket.dvc_remote.arn}/remote/*"]
+    # `remote/*`     : DVC-managed manifests + hash dir (legacy + ongoing)
+    # `replays/*`    : Direct-uploaded gzipped replay payloads
+    #                  (kaggle/ + selfplay/ subprefixes, see paths.replay_uri).
+    # `runpod_*`     : RunPod execution artifacts and progress markers.
+    # `test/*`       : Test fixtures.
+    resources = [
+      "${aws_s3_bucket.dvc_remote.arn}/remote/*",
+      "${aws_s3_bucket.dvc_remote.arn}/replays/*",
+      "${aws_s3_bucket.dvc_remote.arn}/runpod_artifacts/*",
+      "${aws_s3_bucket.dvc_remote.arn}/runpod_bootstrap/*",
+      "${aws_s3_bucket.dvc_remote.arn}/runpod_progress/*",
+      "${aws_s3_bucket.dvc_remote.arn}/test/*",
+    ]
   }
 }
 
