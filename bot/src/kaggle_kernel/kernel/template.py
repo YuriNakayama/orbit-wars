@@ -218,7 +218,7 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    '    info = {\"version\": torch.__version__,\\n'\n"
         "    '            \"cuda\": torch.version.cuda,\\n'\n"
         "    '            \"available\": torch.cuda.is_available(),\\n'\n"
-        "    '            \"smoke_ok\": False, \"err\": None}\\n'\n"
+        '    \'            "smoke_ok": False, "err": None}\\n\'\n'
         "    '    if torch.cuda.is_available():\\n'\n"
         "    '        try:\\n'\n"
         "    '            (torch.zeros(2, 2).cuda() + 1).sum().item()\\n'\n"
@@ -228,7 +228,7 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    '    else:\\n'\n"
         "    '        info[\"smoke_ok\"] = True\\n'\n"
         "    'except Exception as e:\\n'\n"
-        "    '    info = {\"err\": repr(e), \"smoke_ok\": False}\\n'\n"
+        '    \'    info = {"err": repr(e), "smoke_ok": False}\\n\'\n'
         "    'sys.stdout.write(json.dumps(info))\\n'\n"
         ")\n"
         "\n"
@@ -268,7 +268,7 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "# the env that cell D's training subprocess will see).\n"
         "_IMPORT_PROBE = (\n"
         "    'import sys\\n'\n"
-        "    f'sys.path[:0] = {[REPO_ROOT + \"/bot/src\", REPO_ROOT + \"/bot\", REPO_ROOT]!r}\\n'\n"  # noqa: E501
+        '    f\'sys.path[:0] = {[REPO_ROOT + "/bot/src", REPO_ROOT + "/bot", REPO_ROOT]!r}\\n\'\n'  # noqa: E501
         "    'import pipeline, utils.repo_root\\n'\n"
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"

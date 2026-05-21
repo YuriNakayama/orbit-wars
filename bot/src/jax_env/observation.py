@@ -128,9 +128,7 @@ def state_to_obs(state: EnvState, player: int) -> dict[str, Any]:
                 continue
             path_xy = comet_paths[c, q, :path_len]
             group_pids.append(pid)
-            group_paths.append(
-                [(float(x), float(y)) for x, y in path_xy]
-            )
+            group_paths.append([(float(x), float(y)) for x, y in path_xy])
         if not group_pids:
             continue
         comets.append(

@@ -329,9 +329,7 @@ def _compute_planet_new_xy(state: EnvState) -> jax.Array:
     # the rotation argument; see vendor orbit_wars.py:508. state.step is
     # incremented *after* this function runs, so state.step here equals
     # obs0.step on the vendor side.
-    current_angle = init_angle + state.angular_velocity * state.step.astype(
-        jnp.float32
-    )
+    current_angle = init_angle + state.angular_velocity * state.step.astype(jnp.float32)
     rot_y = CENTER + r * jnp.cos(current_angle)
     rot_x = CENTER + r * jnp.sin(current_angle)
     rot_xy = jnp.stack([rot_y, rot_x], axis=-1)  # (P, 2)

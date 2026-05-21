@@ -139,9 +139,7 @@ def _bench_jax(calls: int, vmap: int, seed: int) -> BenchResult:
         call_state = jax.tree.map(
             lambda x: jnp.broadcast_to(x, (vmap,) + x.shape), state
         )
-        call_hist = jax.tree.map(
-            lambda x: jnp.broadcast_to(x, (vmap,) + x.shape), hist
-        )
+        call_hist = jax.tree.map(lambda x: jnp.broadcast_to(x, (vmap,) + x.shape), hist)
 
     # Warmup (compile + a few runs).
     for _ in range(3):
@@ -177,9 +175,7 @@ def _bench_full(calls: int, seed: int) -> list[BenchResult]:
         logger.info("jax cpu vmap=%d: %s", vmap, asdict(results[-1]))
 
     if not os.environ.get("RUNPOD_POD_ID"):
-        logger.info(
-            "not running on RunPod; skipping jax[cuda12] install + GPU bench"
-        )
+        logger.info("not running on RunPod; skipping jax[cuda12] install + GPU bench")
         return results
 
     try:

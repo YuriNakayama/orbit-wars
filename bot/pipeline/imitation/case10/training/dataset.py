@@ -164,9 +164,7 @@ def _read_column_streaming(
             if per_row > 0:
                 arr = arr.reshape(rg_rows, per_row)
         else:
-            arr = np.asarray(
-                col.to_numpy(zero_copy_only=False), dtype=dtype, copy=True
-            )
+            arr = np.asarray(col.to_numpy(zero_copy_only=False), dtype=dtype, copy=True)
         if keep_per_row is not None:
             # row indices for this row group in [cursor, cursor+rg_rows)
             lo, hi = cursor, cursor + rg_rows
@@ -258,9 +256,7 @@ class CaseTenDataset(Dataset[Sample]):
             self._planet_feat_dim = PLANET_FEAT_DIM
         # Store in fp16 (recast in __getitem__) to halve RAM. The training
         # loop already runs the forward in fp32 so accuracy is preserved.
-        planet_feats_f32 = planet_arr.reshape(
-            n, MAX_PLANETS, self._planet_feat_dim
-        )
+        planet_feats_f32 = planet_arr.reshape(n, MAX_PLANETS, self._planet_feat_dim)
         for col in mask_planet_cols or []:
             if 0 <= col < self._planet_feat_dim:
                 planet_feats_f32[:, :, col] = 0.0

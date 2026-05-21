@@ -62,8 +62,9 @@ jobs:
         working-directory: simulator/python
 
       - name: Build + install Rust extension into bot venv
+        # maturin は bot/pyproject.toml の `env` group (dev に include) で
+        # venv に install 済み。pip 経由 install は不要。
         run: |
-          uv run --directory bot python -m pip install --quiet 'maturin>=1.7,<2'
           cd simulator/rust
           VIRTUAL_ENV="${{ github.workspace }}/bot/.venv" \
             "${{ github.workspace }}/bot/.venv/bin/maturin" develop --release --quiet

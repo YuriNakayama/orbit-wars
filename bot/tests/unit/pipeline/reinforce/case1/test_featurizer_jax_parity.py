@@ -16,12 +16,15 @@ this is the BC-compatibility budget.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from jax_env.observation import state_to_obs
 from jax_env.reset import reset
+from jax_env.state import EnvState
 from jax_env.step import empty_actions, step
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
@@ -43,13 +46,49 @@ PARITY_TOL = 1e-4
 # W2c (orbit predictions). Remaining: 32-34 (delta_t1/t2/owner_changed
 # history), 35-40 (timeline).
 W1_PLANET_COLS = (
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 35, 36, 37, 38, 39, 40,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
 )
 W1_GLOBAL_COLS = tuple(i for i in range(GLOBAL_FEAT_DIM) if i not in (16, 17, 18, 19))
 
 
-def _build_fire_actions(state) -> jnp.ndarray:
+def _build_fire_actions(state: EnvState) -> jnp.ndarray:
     """Action tensor that fires 1 ship at angle 0 from each seat's home.
 
     Sentinel: from_planet_id == -1 means no-op. We populate row 0 of seats
@@ -63,11 +102,7 @@ def _build_fire_actions(state) -> jnp.ndarray:
     ships = np.asarray(state.planet_ships)
     for seat in (0, 1):
         for i in range(pid.shape[0]):
-            if (
-                bool(valid[i])
-                and int(owner[i]) == seat
-                and int(ships[i]) >= 2
-            ):
+            if bool(valid[i]) and int(owner[i]) == seat and int(ships[i]) >= 2:
                 actions[seat, 0, 0] = int(pid[i])
                 actions[seat, 0, 1] = 0
                 actions[seat, 0, 2] = 1
@@ -77,7 +112,7 @@ def _build_fire_actions(state) -> jnp.ndarray:
 
 def _featurize_both(
     seed: int, turns: int, with_fleets: bool = False
-) -> tuple[np.ndarray, np.ndarray, dict, dict]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any], dict[str, Any]]:
     """Run both featurizers from a fresh state with `turns` steps.
 
     When `with_fleets=True`, both seats fire 1 ship from their home each
@@ -98,13 +133,18 @@ def _featurize_both(
     torch_planet = torch_batch.planet_feats[0].cpu().numpy()
     jax_global = np.asarray(jax_batch.global_feats[0])
     torch_global = torch_batch.global_feats[0].cpu().numpy()
-    return jax_planet, torch_planet, {
-        "valid": np.asarray(jax_batch.planet_mask[0]),
-        "global": jax_global,
-    }, {
-        "valid": torch_batch.planet_mask[0].cpu().numpy(),
-        "global": torch_global,
-    }
+    return (
+        jax_planet,
+        torch_planet,
+        {
+            "valid": np.asarray(jax_batch.planet_mask[0]),
+            "global": jax_global,
+        },
+        {
+            "valid": torch_batch.planet_mask[0].cpu().numpy(),
+            "global": torch_global,
+        },
+    )
 
 
 @pytest.mark.parametrize("seed", [0, 7, 13, 42])
@@ -199,9 +239,7 @@ def test_planet_feats_w2c_comet_orbit(seed: int, turns: int) -> None:
 @pytest.mark.parametrize("turns", [10, 30])
 def test_planet_feats_fleet_columns(seed: int, turns: int) -> None:
     """Fleet-dependent columns must match within tolerance with active fleets."""
-    jax_planet, torch_planet, jx, _tx = _featurize_both(
-        seed, turns, with_fleets=True
-    )
+    jax_planet, torch_planet, jx, _tx = _featurize_both(seed, turns, with_fleets=True)
     valid = jx["valid"]
     for col in W2B_PLANET_COLS_FLEET_TOUCHED:
         for slot in range(MAX_PLANETS):
@@ -223,7 +261,9 @@ W2D_PLANET_COLS = (32, 33, 34)
 W2D_GLOBAL_COLS = (16, 17, 18, 19)
 
 
-def _seat0_action_rows(state) -> tuple[list[list[int | float]], np.ndarray, np.ndarray, np.ndarray]:
+def _seat0_action_rows(
+    state: EnvState,
+) -> tuple[list[list[int | float]], np.ndarray, np.ndarray, np.ndarray]:
     """Build seat 0's PyTorch-style action list and matching JAX arrays.
 
     Returns:
@@ -241,11 +281,7 @@ def _seat0_action_rows(state) -> tuple[list[list[int | float]], np.ndarray, np.n
     ships_buf = []
     valid_buf = []
     for i in range(pid.shape[0]):
-        if (
-            bool(valid[i])
-            and int(owner[i]) == 0
-            and int(ships[i]) >= 2
-        ):
+        if bool(valid[i]) and int(owner[i]) == 0 and int(ships[i]) >= 2:
             torch_actions.append([int(pid[i]), 0.0, 1])
             pid_buf.append(int(pid[i]))
             ships_buf.append(1)

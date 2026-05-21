@@ -49,9 +49,10 @@ RUN uv sync --locked --no-install-project --no-dev
 # が cargo cache hit になるようにする. 実 venv install は onstart で行うが、
 # 重い `cargo build --release` の中間成果物だけは image に残す.
 COPY simulator/rust /opt/orbit-wars/simulator/rust
+# uv が作る venv には pip が含まれないので、`uv pip install --python <venv>` で
+# maturin を venv に直接 install する (python -m pip では No module named pip)。
 RUN cd /opt/orbit-wars/simulator/rust && \
-    VIRTUAL_ENV=/opt/orbit-wars/bot/.venv \
-        /opt/orbit-wars/bot/.venv/bin/python -m pip install --quiet 'maturin>=1.7,<2' && \
+    uv pip install --quiet --python /opt/orbit-wars/bot/.venv/bin/python 'maturin>=1.7,<2' && \
     VIRTUAL_ENV=/opt/orbit-wars/bot/.venv \
         /opt/orbit-wars/bot/.venv/bin/maturin develop --release --quiet
 

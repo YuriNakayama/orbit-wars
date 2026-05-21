@@ -121,9 +121,7 @@ def build_snapshot(
 
     git_dir = dest_dir / ".git"
     git_dir.mkdir(exist_ok=True)
-    (git_dir / "HEAD").write_text(
-        "ref: refs/heads/kaggle-snapshot\n", encoding="utf-8"
-    )
+    (git_dir / "HEAD").write_text("ref: refs/heads/kaggle-snapshot\n", encoding="utf-8")
 
     if include_dotenv:
         env_src = repo_root / "bot" / ".env"

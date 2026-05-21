@@ -147,9 +147,7 @@ def _diagnostic_log() -> None:
 
     for k in ("RUNPOD_POD_ID", "CUDA_VISIBLE_DEVICES", "JAX_PLATFORMS"):
         print(f"env {k}={_os.environ.get(k, '<unset>')}", flush=True)
-    ldconfig_cmd = (
-        "ldconfig -p 2>/dev/null | grep libcuda.so | head -3"
-    )
+    ldconfig_cmd = "ldconfig -p 2>/dev/null | grep libcuda.so | head -3"
     print(
         f"ldconfig libcuda: {_os.popen(ldconfig_cmd).read().strip()}",
         flush=True,

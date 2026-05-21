@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +28,7 @@ if str(_VENDOR_ROOT) not in sys.path:
 from orbit_wars_vendor.orbit_wars import interpreter as vendor_interpreter  # noqa: E402
 
 from jax_env.reset import reset  # noqa: E402
+from jax_env.state import EnvState  # noqa: E402
 from jax_env.step import empty_actions, step  # noqa: E402
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -73,15 +75,17 @@ def bench_vendor(
     )
 
 
-def _run_jax_episode_jit(state_init, max_steps: int):
+def _run_jax_episode_jit(
+    state_init: EnvState, max_steps: int
+) -> Callable[[EnvState], tuple[EnvState, jax.Array]]:
     """Closure factory for a jit-compiled single-episode rollout."""
     actions = empty_actions()
 
-    def body(state, _):
+    def body(state: EnvState, _: jax.Array) -> tuple[EnvState, jax.Array]:
         new_state, _, term = step(state, actions)
         return new_state, term
 
-    def run(state):
+    def run(state: EnvState) -> tuple[EnvState, jax.Array]:
         final, terms = jax.lax.scan(body, state, jnp.arange(max_steps))
         return final, terms
 
@@ -98,9 +102,7 @@ def bench_jax(
 ) -> None:
     """Benchmark JAX env. Uses `lax.scan` for the inner loop."""
     if device != jax.default_backend():
-        typer.echo(
-            f"requested device={device} default={jax.default_backend()}"
-        )
+        typer.echo(f"requested device={device} default={jax.default_backend()}")
 
     # Build initial states (CPU). vmap across episodes if requested.
     states = [reset(seed + i, num_agents=2) for i in range(episodes)]
@@ -110,13 +112,13 @@ def bench_jax(
 
     # Warm-up (compile cost not counted).
     final, _ = runner(states[0])
-    jax.block_until_ready(final.step)
+    final.step.block_until_ready()
 
     if vmap <= 1:
         t0 = time.perf_counter()
         for s in states:
             final, _ = runner(s)
-            jax.block_until_ready(final.step)
+            final.step.block_until_ready()
         elapsed = time.perf_counter() - t0
         typer.echo(
             f"jax (vmap=1): episodes={episodes} wall={elapsed:.2f}s "
@@ -136,13 +138,13 @@ def bench_jax(
     # Warmup the vmap variant.
     batch0 = jax.tree.map(lambda *xs: jnp.stack(xs), *states[:vmap])
     final, _ = batched_runner(batch0)
-    jax.block_until_ready(final.step)
+    final.step.block_until_ready()
 
     t0 = time.perf_counter()
     for b in range(0, episodes, vmap):
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states[b : b + vmap])
         final, _ = batched_runner(batch)
-        jax.block_until_ready(final.step)
+        final.step.block_until_ready()
     elapsed = time.perf_counter() - t0
     typer.echo(
         f"jax (vmap={vmap}): episodes={episodes} wall={elapsed:.2f}s "

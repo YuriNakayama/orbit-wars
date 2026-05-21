@@ -175,9 +175,7 @@ def _save_best_pt(model: ActorCriticJax, path: Path) -> None:
     np.savez(str(path), **arrays)  # type: ignore[arg-type]
 
 
-def _build_optimizer_state(
-    model: ActorCriticJax, cfg: PPOConfigJax
-) -> tuple[Any, Any]:
+def _build_optimizer_state(model: ActorCriticJax, cfg: PPOConfigJax) -> tuple[Any, Any]:
     """Returns (optimizer, opt_state)."""
     optimizer = make_optimizer(cfg)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
@@ -200,15 +198,11 @@ def _build_model(cfg_dict: dict[str, Any]) -> ActorCriticJax:
     return ActorCriticJax.from_init(jax.random.PRNGKey(0), model_cfg)
 
 
-def _maybe_load_bc(
-    model: ActorCriticJax, cfg_dict: dict[str, Any]
-) -> ActorCriticJax:
+def _maybe_load_bc(model: ActorCriticJax, cfg_dict: dict[str, Any]) -> ActorCriticJax:
     bc_cfg = cfg_dict.get("bc_warmstart", {})
     if not bc_cfg.get("enabled", False):
         return model
-    weights_path = absolute_under_repo(
-        bc_cfg["weights_path"], start=Path(__file__)
-    )
+    weights_path = absolute_under_repo(bc_cfg["weights_path"], start=Path(__file__))
     if not Path(weights_path).exists():
         logger.warning("BC weights not found at %s — skipping", weights_path)
         return model

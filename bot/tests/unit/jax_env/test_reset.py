@@ -30,7 +30,8 @@ def _vendor_init(seed: int, num_agents: int) -> SimpleNamespace:
         done=False,
     )
     vendor_interpreter(state, env)
-    return state[0].observation
+    obs: SimpleNamespace = state[0].observation
+    return obs
 
 
 @pytest.mark.parametrize("seed", list(range(100)))

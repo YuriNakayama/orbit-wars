@@ -38,7 +38,9 @@ PARITY_SEED = 0
 PARITY_TURNS = 60
 
 
-def _fire_from_home_each_turn(obs: dict[str, Any], seat: int) -> list[list[int]]:
+def _fire_from_home_each_turn(
+    obs: dict[str, Any], seat: int
+) -> list[list[int | float]]:
     """Tiny rule: own first planet fires 1 ship at a 0.5-rad heading every turn.
 
     Used only to populate the fixture with non-empty fleet lists so the

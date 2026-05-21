@@ -8,12 +8,14 @@ covered by `test_parity.py`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from env.orbit_wars import make_orbit_wars_env
 from jax_env.observation import state_to_obs
 from jax_env.reset import reset
 
 
-def _vendor_obs(seed: int, turns: int = 0) -> dict:
+def _vendor_obs(seed: int, turns: int = 0) -> dict[str, Any]:
     env = make_orbit_wars_env(agents=2, seed=seed)
     for _ in range(turns):
         env.step([[], []])

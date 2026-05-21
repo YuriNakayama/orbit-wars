@@ -35,9 +35,7 @@ def load_index(mart_path: Path | str) -> pl.DataFrame:
     return pl.read_parquet(_expected_index_path(mart_path))
 
 
-def _top_submission_ids(
-    index_df: pl.DataFrame, top_submission_limit: int
-) -> set[str]:
+def _top_submission_ids(index_df: pl.DataFrame, top_submission_limit: int) -> set[str]:
     """Pick top-K submission ids by max(p0_rating_mu, p1_rating_mu) across the
     index. Mirrors ``preprocess._filter_index`` ranking logic.
     """
