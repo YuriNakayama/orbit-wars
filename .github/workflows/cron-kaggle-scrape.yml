@@ -1,8 +1,10 @@
 name: Cron Kaggle Scrape
 
 on:
-  schedule:
-    - cron: "0 18 * * *"  # JST 03:00 (UTC 18:00)
+  # 2026-05-22: 一時停止 (matches.dvc -> index.parquet.dvc + S3 直接 replays への
+  # 移行作業中)。migration 完了 + smoke test 完走後にこの schedule を復活させる。
+  # schedule:
+  #   - cron: "0 18 * * *"  # JST 03:00 (UTC 18:00)
   workflow_dispatch:
     inputs:
       top:
