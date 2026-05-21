@@ -18,6 +18,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 BASE_URL = "https://www.kaggle.com/api/i/competitions."
+# GetEpisodeReplay は 2026-05 ごろ Kaggle 側で別サービスに移行され、
+# 旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com 側) は
+# 404 を返すようになった。replay 取得だけ別 base URL + 別サービス名で叩く。
+REPLAY_BASE_URL = "https://api.kaggle.com/v1/competitions."
 LEADERBOARD_BOOTSTRAP_URL = "https://www.kaggle.com/competitions/orbit-wars/leaderboard"
 
 
@@ -29,8 +33,12 @@ class KaggleEpisodeError(RuntimeError):
 class ClientConfig:
     user_agent: str = "orbit-wars-log-collector/0.1"
     timeout_sec: float = 30.0
-    max_retries: int = 3
-    backoff_factor: float = 1.0
+    # 429 で Kaggle が返す `Retry-After: 60s` を待ち切れるように
+    # total を増やし backoff_max を 60s に上げる。
+    # backoff: 2,4,8,16,32,60,60,60s → 最悪 ~4分待ってから諦める。
+    max_retries: int = 8
+    backoff_factor: float = 2.0
+    backoff_max: float = 60.0
     kaggle_config_path: str = "~/.kaggle/kaggle.json"
     pool_connections: int = 32
     pool_maxsize: int = 32
@@ -74,8 +82,10 @@ def build_session(config: ClientConfig | None = None) -> requests.Session:
     retry = Retry(
         total=cfg.max_retries,
         backoff_factor=cfg.backoff_factor,
+        backoff_max=cfg.backoff_max,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("POST", "GET"),
+        respect_retry_after_header=True,
         raise_on_status=False,
     )
     session.mount(
@@ -102,10 +112,18 @@ def _post(
     body: dict[str, Any],
     *,
     timeout: float,
+    base_url: str = BASE_URL,
+    bearer_token: str | None = None,
 ) -> dict[str, Any]:
-    url = f"{BASE_URL}{path}"
+    url = f"{base_url}{path}"
+    # Bearer が指定された場合のみ Authorization ヘッダを上書き。session.auth (Basic)
+    # は使われないが、新エンドポイント側 anti-abuse 対策で公式 SDK と同じ Bearer
+    # 認証を使う狙い。それ以外 (GetTeam / ListEpisodes) は旧 path + Basic のまま。
+    extra_headers: dict[str, str] | None = None
+    if bearer_token:
+        extra_headers = {"Authorization": f"Bearer {bearer_token}"}
     try:
-        resp = session.post(url, json=body, timeout=timeout)
+        resp = session.post(url, json=body, timeout=timeout, headers=extra_headers)
         resp.raise_for_status()
         payload = resp.json()
     except requests.exceptions.RequestException as exc:
@@ -162,20 +180,57 @@ def list_episodes_by_ids(
     )
 
 
+def _build_minimal_session(cfg: ClientConfig) -> requests.Session:
+    """`get_episode_replay` 用の最小 session。
+
+    `api.kaggle.com/v1/CompetitionApiService/GetEpisodeReplay` は TCP keep-alive
+    の 2 件目以降を 401 で叩き落とす挙動を観測 (ローカル検証で再現)。
+    bootstrap (XSRF cookie 取得) は不要なため省略し、req 毎に新規 session を
+    作って毎回 fresh TCP connection で叩く。
+    """
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": cfg.user_agent,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+    )
+    session.auth = _load_credentials(cfg.kaggle_config_path)
+    return session
+
+
 def get_episode_replay(
     session: requests.Session,
     episode_id: int,
     *,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """Episode の完全な replay JSON (configuration / steps) を取得。"""
+    """Episode の完全な replay JSON (configuration / steps) を取得。
 
-    return _post(
-        session,
-        "EpisodeService/GetEpisodeReplay",
-        {"episodeId": episode_id},
-        timeout=timeout,
-    )
+    新エンドポイント (api.kaggle.com/v1/competitions.CompetitionApiService) を
+    使用する。旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com)
+    は 2026-05 ごろ廃止され 404 を返すため。
+
+    Kaggle が同一 TCP セッションの 2 件目以降の req を 401 で弾く挙動を観測した
+    ため、`session` 引数は無視し、req 毎に新規 minimal session を作る。
+    `KAGGLE_API_TOKEN` が設定されていれば Bearer 認証も付与 (公式 SDK と同じ)。
+    """
+
+    fresh_session = _build_minimal_session(ClientConfig())
+    bearer = os.environ.get("KAGGLE_API_TOKEN") or None
+    try:
+        return _post(
+            fresh_session,
+            "CompetitionApiService/GetEpisodeReplay",
+            {"episodeId": episode_id},
+            timeout=timeout,
+            base_url=REPLAY_BASE_URL,
+            bearer_token=bearer,
+        )
+    finally:
+        fresh_session.close()
 
 
 def extract_replay_json(response: dict[str, Any]) -> str:

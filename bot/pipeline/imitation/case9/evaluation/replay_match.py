@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import json
+from dataset.storage.loader import load_replay_payload_from_uri
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,8 @@ class ReplayConfig:
     out_dir: Path = DEFAULT_OUT_DIR
 
 
-def _summarize_replay(replay_path: Path) -> dict[str, Any]:
-    data = json.loads(replay_path.read_text())
+def _summarize_replay(replay_uri: str) -> dict[str, Any]:
+    data = load_replay_payload_from_uri(replay_uri)
     steps = data.get("steps") or []
     if not steps:
         return {"empty": True}
@@ -101,10 +102,13 @@ def run(cfg: ReplayConfig) -> dict[str, Any]:
         ],
     }
 
-    replay_path = Path(rec.replay_path) if rec.replay_path else None
-    if replay_path and replay_path.exists():
-        summary["replay_path"] = str(replay_path)
-        summary.update(_summarize_replay(replay_path))
+    replay_uri = rec.replay_uri
+    if replay_uri:
+        summary["replay_uri"] = replay_uri
+        try:
+            summary.update(_summarize_replay(replay_uri))
+        except (OSError, ValueError):
+            pass
 
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     out = cfg.out_dir / f"iter9_{cfg.label}_seed{cfg.seed}.json"

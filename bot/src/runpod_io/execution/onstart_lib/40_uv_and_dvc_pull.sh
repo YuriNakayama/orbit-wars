@@ -252,9 +252,9 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
 else
   # 診断: cwd と repo の dvc-tracked 状態を log に残す
   echo "[onstart] dvc pull diagnostic:"
-  ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
+  ls -la data/lake/kaggle_episodes/matches/index.parquet.dvc 2>&1 | head -3
   # set -e は外しているので明示的に exit code を確認
-  if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches.dvc; then
+  if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches/index.parquet.dvc; then
     echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
     echo "[onstart] dvc pull diagnostic listing:"
     ls -la data/lake/kaggle_episodes/ 2>&1 | head -5

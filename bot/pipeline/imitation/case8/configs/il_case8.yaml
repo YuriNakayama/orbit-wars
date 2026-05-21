@@ -3,7 +3,6 @@ seed: 0
 
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
-  replay_dir: data/lake/kaggle_episodes/matches/replays
   out_train: data/mart/imitation/case8/train.parquet
   out_val: data/mart/imitation/case8/val.parquet
   rating_quantile: 0.50

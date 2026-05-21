@@ -1,15 +1,17 @@
 name: Cron Kaggle Scrape
 
 on:
-  schedule:
-    - cron: "0 18 * * *"  # JST 03:00 (UTC 18:00)
+  # 2026-05-22: 一時停止 (matches.dvc -> index.parquet.dvc + S3 直接 replays への
+  # 移行作業中)。migration 完了 + smoke test 完走後にこの schedule を復活させる。
+  # schedule:
+  #   - cron: "0 18 * * *"  # JST 03:00 (UTC 18:00)
   workflow_dispatch:
     inputs:
       top:
         description: "Leaderboard top N teams"
         required: false
         type: number
-        default: 120
+        default: 80
       modes:
         description: "Comma-separated modes (1v1,ffa4)"
         required: false
@@ -36,11 +38,15 @@ jobs:
     env:
       KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      # 2026-05 以降 api.kaggle.com/v1/... 経由の Replay 取得に対して
+      # Basic auth だと数件で 401 (anti-abuse) が返るため、公式 SDK と同じ
+      # Bearer (KAGGLE_API_TOKEN) を渡せるようにする。secret 未設定なら空。
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.DVC_AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ap-northeast-1
       PYTHONUNBUFFERED: "1"
-      SCRAPE_TOP: ${{ inputs.top || 120 }}
+      SCRAPE_TOP: ${{ inputs.top || 80 }}
       SCRAPE_MODES: ${{ inputs.modes || '1v1,ffa4' }}
       SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 0 }}
 
@@ -62,26 +68,28 @@ jobs:
         run: |
           dev/scrape 2>&1 | tee /tmp/scrape.log
 
-      - name: DVC commit kaggle episodes
-        # cancel/timeout 時も periodic flush 済みの matches/ を救出するため
+      - name: DVC commit kaggle episodes index
+        # cancel/timeout 時も periodic flush 済みの index.parquet/ を救出するため
         # `if: always()` で実行する。`dvc commit -f` は対象 .dvc のみ書き換えるので
-        # 他 stage の重複定義に引きずられず安全。
+        # 他 stage の重複定義に引きずられず安全。replays は scraper が S3 に
+        # 直接 put 済みなので DVC commit 対象外。
         if: always()
         run: |
-          if [ ! -d data/lake/kaggle_episodes/matches ]; then
-            echo "matches dir missing; skip"
+          if [ ! -d data/lake/kaggle_episodes/matches/index.parquet ]; then
+            echo "index.parquet dir missing; skip"
             exit 0
           fi
-          uv run --project bot dvc commit -f data/lake/kaggle_episodes/matches.dvc
+          uv run --project bot dvc commit -f \
+            data/lake/kaggle_episodes/matches/index.parquet.dvc
 
       - name: Detect data changes
         id: diff
         if: always()
         run: |
-          # `dvc add` / `dvc commit` は matches.dvc を書き換えるが、`git add` 自動実行は
-          # `dvc add` のみ。cancel 時にも救出したいので `git diff` (unstaged 含む)
-          # と HEAD 比較の両方を確認する。
-          if git diff --quiet HEAD -- data/lake/kaggle_episodes/matches.dvc; then
+          # `dvc commit` は index.parquet.dvc を書き換える。`git diff` (unstaged 含む)
+          # と HEAD 比較で差分を確認する。
+          if git diff --quiet HEAD -- \
+            data/lake/kaggle_episodes/matches/index.parquet.dvc; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -96,13 +104,13 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          add-paths: data/lake/kaggle_episodes/matches.dvc
+          add-paths: data/lake/kaggle_episodes/matches/index.parquet.dvc
           commit-message: "chore(data): refresh kaggle episodes"
           branch: chore/kaggle-data-refresh
           delete-branch: true
           title: "chore(data): refresh kaggle episodes"
           body: |
-            Automated refresh of `data/lake/kaggle_episodes/matches.dvc`.
+            Automated refresh of `data/lake/kaggle_episodes/matches/index.parquet.dvc`.
 
             - Trigger: `${{ github.event_name }}`
             - Top: `${{ env.SCRAPE_TOP }}` / Modes: `${{ env.SCRAPE_MODES }}` / Limit per team: `${{ env.SCRAPE_LIMIT_PER_TEAM == '0' && 'all' || env.SCRAPE_LIMIT_PER_TEAM }}`

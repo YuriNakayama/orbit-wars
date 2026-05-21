@@ -1,7 +1,7 @@
 #!/bin/bash
 # Kaggle Orbit Wars リーダーボード上位チームのエピソードを取得し DVC にコミット。
 #
-# `data/lake/kaggle_episodes/matches.dvc` を最新の S3 cache と同期させ、Phase 1
+# `data/lake/kaggle_episodes/matches/index.parquet.dvc` を最新の S3 cache と同期させ、Phase 1
 # (plan) → Phase 2 (fetch) を実行する。途中で SIGTERM / SIGINT / 例外が発生
 # しても、scrape-fetch の finalize-cmd によりそれまでに永続化した分が
 # `dvc commit && dvc push` されるよう保証する。
@@ -18,7 +18,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TOP="${SCRAPE_TOP:-120}"
+TOP="${SCRAPE_TOP:-80}"
 MODES="${SCRAPE_MODES:-1v1,ffa4}"
 LIMIT_PER_TEAM="${SCRAPE_LIMIT_PER_TEAM:-0}"
 WORKERS="${SCRAPE_WORKERS:-6}"
@@ -47,7 +47,7 @@ UV_RUN="uv run --project bot"
 
 # 1. 既存データを S3 から pull (skipped_existing を構築)
 echo "== Step 1: dvc pull existing matches =="
-$UV_RUN dvc pull data/lake/kaggle_episodes/matches.dvc
+$UV_RUN dvc pull data/lake/kaggle_episodes/matches/index.parquet.dvc
 
 # 2. Phase 1: plan
 echo "== Step 2: plan phase =="
@@ -62,7 +62,7 @@ fi
 $UV_RUN python -m dataset kaggle scrape-plan "${plan_args[@]}"
 
 # 3. finalize/checkpoint command (DVC commit + push)
-DVC_CMD="$UV_RUN dvc commit -f --no-relink data/lake/kaggle_episodes/matches.dvc"
+DVC_CMD="$UV_RUN dvc commit -f --no-relink data/lake/kaggle_episodes/matches/index.parquet.dvc"
 if [ "${SKIP_PUSH}" -ne 1 ]; then
   DVC_CMD="${DVC_CMD} && $UV_RUN dvc push"
 fi

@@ -26,6 +26,7 @@ from dataset.schema import (
     AgentTiming,
     MatchRecord,
 )
+from dataset.storage.paths import replay_uri
 
 MODE_BY_AGENT_COUNT: dict[int, str] = {2: "1v1", 4: "ffa4"}
 FAILED_EPISODE_STATES: frozenset[str] = frozenset(
@@ -169,7 +170,7 @@ def build_match_record(
         agent_versions=tuple(str(a.get("submissionId") or "") for a in agents),
         agent_scores=tuple(_agent_score(a) for a in agents),
         agent_timings=timings,
-        replay_path=f"replays/kaggle_ep_{meta.episode_id}.json.gz",
+        replay_uri=replay_uri(f"kaggle_ep_{meta.episode_id}", SOURCE_KAGGLE),
         git_sha="",
         source=SOURCE_KAGGLE,
         episode_id=meta.episode_id,

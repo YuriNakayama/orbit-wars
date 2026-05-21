@@ -41,6 +41,7 @@ import orjson
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+import s3fs
 import typer
 import yaml
 
@@ -99,9 +100,12 @@ def _abspath(rel: str | Path) -> Path:
     return p if p.is_absolute() else (_repo_root() / p).resolve()
 
 
-def _load_replay_json(replay_path: Path) -> dict[str, Any]:
-    with gzip.open(replay_path, "rb") as f:
-        return orjson.loads(f.read())
+def _load_replay_json(replay_uri: str) -> dict[str, Any]:
+    """Read a gzip'd replay payload from S3 and decode with orjson."""
+    fs = s3fs.S3FileSystem()
+    with fs.open(replay_uri, "rb") as f:
+        compressed = f.read()
+    return orjson.loads(gzip.decompress(compressed))
 
 
 def _build_planet(row: list[Any]) -> Planet:
@@ -348,7 +352,7 @@ def _build_frame(
 
 
 def _iter_episode_frames(
-    replay_path: Path,
+    replay_uri: str,
     player_slots: list[int],
     *,
     loser_swap: bool = False,
@@ -364,7 +368,7 @@ def _iter_episode_frames(
     The returned ``frame_metas`` list is row-aligned with ``frame_rows`` and
     captures (player_slot, source_slot, is_loser_view, step_idx).
     """
-    data = _load_replay_json(replay_path)
+    data = _load_replay_json(replay_uri)
     steps = data.get("steps", [])
     out_rows: list[dict[str, Any]] = []
     out_metas: list[dict[str, Any]] = []
@@ -436,7 +440,6 @@ class _EpisodeResult:
 
 def _process_episode(
     rec: dict[str, Any],
-    base_dir: Path,
     val_split: float,
     num_player_slots: int,
     *,
@@ -461,9 +464,8 @@ def _process_episode(
             skip_reason="no_slots",
         )
     slots = list(range(num_player_slots))
-    rp = rec.get("replay_path") or ""
-    replay_path = (base_dir / rp).resolve() if rp else None
-    if replay_path is None or not replay_path.exists():
+    uri = rec.get("replay_uri") or ""
+    if not uri:
         return _EpisodeResult(
             bucket="",
             frames=[],
@@ -475,12 +477,24 @@ def _process_episode(
             skip_reason="no_replay",
         )
     swap_arg = loser_swap and winner_slot in (0, 1)
-    frames, metas, fired, outside = _iter_episode_frames(
-        replay_path,
-        slots,
-        loser_swap=swap_arg,
-        winner_slot=winner_slot if swap_arg else None,
-    )
+    try:
+        frames, metas, fired, outside = _iter_episode_frames(
+            uri,
+            slots,
+            loser_swap=swap_arg,
+            winner_slot=winner_slot if swap_arg else None,
+        )
+    except (OSError, ValueError):
+        return _EpisodeResult(
+            bucket="",
+            frames=[],
+            metas=[],
+            match_id=match_id,
+            winner_slot=winner_slot,
+            fired=0,
+            outside=0,
+            skip_reason="no_replay",
+        )
     if not frames:
         return _EpisodeResult(
             bucket="",
@@ -510,7 +524,6 @@ def _filter_index(
     modes: list[str],
     rating_quantile: float,
     *,
-    base_dir: Path,
     top_submission_limit: int | None = None,
     turn_min: int | None = None,
     turn_max: int | None = None,
@@ -560,23 +573,24 @@ def _filter_index(
     if turn_min is not None or turn_max is not None:
         kept_match_ids = [
             str(row["match_id"])
-            for row in df.select(["match_id", "replay_path"]).to_dicts()
-            if _turn_count_in_range(
-                base_dir / str(row["replay_path"]), turn_min, turn_max
-            )
+            for row in df.select(["match_id", "replay_uri"]).to_dicts()
+            if _turn_count_in_range(str(row["replay_uri"]), turn_min, turn_max)
         ]
         df = df.filter(pl.col("match_id").is_in(kept_match_ids))
     return df, cutoff
 
 
 def _turn_count_in_range(
-    replay_path: Path,
+    replay_uri: str,
     turn_min: int | None,
     turn_max: int | None,
 ) -> bool:
-    if not replay_path.exists():
+    if not replay_uri:
         return False
-    data = _load_replay_json(replay_path)
+    try:
+        data = _load_replay_json(replay_uri)
+    except (OSError, ValueError):
+        return False
     turns = len(data.get("steps", []))
     if turn_min is not None and turns < turn_min:
         return False
@@ -699,7 +713,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     out_train_index = out_train.with_name(out_train.stem + "_index.parquet")
     out_val_index = out_val.with_name(out_val.stem + "_index.parquet")
     index_path = _abspath(data_cfg["kaggle_index_root"])
-    base_dir = index_path.parent
 
     logger.info(
         "preprocess case10 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
@@ -728,7 +741,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         index,
         modes,
         rating_quantile,
-        base_dir=base_dir,
         top_submission_limit=(
             int(top_submission_limit) if top_submission_limit is not None else None
         ),
@@ -854,7 +866,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                 try:
                     result = _process_episode(
                         rec,
-                        base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
                         loser_swap=loser_swap,
@@ -876,7 +887,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                     fut = pool.submit(
                         _process_episode,
                         rec,
-                        base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
                         loser_swap=loser_swap,

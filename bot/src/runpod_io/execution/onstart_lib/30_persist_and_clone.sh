@@ -83,7 +83,8 @@ if [ -d /persist ]; then
   # data/ は git tree から復元される (各種 .dvc stub を含む)。
   # rm -rf data/lake / data/mart は git-tracked .dvc ファイルを破壊するので
   # ディレクトリ全体ではなく、dvc が pull で書き出す末端 dir のみ symlink にする。
-  # matches.dvc の path=matches なので data/lake/<src>/matches がそれ。
+  # 2026-05 以降 replays は S3 直接、DVC 管理は matches/index.parquet のみ。
+  # matches/ dir はローカル selfplay / preprocess の作業領域として symlink 永続化する。
   # data/lake/{kaggle_episodes,selfplay} と data/mart の親 dir のみ作る
   # (末端 dir は symlink にする想定なので mkdir しない)。
   mkdir -p data/lake/kaggle_episodes data/lake/selfplay data/mart

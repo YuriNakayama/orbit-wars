@@ -21,7 +21,7 @@ data/
 
 | Layer | Nature | Examples |
 |---|---|---|
-| `lake/` | Immutable, original. Re-acquisition required if lost | `lake/kaggle_episodes/matches/` (Kaggle scraper raw logs) / `lake/selfplay/matches/` (selfplay runner output) |
+| `lake/` | Immutable, original. Re-acquisition required if lost | `lake/{kaggle_episodes,selfplay}/matches/index.parquet/` (parquet index, DVC-managed). Replay payloads (`.json.gz`) live in S3 directly at `s3://orbit-wars-dvc-286854171013/replays/{kaggle,selfplay}/` and are referenced by `MatchRecord.replay_uri`. |
 | `processed/` | Intermediate data derived from lake | Intermediate parquet from preprocess stages |
 | `mart/` | Curated data read directly during training/evaluation | `mart/imitation/case1/{train,val}.parquet` / `mart/imitation/case1/eval_metrics.json` |
 | `output/` | Pipeline execution results, regenerable | `output/models/` (Vast.ai training models) / `output/submit/` (Kaggle submission tar.gz + history) / `output/matches/` (ablation aggregates) / `output/experiment/` (experiment JSON / plots) |

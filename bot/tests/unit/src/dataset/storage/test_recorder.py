@@ -7,9 +7,11 @@ import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from dataset.schema import AgentTiming, MatchRecord
 from dataset.storage import recorder
+from dataset.storage.paths import REPLAY_S3_BUCKET, REPLAY_S3_PREFIX
 
 
 def _record(
@@ -33,7 +35,7 @@ def _record(
         agent_versions=tuple("sha" for _ in range(num_agents)),
         agent_scores=tuple(10 + i for i in range(num_agents)),
         agent_timings=timings,
-        replay_path=f"replays/{match_id}.json.gz",
+        replay_uri=f"replays/{match_id}.json.gz",
         git_sha="sha",
     )
 
@@ -77,25 +79,68 @@ def test_write_records_suffixes_duplicate_run_id(tmp_path: Path) -> None:
     assert path_b.name == "run_run_x_1.parquet"
 
 
-def test_write_replay_roundtrips_gzip(tmp_path: Path) -> None:
+@pytest.fixture
+def fake_s3(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    """Replace `recorder._s3()` with an in-memory dict-backed S3 stub."""
+
+    store: dict[str, bytes] = {}
+
+    class _FakeFS:
+        def open(self, path: str, mode: str = "rb"):  # type: ignore[no-untyped-def]
+            key = path.removeprefix("s3://")
+            return _FakeFile(key, mode, store)
+
+    class _FakeFile:
+        def __init__(self, key: str, mode: str, backing: dict[str, bytes]) -> None:
+            self._key = key
+            self._mode = mode
+            self._backing = backing
+            self._buf = bytearray()
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            if "w" in self._mode:
+                self._backing[self._key] = bytes(self._buf)
+
+        def write(self, data: bytes) -> int:
+            self._buf.extend(data)
+            return len(data)
+
+        def read(self) -> bytes:
+            return self._backing[self._key]
+
+    monkeypatch.setattr(recorder, "_s3", lambda: _FakeFS())
+    return store
+
+
+def test_write_replay_uploads_to_s3(fake_s3: dict[str, bytes]) -> None:
     payload: dict[str, list[list[dict[str, dict[str, object]]]]] = {
         "steps": [[{"observation": {}}]]
     }
     raw = gzip.compress(json.dumps(payload).encode("utf-8"))
-    target = recorder.write_replay("m42", raw, tmp_path)
+    uri = recorder.write_replay("m42", raw, source="selfplay")
 
-    assert target == tmp_path / "matches/replays/m42.json.gz"
-    decoded = json.loads(gzip.decompress(target.read_bytes()).decode("utf-8"))
+    expected_uri = f"s3://{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/selfplay/m42.json.gz"
+    assert uri == expected_uri
+    stored = fake_s3[f"{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/selfplay/m42.json.gz"]
+    decoded = json.loads(gzip.decompress(stored).decode("utf-8"))
     assert decoded == payload
 
 
-def test_write_run_writes_parquet_and_replays(tmp_path: Path) -> None:
+def test_write_run_writes_parquet_and_uploads_replays(
+    tmp_path: Path, fake_s3: dict[str, bytes]
+) -> None:
     records = [_record("m1"), _record("m2")]
     raw = gzip.compress(b'{"steps": []}')
-    paths = recorder.write_run(records, {"m1": raw, "m2": raw}, tmp_path)
-    assert len(paths) == 3  # 1 parquet + 2 replays
-    assert (tmp_path / "matches/replays/m1.json.gz").exists()
-    assert (tmp_path / "matches/replays/m2.json.gz").exists()
+    index_paths, replay_uris = recorder.write_run(
+        records, {"m1": raw, "m2": raw}, tmp_path, source="selfplay"
+    )
+    assert len(index_paths) == 1
+    assert len(replay_uris) == 2
+    assert f"{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/selfplay/m1.json.gz" in fake_s3
+    assert f"{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/selfplay/m2.json.gz" in fake_s3
 
 
 def test_write_records_empty_returns_empty_list(tmp_path: Path) -> None:

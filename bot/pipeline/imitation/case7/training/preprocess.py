@@ -7,7 +7,6 @@ included.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import logging
@@ -26,6 +25,7 @@ import pyarrow.parquet as pq
 import typer
 import yaml
 
+from dataset.storage.loader import load_replay_payload_from_uri
 from pipeline.imitation.case7.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
@@ -204,11 +204,10 @@ def _build_frame(
 
 
 def _iter_episode_frames(
-    replay_path: Path,
+    replay_uri: str,
     player_slots: list[int],
 ) -> list[dict[str, Any]]:
-    with gzip.open(replay_path, "rt") as f:
-        data = json.load(f)
+    data = load_replay_payload_from_uri(replay_uri)
     steps = data.get("steps", [])
     # 2026-05 kaggle data refresh で planet 数 > MAX_PLANETS=36 の episodes が
     # 混入したことが判明 (case7 iter2 epoch=50 run でゲーム reshape error 発生)。
@@ -226,7 +225,7 @@ def _iter_episode_frames(
     if max_planets_seen > MAX_PLANETS:
         logger.warning(
             "episode %s skipped: planet count %d > MAX_PLANETS=%d",
-            replay_path.name,
+            replay_uri,
             max_planets_seen,
             MAX_PLANETS,
         )
@@ -429,7 +428,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
-    base_dir = index_path.parent
 
     index = pl.read_parquet(index_path)
     filtered, cutoff = _filter_index(index, modes, rating_quantile)
@@ -461,11 +459,10 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             slots = _player_slots(rec, _num_player_slots(rec, modes))
             if not slots:
                 continue
-            rp = rec.get("replay_path") or ""
-            replay_path = (base_dir / rp).resolve() if rp else None
-            if replay_path is None or not replay_path.exists():
+            uri = rec.get("replay_uri") or ""
+            if not uri:
                 continue
-            frames = _iter_episode_frames(replay_path, slots)
+            frames = _iter_episode_frames(uri, slots)
             if not frames:
                 continue
             bucket = _split_episode(str(rec["match_id"]), val_split)

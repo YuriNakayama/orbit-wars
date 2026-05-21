@@ -34,4 +34,4 @@ def test_run_one_match_with_replay_roundtrips(
     assert isinstance(replay_bytes, bytes)
     decoded = json.loads(gzip.decompress(replay_bytes).decode("utf-8"))
     assert "steps" in decoded
-    assert record["replay_path"].endswith("test_1v1_with_replay.json.gz")
+    assert record["replay_uri"].endswith("test_1v1_with_replay.json.gz")
