@@ -47,9 +47,15 @@ def render_notebook(ctx: RenderContext) -> dict[str, Any]:
         _code_cell(_cell_env_setup(ctx, run_dir, meta_json)),
         _code_cell(_cell_install_wheels(dataset_mount)),
         _code_cell(_cell_install_bot(dataset_mount)),
-        _code_cell(_cell_train(ctx, run_dir, dataset_mount)),
-        _code_cell(_cell_collect_artifacts(ctx, run_dir)),
     ]
+    if _needs_parquet_to_npy(ctx.case):
+        cells.append(_code_cell(_cell_parquet_to_npy(ctx)))
+    cells.extend(
+        [
+            _code_cell(_cell_train(ctx, run_dir, dataset_mount)),
+            _code_cell(_cell_collect_artifacts(ctx, run_dir)),
+        ]
+    )
 
     return {
         "cells": cells,
@@ -273,6 +279,70 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"
         "subprocess.run([sys.executable, '-c', _IMPORT_PROBE], check=False)\n"
+    )
+
+
+def _needs_parquet_to_npy(case: str) -> bool:
+    """case11 / case11_smoke は per-column npy (mmap) を要求するため、
+    notebook 上で parquet -> npy 変換を 1 度だけ実行する。
+    """
+    return case == "case11" or case.startswith("case11_")
+
+
+def _cell_parquet_to_npy(ctx: RenderContext) -> str:
+    """case11 mart parquet を per-column .npy に変換 (cell D の直前で実行)。
+
+    case_subdir() で smoke variant を case11 にマップしてから、その下の
+    train.parquet / val.parquet を /tmp/orbit-wars-repo 配下の同じ場所に
+    展開する。出力 npy は dataset.py の _npy_dir_for() が見るパス
+    (<stem>_npy/) に揃える。
+    """
+    case = ctx.case
+    if case.startswith("case11_"):
+        case_subdir = "case11"
+    else:
+        case_subdir = case
+    mart_dir = f"/tmp/orbit-wars-repo/data/mart/imitation/{case_subdir}"
+    return (
+        "# cell C2: parquet -> per-column .npy (case11 only)\n"
+        "import os, sys, subprocess\n"
+        f"mart_dir = {mart_dir!r}\n"
+        "train_pq = os.path.join(mart_dir, 'train.parquet')\n"
+        "val_pq = os.path.join(mart_dir, 'val.parquet')\n"
+        "for p in [train_pq, val_pq]:\n"
+        "    if not os.path.isfile(p):\n"
+        "        raise RuntimeError(f'mart parquet missing: {p}')\n"
+        "    sz_gb = os.path.getsize(p) / (1024**3)\n"
+        "    print(f'  {p}: {sz_gb:.2f} GB')\n"
+        "cmd = [\n"
+        "    sys.executable, '-m',\n"
+        "    'pipeline.imitation.case11.training.parquet_to_npy',\n"
+        "    '--train-parquet', train_pq,\n"
+        "    '--val-parquet', val_pq,\n"
+        "    '--out-root', mart_dir,\n"
+        "]\n"
+        "env = os.environ.copy()\n"
+        "env['PYTHONPATH'] = (\n"
+        "    '/tmp/orbit-wars-repo/bot/src:/tmp/orbit-wars-repo/bot:'\n"
+        "    '/tmp/orbit-wars-repo'\n"
+        ")\n"
+        "print('running:', ' '.join(cmd))\n"
+        "proc = subprocess.run(\n"
+        "    cmd, cwd='/tmp/orbit-wars-repo/bot', env=env, check=False,\n"
+        ")\n"
+        "if proc.returncode != 0:\n"
+        "    raise SystemExit(\n"
+        "        f'parquet_to_npy failed with exit_code={proc.returncode}'\n"
+        "    )\n"
+        "# Report npy directory sizes for sanity.\n"
+        "for split in ('train_npy', 'val_npy'):\n"
+        "    d = os.path.join(mart_dir, split)\n"
+        "    if os.path.isdir(d):\n"
+        "        total = sum(\n"
+        "            os.path.getsize(os.path.join(d, f))\n"
+        "            for f in os.listdir(d)\n"
+        "        )\n"
+        "        print(f'  {d}: {total / (1024**3):.2f} GB')\n"
     )
 
 
