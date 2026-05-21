@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
@@ -108,20 +109,20 @@ def build_snapshot(
         for src in include_mart_files:
             # worktree 配下では data/ が main repo data/ への symlink になる
             # ことがある。relative_to は symlink を follow しないため、
-            # absolute() (lexical) で worktree 相対 path を計算してから、
-            # コピー時のみ resolve() で実体ファイルを参照する。
-            src_abs = src.absolute()
-            if not src_abs.is_file():
-                raise FileNotFoundError(f"mart file not found: {src_abs}")
+            # `..` の lexical 正規化のみ行い、symlink は follow しないように
+            # normpath で重ねて解決する。コピー時のみ resolve() で実体を読む。
+            src_norm = Path(os.path.normpath(str(src.absolute())))
+            if not src_norm.is_file():
+                raise FileNotFoundError(f"mart file not found: {src_norm}")
             try:
-                rel_path = src_abs.relative_to(repo_root)
+                rel_path = src_norm.relative_to(repo_root)
             except ValueError as e:
                 raise ValueError(
-                    f"mart file {src_abs} is not under repo_root {repo_root}"
+                    f"mart file {src_norm} is not under repo_root {repo_root}"
                 ) from e
             target = dest_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_abs.resolve(), target)
+            shutil.copy2(src_norm.resolve(), target)
 
     git_dir = dest_dir / ".git"
     git_dir.mkdir(exist_ok=True)
