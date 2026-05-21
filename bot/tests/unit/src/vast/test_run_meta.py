@@ -174,3 +174,56 @@ def test_legacy_run_json_without_runpod_fields_loads(tmp_path: Path) -> None:
     assert restored.vast_instance_id == 99999
     assert restored.runpod_pod_id is None
     assert restored.runpod_offer_snapshot is None
+
+
+def test_kaggle_kernel_meta_default_none() -> None:
+    meta = RunMetadata()
+    assert meta.kaggle_kernel_meta is None
+
+
+def test_kaggle_kernel_meta_roundtrip(tmp_path: Path) -> None:
+    kk_meta = {
+        "kernel_slug": "yuri/orbit-wars-case1-20260520",
+        "kernel_version": 3,
+        "dataset_slug": "yuri/orbit-wars-bot",
+        "dataset_version": "v17",
+        "accelerator": "gpu-t4x2",
+        "runtime_seconds": 1820,
+        "internet_enabled": True,
+    }
+    meta = RunMetadata(
+        run_id="20260520-103000__main__abc1234__seed0",
+        git_sha="abc1234deadbeef",
+        seed=0,
+        kaggle_kernel_meta=kk_meta,
+    )
+    write_run_json(tmp_path, meta)
+    restored = read_run_json(tmp_path)
+    assert restored.kaggle_kernel_meta == kk_meta
+    assert restored.vast_instance_id is None
+    assert restored.runpod_pod_id is None
+
+
+def test_legacy_run_json_without_kaggle_kernel_meta_loads(tmp_path: Path) -> None:
+    """RunPod 既存 run.json (kaggle_kernel_meta 欠如) を読めて default で埋まること。"""
+    legacy = {
+        "schema_version": 1,
+        "run_id": "legacy_runpod",
+        "git_sha": "abc1234deadbe",
+        "git_branch": "main",
+        "params_hash": "0123456789ab",
+        "seed": 0,
+        "runpod_pod_id": "pod_abc",
+        "runpod_offer_snapshot": {"dph_total": 0.5, "gpu_type_id": "X"},
+        "command": "x",
+        "weights_path": "w",
+        "train_metrics": {},
+        "local_eval_results": None,
+        "status": "pushed",
+        "created_at": "2026-05-01T00:00:00Z",
+        "updated_at": "2026-05-01T00:10:00Z",
+    }
+    (tmp_path / "run.json").write_text(json.dumps(legacy), encoding="utf-8")
+    restored = read_run_json(tmp_path)
+    assert restored.runpod_pod_id == "pod_abc"
+    assert restored.kaggle_kernel_meta is None
