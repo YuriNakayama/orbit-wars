@@ -107,22 +107,38 @@ def build_snapshot(
 
     if include_mart_files:
         for src in include_mart_files:
-            # worktree 配下では data/ が main repo data/ への symlink になる
-            # ことがある。relative_to は symlink を follow しないため、
-            # `..` の lexical 正規化のみ行い、symlink は follow しないように
-            # normpath で重ねて解決する。コピー時のみ resolve() で実体を読む。
+            # `..` を lexical 正規化しつつ symlink は follow しない正規化版を
+            # 作る。
             src_norm = Path(os.path.normpath(str(src.absolute())))
-            if not src_norm.is_file():
-                raise FileNotFoundError(f"mart file not found: {src_norm}")
+            # 実体ファイルは src.resolve() で symlink を辿った先に存在する
+            # ことがある (worktree の data/ -> main の data/ symlink 配下)。
+            # src_norm でも src.resolve() でも一方が file であれば OK。
+            src_real = src.resolve()
+            if src_norm.is_file():
+                src_for_copy = src_norm
+            elif src_real.is_file():
+                src_for_copy = src_real
+            else:
+                raise FileNotFoundError(
+                    f"mart file not found at {src_norm} (real: {src_real})"
+                )
+            # repo_root 相対 path は src_norm (lexical) から計算する。
+            # 失敗時は data/ 部分以降を抜き出して dest に配置する。
             try:
                 rel_path = src_norm.relative_to(repo_root)
-            except ValueError as e:
-                raise ValueError(
-                    f"mart file {src_norm} is not under repo_root {repo_root}"
-                ) from e
+            except ValueError:
+                # data/mart/.../<name>.parquet の "data/" 以降を rel_path
+                # として採用 (Kaggle 側 cwd の data/ に置けば dataset.py が
+                # 拾える)。
+                parts = src_norm.parts
+                if "data" in parts:
+                    idx = parts.index("data")
+                    rel_path = Path(*parts[idx:])
+                else:
+                    raise
             target = dest_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_norm.resolve(), target)
+            shutil.copy2(src_for_copy, target)
 
     git_dir = dest_dir / ".git"
     git_dir.mkdir(exist_ok=True)
