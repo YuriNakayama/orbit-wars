@@ -180,6 +180,27 @@ def list_episodes_by_ids(
     )
 
 
+def _build_minimal_session(cfg: ClientConfig) -> requests.Session:
+    """`get_episode_replay` 用の最小 session。
+
+    `api.kaggle.com/v1/CompetitionApiService/GetEpisodeReplay` は TCP keep-alive
+    の 2 件目以降を 401 で叩き落とす挙動を観測 (ローカル検証で再現)。
+    bootstrap (XSRF cookie 取得) は不要なため省略し、req 毎に新規 session を
+    作って毎回 fresh TCP connection で叩く。
+    """
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": cfg.user_agent,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+    )
+    session.auth = _load_credentials(cfg.kaggle_config_path)
+    return session
+
+
 def get_episode_replay(
     session: requests.Session,
     episode_id: int,
@@ -192,20 +213,24 @@ def get_episode_replay(
     使用する。旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com)
     は 2026-05 ごろ廃止され 404 を返すため。
 
-    `KAGGLE_API_TOKEN` 環境変数が設定されていれば Bearer 認証で叩く (公式 SDK
-    と同じ経路)。GitHub Actions の共有 IP からの Basic auth + 短時間連続 req は
-    anti-abuse で 401 になるため、Bearer に切り替えると緩和される想定。
+    Kaggle が同一 TCP セッションの 2 件目以降の req を 401 で弾く挙動を観測した
+    ため、`session` 引数は無視し、req 毎に新規 minimal session を作る。
+    `KAGGLE_API_TOKEN` が設定されていれば Bearer 認証も付与 (公式 SDK と同じ)。
     """
 
+    fresh_session = _build_minimal_session(ClientConfig())
     bearer = os.environ.get("KAGGLE_API_TOKEN") or None
-    return _post(
-        session,
-        "CompetitionApiService/GetEpisodeReplay",
-        {"episodeId": episode_id},
-        timeout=timeout,
-        base_url=REPLAY_BASE_URL,
-        bearer_token=bearer,
-    )
+    try:
+        return _post(
+            fresh_session,
+            "CompetitionApiService/GetEpisodeReplay",
+            {"episodeId": episode_id},
+            timeout=timeout,
+            base_url=REPLAY_BASE_URL,
+            bearer_token=bearer,
+        )
+    finally:
+        fresh_session.close()
 
 
 def extract_replay_json(response: dict[str, Any]) -> str:

@@ -94,18 +94,23 @@ def test_list_episodes_by_ids_posts_expected_body() -> None:
     assert kwargs["json"] == {"ids": [1, 2, 3]}
 
 
-def test_get_episode_replay_posts_expected_body() -> None:
-    session = MagicMock(spec=requests.Session)
-    session.post.return_value = _FakeResponse({"steps": [], "configuration": {}})
+def test_get_episode_replay_posts_expected_body(monkeypatch) -> None:
+    # `get_episode_replay` は anti-abuse 回避のため内部で fresh session を作る。
+    # _build_minimal_session を mock に差し替えて、その session.post を観測する。
+    fresh = MagicMock(spec=requests.Session)
+    fresh.post.return_value = _FakeResponse({"steps": [], "configuration": {}})
+    monkeypatch.setattr(client, "_build_minimal_session", lambda cfg: fresh)
 
-    out = client.get_episode_replay(session, 42)
+    out = client.get_episode_replay(MagicMock(spec=requests.Session), 42)
 
     assert out["steps"] == []
-    args, kwargs = session.post.call_args
-    # 2026-05 以降 replay は別エンドポイント (api.kaggle.com/v1/competitions.CompetitionApiService)
+    args, kwargs = fresh.post.call_args
+    # 2026-05 以降 replay は別エンドポイント
+    # (api.kaggle.com/v1/competitions.CompetitionApiService)
     assert args[0].startswith(client.REPLAY_BASE_URL)
     assert args[0].endswith("CompetitionApiService/GetEpisodeReplay")
     assert kwargs["json"] == {"episodeId": 42}
+    fresh.close.assert_called_once()
 
 
 def test_post_wraps_request_exception() -> None:
@@ -116,12 +121,13 @@ def test_post_wraps_request_exception() -> None:
         client.list_episodes_for_submission(session, 1)
 
 
-def test_post_wraps_http_error() -> None:
-    session = MagicMock(spec=requests.Session)
-    session.post.return_value = _FakeResponse({}, status_code=503)
+def test_post_wraps_http_error(monkeypatch) -> None:
+    fresh = MagicMock(spec=requests.Session)
+    fresh.post.return_value = _FakeResponse({}, status_code=503)
+    monkeypatch.setattr(client, "_build_minimal_session", lambda cfg: fresh)
 
     with pytest.raises(client.KaggleEpisodeError, match="failed"):
-        client.get_episode_replay(session, 1)
+        client.get_episode_replay(MagicMock(spec=requests.Session), 1)
 
 
 def test_post_wraps_non_json_response() -> None:
