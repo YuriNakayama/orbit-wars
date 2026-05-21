@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case1 JAX acceleration
 
 > 作成日: 2026-05-18
-> 最終更新: 2026-05-21
+> 最終更新: 2026-05-21 (W6-a GPU 実測完了、PR 作成)
 > 状態: completed
 > 最大 iteration: 1 (大型ジャンル — featurizer/rollout/PPO の段階的 JAX 化)
 > 主要メトリクス: iter1 wall-clock (16 ep × 500 step) と PyTorch baseline (270s) 比の speedup
@@ -49,7 +49,7 @@
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path | analysis path |
 |---|---|---|---|---|---|---|---|---|
-| 1 | 2026-05-18 | H1-H4 | (no separate plan) | local M-series + A100 80GB | iter1 = 16.7s / 27.6s | adopted | iter1_result.md | (analysis 未実施) |
+| 1 | 2026-05-18 | H1-H4 | (no separate plan) | local M-series + A100 80GB + RTX 4090 (interactive) | iter1 = 16.7s (CPU) / 15s (GPU+W6a) = 17-18× | adopted | iter1_result.md | (analysis 未実施) |
 
 ## 参考 (References)
 
