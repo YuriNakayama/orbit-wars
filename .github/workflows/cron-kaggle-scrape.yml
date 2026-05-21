@@ -9,7 +9,7 @@ on:
         description: "Leaderboard top N teams"
         required: false
         type: number
-        default: 120
+        default: 80
       modes:
         description: "Comma-separated modes (1v1,ffa4)"
         required: false
@@ -44,7 +44,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ap-northeast-1
       PYTHONUNBUFFERED: "1"
-      SCRAPE_TOP: ${{ inputs.top || 120 }}
+      SCRAPE_TOP: ${{ inputs.top || 80 }}
       SCRAPE_MODES: ${{ inputs.modes || '1v1,ffa4' }}
       SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 0 }}
 

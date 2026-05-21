@@ -18,7 +18,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TOP="${SCRAPE_TOP:-120}"
+TOP="${SCRAPE_TOP:-80}"
 MODES="${SCRAPE_MODES:-1v1,ffa4}"
 LIMIT_PER_TEAM="${SCRAPE_LIMIT_PER_TEAM:-0}"
 WORKERS="${SCRAPE_WORKERS:-6}"
