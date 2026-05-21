@@ -17,13 +17,17 @@ dependencies = [
     "pyyaml>=6.0.2",
     "rich>=13.9.4",
     "typer>=0.15.2",
-    "torch>=2.3.0,<2.7",
+    "torch>=2.3.0,<3",
     "dvc[s3]>=3.55",
     "vastai>=0.3.0",
     "orbit-wars-vendor",
     "runpod>=1.7.0",
     "psutil>=6.0.0",
     "scikit-learn>=1.8.0",
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+    "equinox>=0.11.0",
+    "optax>=0.2.0",
 ]
 
 [tool.uv.sources]
@@ -52,7 +56,32 @@ lint = [
     "types-pyyaml>=6.0.12.20250915",
     "types-requests>=2.32.0.20250913",
 ]
-env = []
+env = [
+    # reinforce family は on-policy で env.step() を回すため Rust 製シミュレータ
+    # (PyO3 + maturin で build した orbit_wars_rust) を import する。RunPod
+    # onstart は uv sync --group env で maturin を取得し
+    # `simulator/rust && maturin develop --release` を実行する。
+    # imitation case は使わないので install_dependency_groups=[] で必要時のみ.
+    "maturin>=1.7,<2",
+]
+cuda = [
+    # GPU pod 用 CUDA12 plugin. `jax[cuda12]` の wheel は Linux x86_64 /
+    # aarch64 のみで macOS 用は存在しないので `sys_platform == 'linux'`
+    # marker を必須にする。
+    # RunPod の bench / GPU training onstart で `uv sync --group cuda
+    # --no-dev` を追加実行する想定。実行時 `uv pip install --reinstall
+    # jax[cuda12]` は jax 既ロード後の共有ライブラリハンドル invalid
+    # 化 (SIGABRT) を踏むので避ける。
+    "jax-cuda12-plugin; sys_platform == 'linux'",
+    "jax-cuda12-pjrt; sys_platform == 'linux'",
+    # CuDNN 9.8 — jax-cuda12-plugin 0.10 は compile-time CuDNN 9.8 を期待
+    # するが、RunPod base image は CuDNN 9.1。そのまま実行すると
+    # `Loaded runtime CuDNN library: 9.1.0 but source was compiled with:
+    # 9.8.0` → `INTERNAL: RET_CHECK failure dnn_support != nullptr` で
+    # GPU 演算が abort する (pod 20260520-115638 で観測)。
+    # nvidia-cudnn-cu12 wheel を pin して plugin に合わせる。
+    "nvidia-cudnn-cu12>=9.8,<9.9; sys_platform == 'linux'",
+]
 
 
 [tool.ruff]
@@ -133,6 +162,9 @@ max-complexity = 5
 "pipeline/imitation/case10/training/train.py" = ["B008"]
 "pipeline/imitation/case10/policy/timeline.py" = ["E501"]
 "pipeline/imitation/case10/policy/featurizer.py" = ["E501"]
+"pipeline/reinforce/case1/policy/timeline.py" = ["E501"]
+"pipeline/reinforce/case1/policy/featurizer.py" = ["E501"]
+"pipeline/reinforce/case1/training/ppo.py" = ["E501"]
 # Test fixtures often need long inline literals; readability wins over 88-char limit.
 "tests/unit/pipeline/**/test_*.py" = ["E501"]
 "tests/integration/pipeline/**/test_*.py" = ["E501"]
@@ -264,6 +296,28 @@ module = [
     "pipeline.imitation.case9.evaluation.replay_match",
     "pipeline.imitation.case10.training.preprocess",
     "pipeline.imitation.case10.training.train",
+    "pipeline.reinforce.case0.policy.sampling",
+    "pipeline.reinforce.case0.training.train",
+    "pipeline.reinforce.case0.training.ppo",
+    "pipeline.reinforce.case0.training.env",
+    "pipeline.reinforce.case0.evaluation.eval_vs_baseline",
+    "pipeline.reinforce.case1.policy.sampling",
+    "pipeline.reinforce.case1.policy.decoder",
+    "pipeline.reinforce.case1.policy.featurizer",
+    "pipeline.reinforce.case1.policy.candidates",
+    "pipeline.reinforce.case1.policy.templates",
+    "pipeline.reinforce.case1.policy.timeline",
+    "pipeline.reinforce.case1.policy.safety",
+    "pipeline.reinforce.case1.policy.heads.backbone",
+    "pipeline.reinforce.case1.policy.heads.per_planet",
+    "pipeline.reinforce.case1.policy.heads.value",
+    "pipeline.reinforce.case1.policy.model",
+    "pipeline.reinforce.case1.policy.agent",
+    "pipeline.reinforce.case1.training.env",
+    "pipeline.reinforce.case1.training.rollout",
+    "pipeline.reinforce.case1.training.ppo",
+    "pipeline.reinforce.case1.training.train",
+    "pipeline.reinforce.case1.evaluation.eval_vs_baseline",
 ]
 ignore_errors = true
 

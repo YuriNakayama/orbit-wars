@@ -97,7 +97,117 @@ PY_BIN="$(pwd)/bot/.venv/bin/python"
 DVC_BIN="${PY_BIN} -m dvc"
 echo "[onstart] iter12 fix: pinned PY_BIN=${PY_BIN} DVC_BIN=${DVC_BIN}"
 
-echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE>"
+# reinforce family は on-policy で env.step() を回す唯一の case 群なので、
+# Rust 製シミュレータ `orbit_wars_rust` (PyO3 + maturin) の Linux .so を
+# 学習開始前に build する。imitation case は parquet-based BC で env を
+# 一切使わないため build 不要だった (rust .so は worktree の darwin 版が
+# git untracked で残っているのみ)。
+# Pre-check the venv before any secondary `uv sync --group <X>` call.
+# The original detection at line ~47 only runs before the FIRST sync;
+# subsequent group syncs can hit a poisoned persisted venv from a
+# previous failed bench run and die with
+# "Project virtual environment directory bot/.venv cannot be used
+#  because it is not a valid Python environment (no Python executable
+#  was found)" (observed on RunPod EU-RO-1 pods 20260520-102638 and
+# 20260520-103216 back-to-back). The reset logic is identical to the
+# first-sync block but lives in a function so we can call it before
+# both `--group env` and `--group cuda`.
+check_and_reset_broken_venv() {
+  if [ ! -x bot/.venv/bin/python ]; then
+    echo "[onstart] secondary uv sync: detected broken venv (bin/python missing); resetting"
+    rm -rf bot/.venv 2>/dev/null || true
+    if [ -d /persist/uv-venv-bot ]; then
+      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
+        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
+        || true
+      ln -sfn /persist/uv-venv-bot bot/.venv
+    fi
+    # Re-run the base sync so the env is rebuilt before we add a group.
+    echo "[onstart] secondary uv sync: rebuilding base env"
+    if ! ( cd bot && uv sync --frozen --no-dev ); then
+      echo "[onstart] secondary uv sync: base rebuild FAILED" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+if [ "<CASE_FAMILY>" = "reinforce" ]; then
+  echo "[onstart] step=build_rust_sim (reinforce family のみ)"
+  # reinforce は on-policy で env.step() を回すため Rust 製シミュレータの
+  # Linux .so が必要。bot の dependency-groups.env に maturin を入れて
+  # `uv sync --group env` で入れる方が pip 経路を回避できて確実。
+  # imitation case は parquet-based BC で env を使わないため env group を
+  # 入れずに済む (default sync は --no-dev で env group も skip)。
+  if ! check_and_reset_broken_venv; then
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  echo "[onstart] build_rust_sim: installing maturin via uv sync --group env"
+  # Capture full output to /tmp/uv_env_sync.log so we have at least a
+  # post-mortem hint when the pod gets cleaned up (onstart.log は S3 へ
+  # 上がる前に terminate されることがあり診断できないため)。
+  UV_ENV_LOG="/tmp/uv_env_sync.log"
+  if ! ( cd bot && uv sync --no-dev --group env --frozen ) >"${UV_ENV_LOG}" 2>&1; then
+    echo "[onstart] build_rust_sim: maturin install FAILED — uv sync log tail:" >&2
+    tail -30 "${UV_ENV_LOG}" >&2 || true
+    # S3 へ即 upload。pod が消える前に保全。
+    if command -v aws >/dev/null 2>&1; then
+      aws s3 cp "${UV_ENV_LOG}" \
+        "s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>/uv_env_sync.log" \
+        2>&1 | head -3 || true
+    fi
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  echo "[onstart] uv sync --group env ok; checking maturin binary"
+  if [ ! -x bot/.venv/bin/maturin ]; then
+    echo "[onstart] build_rust_sim: bot/.venv/bin/maturin not present after sync" >&2
+    ls -la bot/.venv/bin/ 2>&1 | grep -iE "maturin|^total" >&2 || true
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  echo "[onstart] maturin $(bot/.venv/bin/maturin --version 2>&1 | head -1)"
+  # Rust toolchain (cargo) の存在確認。RunPod base image に含まれていない場合
+  # rustup で導入する。memory `project_runpod_5_traps` の trap には未記録。
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "[onstart] cargo not found — installing rust toolchain via rustup"
+    if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal 2>&1 | tail -10; then
+      echo "[onstart] rustup install FAILED" >&2
+      mark "45_build_rust_sim_failed"
+      exit 1
+    fi
+    # rustup の env script を source して PATH を反映。
+    if [ -f "$HOME/.cargo/env" ]; then
+      # shellcheck disable=SC1091
+      source "$HOME/.cargo/env"
+    fi
+  fi
+  echo "[onstart] cargo $(cargo --version 2>&1 | head -1)"
+  RUST_BUILD_START=$(date +%s)
+  # maturin develop は VIRTUAL_ENV を読んで install 先を決める。
+  # bot/.venv は cwd/bot/.venv にあるので絶対 path で明示 export する。
+  BOT_VENV_ABS="$(pwd)/bot/.venv"
+  if [ ! -d "${BOT_VENV_ABS}" ]; then
+    echo "[onstart] build_rust_sim: bot/.venv missing at ${BOT_VENV_ABS}" >&2
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  if ! ( cd simulator/rust && VIRTUAL_ENV="${BOT_VENV_ABS}" "${BOT_VENV_ABS}/bin/maturin" develop --release ) 2>&1 | tail -30; then
+    echo "[onstart] build_rust_sim FAILED — orbit_wars_rust の build に失敗" >&2
+    mark "45_build_rust_sim_failed"
+    exit 1
+  fi
+  RUST_BUILD_ELAPSED=$(( $(date +%s) - RUST_BUILD_START ))
+  echo "[onstart] build_rust_sim ok (elapsed=${RUST_BUILD_ELAPSED}s)"
+  if ! "${PY_BIN}" -c "import sys; sys.path.insert(0, 'simulator/rust/python'); import orbit_wars_rust; print('orbit_wars_rust import OK')" 2>&1; then
+    echo "[onstart] build_rust_sim verify FAILED" >&2
+    mark "45_build_rust_sim_verify_failed"
+    exit 1
+  fi
+fi
+
+echo "[onstart] step=dvc_pull cwd=$(pwd) case=<CASE> family=<CASE_FAMILY>"
 # case0 は RunPod 基盤の E2E smoke 専用なので、dvc pull 経路の正常性検証だけ
 # 行い、他 case の outs を巻き込まない (memory: runpod_5_traps)。
 # data/lake/case0_smoke は数十バイトの sentinel ファイル 1 つだけ。
@@ -113,6 +223,32 @@ if [ "<CASE>" = "case0" ]; then
   fi
   echo "[onstart] case0_smoke contents:"
   ls -la data/lake/case0_smoke/ 2>&1 | head -5
+elif [ "<CASE_FAMILY>" = "reinforce" ]; then
+  # reinforce family は on-policy rollout で学習データを生成するため、
+  # kaggle_episodes mart の pull は不要。BC warm-start に使う重み (case9
+  # per_planet best.pt) だけを targeted pull する。BC 重みのパスは config
+  # YAML 内に hardcode されているので、配布されている .dvc を一括 pull する
+  # 方式 (recursive) で `data/output/models/imitation/case9_per_planet/` 配下
+  # の全 runs を取得する。
+  BC_RUNS_PARENT="data/output/models/imitation/case9_per_planet/runs"
+  echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
+  ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
+  # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
+  # train.yaml は単一 run の best.pt を参照するので、find で全 .dvc を渡す。
+  mapfile -t BC_DVCS < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
+  if [ ${#BC_DVCS[@]} -eq 0 ]; then
+    echo "[onstart] reinforce BC pull: no .dvc files under ${BC_RUNS_PARENT}" >&2
+    mark "45_dvc_pull_reinforce_bc_missing"
+    exit 1
+  fi
+  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} .dvc files to fetch"
+  if ! ${DVC_BIN} pull -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
+    echo "[onstart] dvc pull (reinforce BC) FAILED" >&2
+    mark "45_dvc_pull_reinforce_bc_failed"
+    exit 1
+  fi
+  echo "[onstart] reinforce BC pull complete; verifying best.pt..."
+  find "${BC_RUNS_PARENT}" -name "best.pt" -maxdepth 3 2>&1 | head -5
 else
   # 診断: cwd と repo の dvc-tracked 状態を log に残す
   echo "[onstart] dvc pull diagnostic:"
@@ -198,7 +334,7 @@ echo "[onstart] step=mkdir_run"
 # 絶対 path で固定: train.py は ORBIT_WARS_RUN_DIR を Path.resolve() するので
 # 相対 path だと cwd (uv run --directory bot) 基準になり bot/data/... に
 # ずれる。後段の dvc add / S3 upload とも整合させるため絶対 path で持つ。
-RUN_DIR_ABS="$(pwd)/data/output/models/imitation/<CASE>/runs/<RUN_ID>"
+RUN_DIR_ABS="$(pwd)/data/output/models/<CASE_FAMILY>/<CASE_SUBDIR>/runs/<RUN_ID>"
 mkdir -p "${RUN_DIR_ABS}"
 
 # iter4 fix: preprocess の前に mart symlink を物理 dir に materialize する。
@@ -207,14 +343,51 @@ mkdir -p "${RUN_DIR_ABS}"
 # 事象を A6000 host で観測 (case8 iter4 1st run の `65_train_failed_exit_1`)。
 # 順序を「materialize → preprocess」に変えれば preprocess は materialize 済みの
 # 実 dir に直接書き込むため symlink chain を経由せず安全。
-MART_PARENT_PRE="data/mart/imitation"
-if [ -L "${MART_PARENT_PRE}" ]; then
-  echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
-  MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
-  rm "${MART_PARENT_PRE}"
-  mkdir -p "${MART_PARENT_PRE}"
-  if [ -d "${MART_TARGET_PRE}" ]; then
-    cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+# reinforce family は on-policy で mart を使わないので skip。
+if [ "<CASE_FAMILY>" != "reinforce" ]; then
+  MART_PARENT_PRE="data/mart/imitation"
+  if [ -L "${MART_PARENT_PRE}" ]; then
+    echo "[onstart] (pre-preprocess) mart parent ${MART_PARENT_PRE} is symlink — materialize"
+    MART_TARGET_PRE="$(readlink -f "${MART_PARENT_PRE}")"
+    rm "${MART_PARENT_PRE}"
+    mkdir -p "${MART_PARENT_PRE}"
+    if [ -d "${MART_TARGET_PRE}" ]; then
+      cp -RL "${MART_TARGET_PRE}"/. "${MART_PARENT_PRE}/" 2>&1 | tail -3 || true
+    fi
   fi
 fi
+
+# CUDA12 jax plugin for GPU bench cases. Run AFTER dvc pull because
+# `uv sync` is declarative — a `--group cuda` sync (even combined
+# with `--group env`) prunes the `dvc[s3]` extra's transitive
+# `s3fs` from the venv, breaking subsequent dvc operations. By
+# deferring cuda install to after dvc pull, base+env state stays
+# intact during dvc, and the train process gets a venv with both
+# the rust simulator (env group) and cuda12 plugin (cuda group).
+# Pod 20260520-110209 hit `ERROR: URL 's3://' is supported but
+# requires these missing dependencies: ['s3fs']` when cuda sync
+# ran before dvc.
+case "<CASE>" in
+  bench_*_gpu)
+    echo "[onstart] step=install_cuda_jax (case=<CASE>): uv sync --group env --group cuda"
+    if ! check_and_reset_broken_venv; then
+      mark "47_install_cuda_jax_failed"
+      exit 1
+    fi
+    UV_CUDA_LOG="/tmp/uv_cuda_sync.log"
+    if ! ( cd bot && uv sync --no-dev --group env --group cuda --frozen ) >"${UV_CUDA_LOG}" 2>&1; then
+      echo "[onstart] install_cuda_jax FAILED — uv sync log tail:" >&2
+      tail -30 "${UV_CUDA_LOG}" >&2 || true
+      if command -v aws >/dev/null 2>&1; then
+        aws s3 cp "${UV_CUDA_LOG}" \
+          "s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/<RUN_ID>/uv_cuda_sync.log" \
+          2>&1 | head -3 || true
+      fi
+      mark "47_install_cuda_jax_failed"
+      exit 1
+    fi
+    echo "[onstart] install_cuda_jax ok"
+    mark "47_install_cuda_jax_done"
+    ;;
+esac
 

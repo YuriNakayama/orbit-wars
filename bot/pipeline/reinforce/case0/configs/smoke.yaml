@@ -1,0 +1,32 @@
+# Smoke config for reinforce/case0 PPO baseline.
+#
+# Small enough to finish in under ~5 min on CPU. Production runs should
+# override `iterations` / `episodes_per_iter` via a separate YAML (or by
+# editing this file).
+
+model:
+  hidden: 64
+  ships_buckets: 4
+
+training:
+  seed: 0
+  iterations: 4
+  episodes_per_iter: 4
+  lr: 3.0e-4
+  weight_decay: 0.0
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  ppo_epochs: 4
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  opponent: random_noop
+
+output:
+  run_dir: data/output/models/reinforce/case0/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
