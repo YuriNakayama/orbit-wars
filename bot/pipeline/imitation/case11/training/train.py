@@ -30,7 +30,6 @@ from pipeline.imitation.case11.policy.featurizer import (
     PLANET_FEAT_DIM,
 )
 from pipeline.imitation.case11.policy.model import Case11Policy, ModelConfig
-from pipeline.imitation.case11.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case11.policy.types import BatchFeatures
 from pipeline.imitation.case11.training.dataset import (
     BatchedSample,
@@ -40,12 +39,7 @@ from pipeline.imitation.case11.training.dataset import (
 from pipeline.imitation.case11.training.epoch_metrics import EpochMetricAccumulator
 from pipeline.imitation.case11.training.losses import (
     LossWeights,
-    compute_candidate_ships_loss,
-    compute_dual_head_loss,
-    compute_loss,
     compute_per_planet_loss,
-    compute_template_ships_loss,
-    compute_three_head_loss,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,8 +129,10 @@ def _to_batch_features(sample: BatchedSample, device: torch.device) -> BatchFeat
     return BatchFeatures(
         planet_feats=sample.planet_feats.to(device, non_blocking=True),
         planet_mask=sample.planet_mask.to(device, non_blocking=True),
-        my_planet_mask=sample.my_planet_mask.to(device, non_blocking=True),
         target_mask=sample.target_mask.to(device, non_blocking=True),
+        effective_source_mask=sample.effective_source_mask.to(
+            device, non_blocking=True
+        ),
         global_feats=sample.global_feats.to(device, non_blocking=True),
         template_ctx=sample.template_ctx.to(device, non_blocking=True),
         candidate_feats=sample.candidate_feats.to(device, non_blocking=True),
@@ -150,28 +146,12 @@ BATCH_LOG_EVERY = 100
 
 _METRIC_KEY_MAP: dict[str, str] = {
     "val_total": "total",
-    "val_cand_loss": "cand",
-    "val_cand_acc": "cand_acc",
-    "val_cand_noop_acc": "cand_noop_acc",
-    "val_cand_fire_acc": "cand_fire_acc",
-    "val_ship_loss": "ship",
-    "val_ship_mae": "ship_mae",
-    # three_head metrics (head_mode=three_head)
-    "val_from_loss": "from_loss",
     "val_target_loss": "target_loss",
-    "val_ships_loss": "ships_loss",
-    "val_from_acc": "from_acc",
     "val_target_acc": "target_acc",
-    "val_ships_acc": "ships_acc",
-    # template_ships metrics
-    "val_template_loss": "template_loss",
-    "val_template_acc": "template_acc",
-    "val_template_noop_acc": "template_noop_acc",
-    "val_template_fire_acc": "template_fire_acc",
-    # per_planet metrics (head_mode=per_planet) — target_loss/target_acc/
-    # ship_loss/ship_mae reuse keys defined above.
     "val_target_noop_acc": "target_noop_acc",
     "val_target_fire_acc": "target_fire_acc",
+    "val_ship_loss": "ship",
+    "val_ship_mae": "ship_mae",
 }
 
 
@@ -243,132 +223,32 @@ def _compute_loss_dispatch(
     loss_weights: LossWeights,
     device: torch.device,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Run the appropriate loss for head_mode and return (total, metrics_dict)."""
-    if head_mode == "three_head":
-        rep3 = compute_three_head_loss(
-            output,  # type: ignore[arg-type]
-            from_multihot=batch.from_multihot.to(device, non_blocking=True),
-            target_per_src=batch.target_per_src.to(device, non_blocking=True),
-            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
-            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-            from_w=loss_weights.three_from_w,
-            target_w=loss_weights.three_target_w,
-            ships_w=loss_weights.three_ships_w,
-            pos_weight=loss_weights.three_pos_weight,
-            label_smoothing=loss_weights.label_smoothing,
+    """case11 is per_planet only; head_mode kept as a sanity guard."""
+    if head_mode != "per_planet":
+        raise ValueError(
+            f"case11 supports only head_mode='per_planet', got {head_mode!r}"
         )
-        return rep3.total, {
-            "total": float(rep3.total.detach().item()),
-            "from_loss": float(rep3.from_loss.item()),
-            "target_loss": float(rep3.target_loss.item()),
-            "ships_loss": float(rep3.ships_loss.item()),
-            "from_acc": rep3.from_acc,
-            "target_acc": rep3.target_acc,
-            "ships_acc": rep3.ships_acc,
-        }
-    if head_mode == "candidate_ships":
-        rep_cs = compute_candidate_ships_loss(
-            output,  # type: ignore[arg-type]
-            cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
-            ships_bucket_per_src=batch.ships_bucket_per_src.to(
-                device, non_blocking=True
-            ),
-            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-            weights=loss_weights,
-            ships_w=loss_weights.ship_w,
-            label_smoothing=loss_weights.label_smoothing,
-        )
-        return rep_cs.total, {
-            "total": float(rep_cs.total.detach().item()),
-            "cand": float(rep_cs.cand_loss.item()),
-            "cand_acc": rep_cs.cand_acc,
-            "cand_noop_acc": rep_cs.cand_noop_acc,
-            "cand_fire_acc": rep_cs.cand_fire_acc,
-            "ships_loss": float(rep_cs.ships_loss.item()),
-            "ships_acc": rep_cs.ships_acc,
-        }
-    if head_mode == "template_ships":
-        rep_ts = compute_template_ships_loss(
-            output,  # type: ignore[arg-type]
-            target_per_src=batch.target_per_src.to(device, non_blocking=True),
-            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
-            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-            weights=loss_weights,
-        )
-        return rep_ts.total, {
-            "total": float(rep_ts.total.detach().item()),
-            "template_loss": float(rep_ts.template_loss.item()),
-            "template_acc": rep_ts.template_acc,
-            "template_noop_acc": rep_ts.template_noop_acc,
-            "template_fire_acc": rep_ts.template_fire_acc,
-            "ships_loss": float(rep_ts.ships_loss.item()),
-            "ships_acc": rep_ts.ships_acc,
-        }
-    if head_mode == "per_planet":
-        from pipeline.imitation.case11.policy.featurizer import MAX_PLANETS
+    from pipeline.imitation.case11.policy.featurizer import MAX_PLANETS
 
-        rep_pp = compute_per_planet_loss(
-            output,  # type: ignore[arg-type]
-            target_pid_per_src=batch.target_pid_per_src.to(device, non_blocking=True),
-            ship_pred_label=batch.ship_pred_label.to(device, non_blocking=True),
-            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-            weights=loss_weights,
-            no_op_idx=MAX_PLANETS,
-        )
-        return rep_pp.total, {
-            "total": float(rep_pp.total.detach().item()),
-            "target_loss": float(rep_pp.target_loss.item()),
-            "target_acc": rep_pp.target_acc,
-            "target_noop_acc": rep_pp.target_noop_acc,
-            "target_fire_acc": rep_pp.target_fire_acc,
-            "ship": float(rep_pp.ship_loss.item()),
-            "ship_mae": rep_pp.ship_mae,
-        }
-    if head_mode == "dual":
-        rep_d = compute_dual_head_loss(
-            output,  # type: ignore[arg-type]
-            from_multihot=batch.from_multihot.to(device, non_blocking=True),
-            target_per_src=batch.target_per_src.to(device, non_blocking=True),
-            ships_per_src=batch.ships_per_src.to(device, non_blocking=True),
-            cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
-            ship_label_per_src=batch.ship_label_per_src.to(device, non_blocking=True),
-            my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
-            weights=loss_weights,
-        )
-        return rep_d.total, {
-            "total": float(rep_d.total.detach().item()),
-            "three_total": float(rep_d.three.total.detach().item()),
-            "cand_total": float(rep_d.candidate.total.detach().item()),
-            "from_loss": float(rep_d.three.from_loss.item()),
-            "target_loss": float(rep_d.three.target_loss.item()),
-            "ships_loss": float(rep_d.three.ships_loss.item()),
-            "from_acc": rep_d.three.from_acc,
-            "target_acc": rep_d.three.target_acc,
-            "ships_acc": rep_d.three.ships_acc,
-            "cand": float(rep_d.candidate.cand_loss.item()),
-            "cand_acc": rep_d.candidate.cand_acc,
-            "cand_noop_acc": rep_d.candidate.cand_noop_acc,
-            "cand_fire_acc": rep_d.candidate.cand_fire_acc,
-            "ship": float(rep_d.candidate.ship_loss.item()),
-            "ship_mae": rep_d.candidate.ship_mae,
-            "dual_alpha": rep_d.alpha,
-        }
-    # default: candidate (case8 style)
-    rep_c = compute_loss(
+    rep_pp = compute_per_planet_loss(
         output,  # type: ignore[arg-type]
-        cand_slot_per_src=batch.cand_slot_per_src.to(device, non_blocking=True),
-        my_planet_mask=batch.my_planet_mask.to(device, non_blocking=True),
+        target_pid_per_src=batch.target_pid_per_src.to(device, non_blocking=True),
+        ship_pred_label=batch.ship_pred_label.to(device, non_blocking=True),
+        effective_source_mask=batch.effective_source_mask.to(
+            device, non_blocking=True
+        ),
+        should_learn_ship=batch.should_learn_ship.to(device, non_blocking=True),
         weights=loss_weights,
-        ship_label_per_src=batch.ship_label_per_src.to(device, non_blocking=True),
+        no_op_idx=MAX_PLANETS,
     )
-    return rep_c.total, {
-        "total": float(rep_c.total.detach().item()),
-        "cand": float(rep_c.cand_loss.item()),
-        "cand_acc": rep_c.cand_acc,
-        "cand_noop_acc": rep_c.cand_noop_acc,
-        "cand_fire_acc": rep_c.cand_fire_acc,
-        "ship": float(rep_c.ship_loss.item()),
-        "ship_mae": rep_c.ship_mae,
+    return rep_pp.total, {
+        "total": float(rep_pp.total.detach().item()),
+        "target_loss": float(rep_pp.target_loss.item()),
+        "target_acc": rep_pp.target_acc,
+        "target_noop_acc": rep_pp.target_noop_acc,
+        "target_fire_acc": rep_pp.target_fire_acc,
+        "ship": float(rep_pp.ship_loss.item()),
+        "ship_mae": rep_pp.ship_mae,
     }
 
 
@@ -424,15 +304,7 @@ def _run_epoch(
                 elapsed = time.monotonic() - started
                 rate = n_batches / elapsed if elapsed > 0 else 0.0
                 eta = (n_total - n_batches) / rate if rate > 0 else float("inf")
-                if head_mode == "three_head":
-                    acc_key = "from_acc"
-                elif head_mode == "template_ships":
-                    acc_key = "template_acc"
-                elif head_mode == "per_planet":
-                    acc_key = "target_acc"
-                else:
-                    acc_key = "cand_acc"
-                running_acc_val = totals.get(acc_key, 0.0) / max(1, n_batches)
+                running_acc_val = totals.get("target_acc", 0.0) / max(1, n_batches)
                 logger.info(
                     json.dumps(
                         {
@@ -607,59 +479,10 @@ def train(cfg: dict[str, Any]) -> TrainReport:
         )
 
     lw_cfg = train_cfg.get("loss_weights", {}) or {}
-    cand_cw: torch.Tensor | None = None
-    template_cw: torch.Tensor | None = None
-    ships_cw: torch.Tensor | None = None
-    class_weight_beta = float(lw_cfg.get("class_weight_beta", 0.999))
-    if bool(lw_cfg.get("use_class_weights", False)):
-        cand_cw = train_ds.class_weight_on_slots(
-            num_classes=model_config.cand_k,
-            beta=class_weight_beta,
-            ignore_index=-1,
-        )
-        template_cw = train_ds.class_weight_on_templates_including_noop(
-            num_classes=NUM_TEMPLATES + 1,
-            beta=class_weight_beta,
-            ignore_index=-1,
-        )
-        ships_cw = train_ds.class_weight_on_ships(
-            num_classes=model_config.ships_buckets,
-            beta=class_weight_beta,
-            ignore_index=-1,
-        )
-        logger.info(
-            json.dumps(
-                {
-                    "cand_class_weights": [
-                        round(float(x), 4) for x in cand_cw.tolist()
-                    ],
-                    "template_class_weights": [
-                        round(float(x), 4) for x in template_cw.tolist()
-                    ],
-                    "ships_class_weights": [
-                        round(float(x), 4) for x in ships_cw.tolist()
-                    ],
-                }
-            )
-        )
-
     weights = LossWeights(
-        cand_w=float(lw_cfg.get("cand", 1.0)),
-        cand_class_weights=cand_cw,
-        template_class_weights=template_cw,
-        ships_class_weights=ships_cw,
-        label_smoothing=float(lw_cfg.get("label_smoothing", 0.0)),
-        ship_w=float(lw_cfg.get("ship", 1.0)),
-        three_from_w=float(lw_cfg.get("from", 1.0)),
-        three_target_w=float(lw_cfg.get("target", 1.0)),
-        three_ships_w=float(lw_cfg.get("three_ship", lw_cfg.get("ship", 0.5))),
-        three_pos_weight=float(lw_cfg.get("from_pos_weight", 5.0)),
-        template_w=float(lw_cfg.get("template", lw_cfg.get("cand", 1.0))),
         target_w=float(lw_cfg.get("target", 1.0)),
-        cand_loss_type=str(lw_cfg.get("cand_loss_type", "ce")),
-        focal_alpha=float(lw_cfg.get("focal_alpha", 0.25)),
-        focal_gamma=float(lw_cfg.get("focal_gamma", 2.0)),
-        dual_alpha=float(lw_cfg.get("dual_alpha", 0.5)),
+        ship_w=float(lw_cfg.get("ship", 1.0)),
+        label_smoothing=float(lw_cfg.get("label_smoothing", 0.0)),
     )
 
     case_name = str(train_cfg.get("case", "case8"))
@@ -753,93 +576,18 @@ def train(cfg: dict[str, Any]) -> TrainReport:
             "ema_eval": ema_model is not None,
             "epoch_elapsed_s": round(time.monotonic() - epoch_started, 1),
         }
-        if head_mode == "three_head":
-            for k in (
-                "from_loss",
-                "target_loss",
-                "ships_loss",
-                "from_acc",
-                "target_acc",
-                "ships_acc",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
-        elif head_mode == "dual":
-            for k in (
-                "three_total",
-                "cand_total",
-                "from_loss",
-                "target_loss",
-                "ships_loss",
-                "from_acc",
-                "target_acc",
-                "ships_acc",
-                "cand",
-                "cand_acc",
-                "cand_noop_acc",
-                "cand_fire_acc",
-                "ship",
-                "ship_mae",
-                "dual_alpha",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
-        elif head_mode == "candidate_ships":
-            for k in (
-                "cand",
-                "cand_acc",
-                "cand_noop_acc",
-                "cand_fire_acc",
-                "ships_loss",
-                "ships_acc",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
-        elif head_mode == "template_ships":
-            for k in (
-                "template_loss",
-                "template_acc",
-                "template_noop_acc",
-                "template_fire_acc",
-                "ships_loss",
-                "ships_acc",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
-        elif head_mode == "per_planet":
-            for k in (
-                "target_loss",
-                "target_acc",
-                "target_noop_acc",
-                "target_fire_acc",
-                "ship",
-                "ship_mae",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
-        else:  # candidate
-            for k in (
-                "cand",
-                "cand_acc",
-                "cand_noop_acc",
-                "cand_fire_acc",
-                "ship",
-                "ship_mae",
-            ):
-                if k in train_metrics:
-                    log_row[f"train_{k}"] = round(train_metrics[k], 4)
-                if k in val_metrics:
-                    log_row[f"val_{k}"] = round(val_metrics[k], 4)
+        for k in (
+            "target_loss",
+            "target_acc",
+            "target_noop_acc",
+            "target_fire_acc",
+            "ship",
+            "ship_mae",
+        ):
+            if k in train_metrics:
+                log_row[f"train_{k}"] = round(train_metrics[k], 4)
+            if k in val_metrics:
+                log_row[f"val_{k}"] = round(val_metrics[k], 4)
         for prefix, metrics in (("train", train_metrics), ("val", val_metrics)):
             for key, value in metrics.items():
                 if key in {"total", "grad_norm"}:
@@ -975,19 +723,11 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
         if scheduler is not None:
             scheduler.step()
-            if head_mode == "three_head":
-                primary_acc_key = "from_acc"
-            elif head_mode == "template_ships":
-                primary_acc_key = "template_fire_acc"
-            elif head_mode == "per_planet":
-                primary_acc_key = "target_fire_acc"
-            else:
-                primary_acc_key = "cand_fire_acc"
-            primary_acc_val = val_metrics.get(primary_acc_key, 0.0)
+            primary_acc_val = val_metrics.get("target_fire_acc", 0.0)
             _stamp(
                 f"epoch={epoch} done train_total={train_metrics['total']:.2f} "
                 f"val_total={val_metrics['total']:.2f} "
-                f"val_{primary_acc_key}={primary_acc_val:.4f} "
+                f"val_target_fire_acc={primary_acc_val:.4f} "
                 f"next_lr={optimizer.param_groups[0]['lr']:.6f}"
             )
 

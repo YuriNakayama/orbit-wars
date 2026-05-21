@@ -41,18 +41,13 @@ class Sample:
     planet_feats: torch.Tensor
     global_feats: torch.Tensor
     planet_mask: torch.Tensor
-    my_planet_mask: torch.Tensor
     target_mask: torch.Tensor
     template_ctx: torch.Tensor
     candidate_feats: torch.Tensor
     candidate_mask: torch.Tensor
     candidate_pid: torch.Tensor
-    cand_slot_per_src: torch.Tensor
-    ship_label_per_src: torch.Tensor
-    ships_bucket_per_src: torch.Tensor
-    from_multihot: torch.Tensor
-    target_per_src: torch.Tensor
-    ships_per_src: torch.Tensor
+    effective_source_mask: torch.Tensor
+    should_learn_ship: torch.Tensor
     target_pid_per_src: torch.Tensor
     ship_pred_label: torch.Tensor
     is_noop: bool
@@ -63,18 +58,13 @@ class BatchedSample:
     planet_feats: torch.Tensor
     global_feats: torch.Tensor
     planet_mask: torch.Tensor
-    my_planet_mask: torch.Tensor
     target_mask: torch.Tensor
     template_ctx: torch.Tensor
     candidate_feats: torch.Tensor
     candidate_mask: torch.Tensor
     candidate_pid: torch.Tensor
-    cand_slot_per_src: torch.Tensor
-    ship_label_per_src: torch.Tensor
-    ships_bucket_per_src: torch.Tensor
-    from_multihot: torch.Tensor
-    target_per_src: torch.Tensor
-    ships_per_src: torch.Tensor
+    effective_source_mask: torch.Tensor
+    should_learn_ship: torch.Tensor
     target_pid_per_src: torch.Tensor
     ship_pred_label: torch.Tensor
     is_noop: torch.Tensor
@@ -125,18 +115,13 @@ class CaseFourDataset(Dataset[Sample]):
         self._planet_feats = _mm("planet_feats")
         self._global_feats = _mm("global_feats")
         self._planet_mask = _mm("planet_mask")
-        self._my_planet_mask = _mm("my_planet_mask")
         self._target_mask = _mm("target_mask")
         self._template_ctx = _mm("template_ctx")
         self._candidate_feats = _mm("candidate_feats")
         self._candidate_mask = _mm("candidate_mask")
         self._candidate_pid = _mm("candidate_pid")
-        self._cand_slot_per_src = _mm("cand_slot_per_src")
-        self._ship_label_per_src = _mm("ship_label_per_src")
-        self._ships_bucket_per_src = _mm("ships_bucket_per_src")
-        self._from_multihot = _mm("from_multihot")
-        self._target_per_src = _mm("target_per_src")
-        self._ships_per_src = _mm("ships_per_src")
+        self._effective_source_mask = _mm("effective_source_mask")
+        self._should_learn_ship = _mm("should_learn_ship")
         self._target_pid_per_src = _mm("target_pid_per_src")
         self._ship_pred_label = _mm("ship_pred_label")
         self._is_noop = _mm("is_noop")
@@ -144,37 +129,6 @@ class CaseFourDataset(Dataset[Sample]):
         self._n = int(self._planet_feats.shape[0])
         if max_rows is not None and max_rows > 0:
             self._n = min(self._n, max_rows)
-
-    def class_weight_on_slots(
-        self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
-    ) -> torch.Tensor:
-        del beta
-        flat = np.asarray(self._cand_slot_per_src).reshape(-1)
-        flat = flat[flat != ignore_index]
-        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
-        return _inverse_freq_weights(counts)
-
-    def class_weight_on_templates_including_noop(
-        self, num_classes: int, beta: float = 0.999, ignore_index: int = -1
-    ) -> torch.Tensor:
-        del beta
-        labels = np.asarray(self._target_per_src).copy()
-        labels[labels == ignore_index] = num_classes - 1
-        valid = np.asarray(self._my_planet_mask).reshape(-1)
-        flat = labels.reshape(-1)[valid]
-        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
-        return _inverse_freq_weights(counts)
-
-    def class_weight_on_ships(
-        self, num_classes: int = 4, beta: float = 0.999, ignore_index: int = -1
-    ) -> torch.Tensor:
-        del beta
-        flat = np.asarray(self._ships_per_src).reshape(-1)
-        if np.all(flat == ignore_index):
-            flat = np.asarray(self._ships_bucket_per_src).reshape(-1)
-        flat = flat[flat != ignore_index]
-        counts = np.bincount(flat, minlength=num_classes).astype(np.float64)
-        return _inverse_freq_weights(counts)
 
     def __len__(self) -> int:
         return int(self._n)
@@ -184,28 +138,23 @@ class CaseFourDataset(Dataset[Sample]):
             raise IndexError(idx)
         # np.array(...) forces a copy out of the memmap so the resulting
         # torch.Tensor owns a contiguous buffer independent of the OS page
-        # cache. This sidesteps the view-accumulation pattern that caused
+        # cache. Sidesteps the view-accumulation pattern that caused
         # retry #12 to leak ~6 GB / 5 min into 138 GB OOM.
         return Sample(
             planet_feats=torch.from_numpy(np.array(self._planet_feats[idx])),
             global_feats=torch.from_numpy(np.array(self._global_feats[idx])),
             planet_mask=torch.from_numpy(np.array(self._planet_mask[idx])),
-            my_planet_mask=torch.from_numpy(np.array(self._my_planet_mask[idx])),
             target_mask=torch.from_numpy(np.array(self._target_mask[idx])),
             template_ctx=torch.from_numpy(np.array(self._template_ctx[idx])),
             candidate_feats=torch.from_numpy(np.array(self._candidate_feats[idx])),
             candidate_mask=torch.from_numpy(np.array(self._candidate_mask[idx])),
             candidate_pid=torch.from_numpy(np.array(self._candidate_pid[idx])),
-            cand_slot_per_src=torch.from_numpy(np.array(self._cand_slot_per_src[idx])),
-            ship_label_per_src=torch.from_numpy(
-                np.array(self._ship_label_per_src[idx])
+            effective_source_mask=torch.from_numpy(
+                np.array(self._effective_source_mask[idx])
             ),
-            ships_bucket_per_src=torch.from_numpy(
-                np.array(self._ships_bucket_per_src[idx])
+            should_learn_ship=torch.from_numpy(
+                np.array(self._should_learn_ship[idx])
             ),
-            from_multihot=torch.from_numpy(np.array(self._from_multihot[idx])),
-            target_per_src=torch.from_numpy(np.array(self._target_per_src[idx])),
-            ships_per_src=torch.from_numpy(np.array(self._ships_per_src[idx])),
             target_pid_per_src=torch.from_numpy(
                 np.array(self._target_pid_per_src[idx])
             ),
@@ -214,34 +163,20 @@ class CaseFourDataset(Dataset[Sample]):
         )
 
 
-def _inverse_freq_weights(counts: np.ndarray) -> torch.Tensor:
-    present_mask = counts > 0
-    if not present_mask.any():
-        return torch.ones(counts.size, dtype=torch.float32)
-    raw = np.zeros_like(counts)
-    raw[present_mask] = 1.0 / counts[present_mask]
-    mean_raw = float(raw[present_mask].mean())
-    weights = raw / max(mean_raw, 1e-12)
-    return torch.tensor(weights, dtype=torch.float32)
-
-
 def collate(samples: list[Sample]) -> BatchedSample:
     return BatchedSample(
         planet_feats=torch.stack([s.planet_feats for s in samples]),
         global_feats=torch.stack([s.global_feats for s in samples]),
         planet_mask=torch.stack([s.planet_mask for s in samples]),
-        my_planet_mask=torch.stack([s.my_planet_mask for s in samples]),
         target_mask=torch.stack([s.target_mask for s in samples]),
         template_ctx=torch.stack([s.template_ctx for s in samples]),
         candidate_feats=torch.stack([s.candidate_feats for s in samples]),
         candidate_mask=torch.stack([s.candidate_mask for s in samples]),
         candidate_pid=torch.stack([s.candidate_pid for s in samples]),
-        cand_slot_per_src=torch.stack([s.cand_slot_per_src for s in samples]),
-        ship_label_per_src=torch.stack([s.ship_label_per_src for s in samples]),
-        ships_bucket_per_src=torch.stack([s.ships_bucket_per_src for s in samples]),
-        from_multihot=torch.stack([s.from_multihot for s in samples]),
-        target_per_src=torch.stack([s.target_per_src for s in samples]),
-        ships_per_src=torch.stack([s.ships_per_src for s in samples]),
+        effective_source_mask=torch.stack(
+            [s.effective_source_mask for s in samples]
+        ),
+        should_learn_ship=torch.stack([s.should_learn_ship for s in samples]),
         target_pid_per_src=torch.stack([s.target_pid_per_src for s in samples]),
         ship_pred_label=torch.stack([s.ship_pred_label for s in samples]),
         is_noop=torch.tensor([s.is_noop for s in samples], dtype=torch.bool),

@@ -1,18 +1,18 @@
-"""Frozen dataclasses for imitation/case11.
+"""Frozen dataclasses for imitation/case11 (per_planet head only).
 
-case11 supports per_planet only in a single dir (head_mode flag):
-  - three_head:       case3/case7 流の (from + target + ships) heads
-  - candidate:        case4/case8 流の per-source candidate categorical
-  - candidate_ships:  candidate + learned ships head の hybrid
-  - template_ships:   template categorical incl no-op + learned ships head
-  - dual:             3-head + candidate を同時に返す補助学習 variant
+3-layer mask design (Lux3-derived):
 
-`BatchFeatures` carries both `template_ctx` (3-head 用) and `candidate_feats /
-candidate_mask / candidate_pid` (candidate 用) なので、 head_mode に応じて
-各 variant の forward が必要なフィールドだけ参照する。
+  layer1 (invalid-action): target_mask — applied -1e9 on target axis of
+      per_planet_logits at softmax. Physical-rule-only (no strategic prunes).
+  layer2 (existence/ownership): effective_source_mask = my_planet & ships>0,
+      restricts the source axis of per_planet_logits. encoder still sees all
+      planets (enemy/neutral kept as observation context — never masked from
+      attention).
+  layer3 (conditional head): used inside the loss (should_learn_ship) — kept
+      in batch-side tensors (dataset.py), not on BatchFeatures (decoder side).
 
-`PolicyOutput` は head_mode で利用するフィールドだけが non-None になる。
-dual mode では 3-head と candidate の両方のフィールドが non-None になる。
+Note: my_planet_mask は decoder/loss から完全に消えた。debug したい場合は
+preprocess.py 段階で computed なので parquet から再生成可能。
 """
 
 from __future__ import annotations
@@ -25,34 +25,23 @@ import torch
 @dataclass(frozen=True)
 class BatchFeatures:
     planet_feats: torch.Tensor  # (B, MAX_PLANETS, PLANET_FEAT_DIM)
-    planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — True for valid slots
-    my_planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — owner == player
-    target_mask: torch.Tensor  # (B, MAX_PLANETS) bool — valid target candidates
+    planet_mask: torch.Tensor  # (B, MAX_PLANETS) bool — layer1 (existence)
+    target_mask: torch.Tensor  # (B, MAX_PLANETS) bool — layer1 (physical-rule)
+    effective_source_mask: torch.Tensor  # (B, MAX_PLANETS) bool — layer2
     global_feats: torch.Tensor  # (B, GLOBAL_FEAT_DIM)
-    template_ctx: torch.Tensor  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM) — 3-head 用
+    template_ctx: torch.Tensor  # (B, MAX_PLANETS, TEMPLATE_CTX_DIM)
     candidate_feats: torch.Tensor  # (B, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
-    candidate_mask: torch.Tensor  # (B, MAX_PLANETS, CAND_K) bool — slot 0 always True
+    candidate_mask: torch.Tensor  # (B, MAX_PLANETS, CAND_K) bool
     candidate_pid: torch.Tensor  # (B, MAX_PLANETS, CAND_K) int64 — -1 for invalid
 
 
 @dataclass(frozen=True)
 class PolicyOutput:
-    """All variants populate the fields they use; others are None."""
+    """per_planet head output: (P+1)-class CE + ships regression."""
 
-    from_logits: torch.Tensor | None = None  # (B, P) — three_head / dual
-    target_logits: torch.Tensor | None = (
-        None  # (B, P, NUM_TEMPLATES) — three_head / template_ships / dual
-    )
-    # (B, P, ships_buckets) — three_head / candidate_ships / template_ships / dual
-    ships_logits: torch.Tensor | None = None
-    candidate_logits: torch.Tensor | None = (
-        None  # (B, P, CAND_K) — candidate / candidate_ships / dual
-    )
-    ship_pred: torch.Tensor | None = (
-        None  # (B, P) — case8-style ship regression (optional)
-    )
-    # (B, P, P+1) — per_planet head: last index is no-op sentinel
-    per_planet_logits: torch.Tensor | None = None
+    # (B, P, P+1) — last index is no-op sentinel
+    per_planet_logits: torch.Tensor
+    ship_pred: torch.Tensor  # (B, P) — log1p(ships) regression
 
 
 @dataclass(frozen=True)

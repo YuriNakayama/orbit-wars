@@ -1,0 +1,64 @@
+# Local smoke config: 200 episodes, 20k/2k row cap. Used to verify the
+# 3-layer mask design end-to-end (preprocess -> parquet_to_npy -> train).
+# Outputs to a separate path so it does not clobber the canonical mart.
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case11_smoke/train.parquet
+  out_val: data/mart/imitation/case11_smoke/val.parquet
+  rating_quantile: 0.0
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: 200
+  winners_only: true
+  top_team_rank: 80
+  max_train_rows: 20000
+  max_val_rows: 2000
+
+model:
+  planet_in_dim: 41
+  global_in_dim: 20
+  cand_in_dim: 14
+  cand_k: 8
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_mode: per_planet
+
+train:
+  case: case11
+  batch_size: 1024
+  epochs: 3
+  lr: 6.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 2
+  pin_memory: false
+  persistent_workers: true
+  loss_weights:
+    target: 1.0
+    ship: 0.5
+    label_smoothing: 0.0
+  scheduler:
+    type: cosine_warmup
+    t_max: 3
+    eta_min: 1.0e-5
+    warmup_epochs: 1
+    warmup_start_factor: 0.1
+  best_metric: val_target_fire_acc
+  best_metric_mode: max
+  early_stop:
+    metric: val_target_fire_acc
+    patience: 3
+    mode: max
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+  head_dropout: 0.1
+  weights_out: pipeline/imitation/case11/policy/weights_smoke.pt
+
+inference:
+  temperature: 1.0

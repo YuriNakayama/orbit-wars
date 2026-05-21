@@ -1,17 +1,22 @@
-"""Policy output → Kaggle action list for imitation/case11.
+"""Policy output → Kaggle action list for imitation/case11 (per_planet head).
 
-Supports 3 head variants via `head_mode`:
-  - "candidate":       cand argmax slot 0 = no-op, slot 1..K-1 → candidate planet.
-                       ships = max(rule_floor, round(ship_pred)).
-  - "candidate_ships": cand argmax + ships_logits 4-bucket (0..3) → ships.
-  - "three_head":      from sigmoid threshold → fire decision.
-                       target argmax over NUM_TEMPLATES with template id 7 = no-op.
-                       ships_logits 4-bucket → ships.
-  - "template_ships":  target argmax over NUM_TEMPLATES directly per source.
-                       template id 7 = no-op. ships_logits 4-bucket → ships.
-  - "dual":            candidate decoder path. 3-head outputs are auxiliary.
+per_planet_logits: (B, P, P+1) — last index is no-op sentinel.
+ship_pred:         (B, P)     — log1p(ships) regression output.
 
-Common safety filters (case5 由来) are applied to every variant.
+Per source planet: argmax over (P+1) targets. If argmax == no-op, no fire.
+Otherwise the argmax index identifies the destination planet slot in
+`snapshot.planet_ids`. Ships count is `expm1(ship_pred[slot])`, clamped
+to a minimum floor and to src.ships.
+
+Mask consistency with training (Lux3 教訓):
+  - sources with ships==0 are skipped (matches effective_source_mask in
+    losses.py; without this, decode would try to fire from an empty planet
+    and the safety filter would drop it silently, creating train/inference
+    distribution skew).
+  - no-op targets emit no action and the corresponding ship_pred is ignored
+    (matches should_learn_ship in losses.py).
+
+Common safety filters (case5 由来) still wrap the final action emission.
 """
 
 from __future__ import annotations
@@ -22,7 +27,6 @@ from typing import Any
 
 import torch
 
-from .candidates import CAND_K
 from .featurizer import MAX_PLANETS
 from .geometry import LAUNCH_CLEARANCE, Planet, aim_with_prediction
 from .safety import (
@@ -32,11 +36,7 @@ from .safety import (
     is_trajectory_sun_safe,
     target_reachable_before_comet_expiry,
 )
-from .templates import NUM_TEMPLATES, resolve_template
 from .types import PolicyOutput, WorldSnapshot
-
-SHIPS_BUCKETS = (5, 15, 30, 60)
-NO_OP_TEMPLATE_ID = NUM_TEMPLATES - 1
 
 
 def _env_float(name: str, default: float) -> float:
@@ -270,224 +270,6 @@ def _common_obs_state(
     )
 
 
-def _decode_candidate(
-    output: PolicyOutput,
-    snapshot: WorldSnapshot,
-    obs: dict[str, Any],
-    candidate_pid: torch.Tensor,
-    candidate_mask: torch.Tensor,
-    temperature: float,
-    use_learned_ships: bool,
-) -> list[list[int | float]]:
-    T = max(float(temperature), 1e-6)
-    assert output.candidate_logits is not None
-    cand_logits = output.candidate_logits[0] / T
-    fire_margin = _env_float("IL_CASE9_CAND_FIRE_MARGIN", -0.50)
-    if use_learned_ships:
-        assert output.ships_logits is not None
-        ships_argmax = output.ships_logits[0].argmax(dim=-1)  # (P,) bucket idx
-    else:
-        assert output.ship_pred is not None
-        ship_pred = output.ship_pred[0]
-
-    (
-        pid_to_planet,
-        initial_by_id,
-        ang_vel,
-        comets,
-        comet_ids,
-        step,
-        incoming_friendly,
-    ) = _common_obs_state(obs, snapshot)
-    committed = dict(incoming_friendly)
-    actions: list[list[int | float]] = []
-    player = snapshot.player
-
-    for src_pid in snapshot.my_planet_ids:
-        slot = snapshot.planet_ids.index(src_pid)
-        src = pid_to_planet.get(src_pid)
-        if src is None:
-            continue
-        for cand_slot in _rank_fire_slots(cand_logits[slot], 0, fire_margin):
-            if cand_slot <= 0 or cand_slot >= CAND_K:
-                continue
-            if not bool(candidate_mask[slot, cand_slot].item()):
-                continue
-            target_pid = int(candidate_pid[slot, cand_slot].item())
-            target = pid_to_planet.get(target_pid)
-            if target is None:
-                continue
-            rule_floor = _fixed_ship_count(target.ships)
-            if rule_floor > src.ships:
-                continue
-            if use_learned_ships:
-                bucket = int(ships_argmax[slot].item())
-                bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-                ships = max(rule_floor, SHIPS_BUCKETS[bucket])
-            else:
-                pred_ships = int(round(float(ship_pred[slot].item())))
-                ships = max(rule_floor, pred_ships)
-            ships = _scale_ship_count(ships)
-            action = _emit_action(
-                src,
-                target,
-                ships,
-                initial_by_id,
-                ang_vel,
-                comets,
-                comet_ids,
-                step,
-                committed,
-                player,
-            )
-            if action is not None:
-                actions.append(action)
-                break
-    return actions
-
-
-def _decode_three_head(
-    output: PolicyOutput,
-    snapshot: WorldSnapshot,
-    obs: dict[str, Any],
-    template_ctx: torch.Tensor,
-    temperature: float,
-) -> list[list[int | float]]:
-    del template_ctx
-    T = max(float(temperature), 1e-6)
-    assert output.from_logits is not None
-    assert output.target_logits is not None
-    assert output.ships_logits is not None
-    from_logits = output.from_logits[0] / T
-    target_logits = output.target_logits[0] / T
-    ships_argmax = output.ships_logits[0].argmax(dim=-1)
-    from_prob = torch.sigmoid(from_logits)
-    from_threshold = _env_float("IL_CASE9_THREE_FROM_THRESHOLD", 0.5)
-
-    (
-        pid_to_planet,
-        initial_by_id,
-        ang_vel,
-        comets,
-        comet_ids,
-        step,
-        incoming_friendly,
-    ) = _common_obs_state(obs, snapshot)
-    raw_planets = list(obs.get("planets", []) or [])
-    committed = dict(incoming_friendly)
-    actions: list[list[int | float]] = []
-    player = snapshot.player
-
-    for src_pid in snapshot.my_planet_ids:
-        slot = snapshot.planet_ids.index(src_pid)
-        if float(from_prob[slot].item()) < from_threshold:
-            continue
-        src = pid_to_planet.get(src_pid)
-        if src is None:
-            continue
-        for tid in target_logits[slot].argsort(dim=-1, descending=True).tolist():
-            tid = int(tid)
-            if tid == NO_OP_TEMPLATE_ID:
-                continue
-            target_pid = resolve_template(
-                tid, list(raw_planets[slot]), raw_planets, player
-            )
-            if target_pid is None:
-                continue
-            target = pid_to_planet.get(int(target_pid))
-            if target is None:
-                continue
-            bucket = int(ships_argmax[slot].item())
-            bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-            rule_floor = _fixed_ship_count(target.ships)
-            if rule_floor > src.ships:
-                continue
-            ships = _scale_ship_count(max(rule_floor, SHIPS_BUCKETS[bucket]))
-            action = _emit_action(
-                src,
-                target,
-                ships,
-                initial_by_id,
-                ang_vel,
-                comets,
-                comet_ids,
-                step,
-                committed,
-                player,
-            )
-            if action is not None:
-                actions.append(action)
-                break
-    return actions
-
-
-def _decode_template_ships(
-    output: PolicyOutput,
-    snapshot: WorldSnapshot,
-    obs: dict[str, Any],
-    temperature: float,
-) -> list[list[int | float]]:
-    T = max(float(temperature), 1e-6)
-    assert output.target_logits is not None
-    assert output.ships_logits is not None
-    target_logits = output.target_logits[0] / T
-    ships_argmax = output.ships_logits[0].argmax(dim=-1)
-    fire_margin = _env_float("IL_CASE9_TEMPLATE_FIRE_MARGIN", -999.0)
-
-    (
-        pid_to_planet,
-        initial_by_id,
-        ang_vel,
-        comets,
-        comet_ids,
-        step,
-        incoming_friendly,
-    ) = _common_obs_state(obs, snapshot)
-    raw_planets = list(obs.get("planets", []) or [])
-    committed = dict(incoming_friendly)
-    actions: list[list[int | float]] = []
-    player = snapshot.player
-
-    for src_pid in snapshot.my_planet_ids:
-        slot = snapshot.planet_ids.index(src_pid)
-        src = pid_to_planet.get(src_pid)
-        if src is None:
-            continue
-        for tid in _rank_fire_slots(
-            target_logits[slot], NO_OP_TEMPLATE_ID, fire_margin
-        ):
-            target_pid = resolve_template(
-                tid, list(raw_planets[slot]), raw_planets, player
-            )
-            if target_pid is None:
-                continue
-            target = pid_to_planet.get(int(target_pid))
-            if target is None:
-                continue
-            bucket = int(ships_argmax[slot].item())
-            bucket = max(0, min(SHIPS_BUCKETS.__len__() - 1, bucket))
-            rule_floor = _fixed_ship_count(target.ships)
-            if rule_floor > src.ships:
-                continue
-            ships = _scale_ship_count(max(rule_floor, SHIPS_BUCKETS[bucket]))
-            action = _emit_action(
-                src,
-                target,
-                ships,
-                initial_by_id,
-                ang_vel,
-                comets,
-                comet_ids,
-                step,
-                committed,
-                player,
-            )
-            if action is not None:
-                actions.append(action)
-                break
-    return actions
-
-
 def _decode_per_planet(
     output: PolicyOutput,
     snapshot: WorldSnapshot,
@@ -535,6 +317,12 @@ def _decode_per_planet(
         src = pid_to_planet.get(src_pid)
         if src is None:
             continue
+        # layer2: skip ships==0 sources (matches effective_source_mask in
+        # training). Without this guard the safety filter would silently drop
+        # the action and the inference-time fire distribution diverges from
+        # what the model learned.
+        if int(src.ships) <= 0:
+            continue
         for tgt_slot in _rank_fire_slots(pp_logits[slot], no_op_idx, fire_margin):
             if tgt_slot < 0 or tgt_slot >= len(snapshot.planet_ids):
                 continue
@@ -570,41 +358,24 @@ def decode(
     output: PolicyOutput,
     snapshot: WorldSnapshot,
     obs: dict[str, Any],
-    candidate_pid: torch.Tensor,
-    candidate_mask: torch.Tensor,
+    candidate_pid: torch.Tensor | None = None,
+    candidate_mask: torch.Tensor | None = None,
     temperature: float = 1.0,
-    head_mode: str = "candidate",
+    head_mode: str = "per_planet",
     template_ctx: torch.Tensor | None = None,
 ) -> list[list[int | float]]:
-    if head_mode in {"candidate", "dual"}:
-        return _decode_candidate(
-            output,
-            snapshot,
-            obs,
-            candidate_pid,
-            candidate_mask,
-            temperature,
-            use_learned_ships=False,
+    """case11 decode (per_planet head only).
+
+    The extra `candidate_pid` / `candidate_mask` / `template_ctx` / `head_mode`
+    parameters are accepted for backward-compatible signature only; they are
+    not consumed.
+    """
+    del candidate_pid, candidate_mask, template_ctx
+    if head_mode != "per_planet":
+        raise ValueError(
+            f"case11 supports only head_mode='per_planet', got {head_mode!r}"
         )
-    if head_mode == "candidate_ships":
-        return _decode_candidate(
-            output,
-            snapshot,
-            obs,
-            candidate_pid,
-            candidate_mask,
-            temperature,
-            use_learned_ships=True,
-        )
-    if head_mode == "three_head":
-        if template_ctx is None:
-            raise ValueError("three_head decoder requires template_ctx")
-        return _decode_three_head(output, snapshot, obs, template_ctx, temperature)
-    if head_mode == "template_ships":
-        return _decode_template_ships(output, snapshot, obs, temperature)
-    if head_mode == "per_planet":
-        return _decode_per_planet(output, snapshot, obs, temperature)
-    raise ValueError(f"unknown head_mode={head_mode!r}")
+    return _decode_per_planet(output, snapshot, obs, temperature)
 
 
 __all__ = ["decode", "MAX_PLANETS"]

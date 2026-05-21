@@ -289,7 +289,8 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "stage": "train_imitation_case11",
         "train_module": "pipeline.imitation.case11.training.train",
         "config_arg": (
-            "--config pipeline/imitation/case11/configs/il_case11_per_planet.yaml"
+            "--config pipeline/imitation/case11/configs/"
+            "il_case11_per_planet_recent10d_rank30.yaml"
         ),
         "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
         "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",

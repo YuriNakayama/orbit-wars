@@ -10,20 +10,17 @@ Output layout (per split):
     planet_feats.npy           # (N, MAX_PLANETS, PLANET_FEAT_DIM) float32
     global_feats.npy           # (N, GLOBAL_FEAT_DIM) float32
     planet_mask.npy            # (N, MAX_PLANETS) bool
-    my_planet_mask.npy
-    target_mask.npy
+    target_mask.npy            # (N, MAX_PLANETS) bool
     template_ctx.npy           # (N, MAX_PLANETS, TEMPLATE_CTX_DIM) float32
     candidate_feats.npy        # (N, MAX_PLANETS, CAND_K, CAND_FEAT_DIM) f32
     candidate_mask.npy
     candidate_pid.npy
-    cand_slot_per_src.npy
-    ship_label_per_src.npy
-    ships_bucket_per_src.npy
-    from_multihot.npy
-    target_per_src.npy
-    ships_per_src.npy
-    target_pid_per_src.npy
-    ship_pred_label.npy
+    effective_source_mask.npy  # (N, MAX_PLANETS) bool  (layer2 source mask)
+    should_learn_ship.npy      # (N, MAX_PLANETS) bool  (layer3 ship-head mask)
+    target_pid_per_src.npy     # (N, MAX_PLANETS) int64 (0..P-1=fire slot,
+                               #   P=no-op sentinel)
+    ship_pred_label.npy        # (N, MAX_PLANETS) float32 (log1p(ships) for
+                               #   fired sources, -1.0 otherwise)
     is_noop.npy                # (N,) bool
 
 Memory: streams row_group by row_group, writes one column at a time using
@@ -52,23 +49,18 @@ from pipeline.imitation.case11.policy.templates import TEMPLATE_CTX_DIM
 logger = logging.getLogger(__name__)
 
 
-# (parquet_column, dtype, shape_per_row, optional_default)
+# (parquet_column, dtype, shape_per_row)
 _LIST_COLS: tuple[tuple[str, np.dtype, tuple[int, ...]], ...] = (
     ("planet_feats", np.dtype(np.float32), (MAX_PLANETS, PLANET_FEAT_DIM)),
     ("global_feats", np.dtype(np.float32), (GLOBAL_FEAT_DIM,)),
     ("planet_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
-    ("my_planet_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
     ("target_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
     ("template_ctx", np.dtype(np.float32), (MAX_PLANETS, TEMPLATE_CTX_DIM)),
     ("candidate_feats", np.dtype(np.float32), (MAX_PLANETS, CAND_K, CAND_FEAT_DIM)),
     ("candidate_mask", np.dtype(np.bool_), (MAX_PLANETS, CAND_K)),
     ("candidate_pid", np.dtype(np.int64), (MAX_PLANETS, CAND_K)),
-    ("cand_slot_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
-    ("ship_label_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
-    ("ships_bucket_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
-    ("from_multihot", np.dtype(np.bool_), (MAX_PLANETS,)),
-    ("target_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
-    ("ships_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
+    ("effective_source_mask", np.dtype(np.bool_), (MAX_PLANETS,)),
+    ("should_learn_ship", np.dtype(np.bool_), (MAX_PLANETS,)),
     ("target_pid_per_src", np.dtype(np.int64), (MAX_PLANETS,)),
     ("ship_pred_label", np.dtype(np.float32), (MAX_PLANETS,)),
 )
@@ -92,24 +84,20 @@ def _chunk_to_numpy(arr: pa.ChunkedArray, dtype: np.dtype) -> np.ndarray:
 def _default_for_missing(
     col: str, n_rows: int, dtype: np.dtype, shape_per_row: tuple[int, ...]
 ) -> np.ndarray:
-    """Return a default-filled buffer for an optional column not present
-    in the parquet. Matches `_materialise_group` defaults in dataset.py."""
+    """Return a default-filled buffer for a column missing from older parquet.
+
+    case11 parquet from this point on always emits the full column set, so
+    this only matters when re-using an older mart accidentally. Surfaces a
+    clear KeyError when an unexpected column is requested.
+    """
     out_shape = (n_rows,) + shape_per_row
-    if col == "ship_label_per_src":
-        return np.full(out_shape, -1, dtype=dtype)
-    if col == "ships_bucket_per_src":
-        return np.full(out_shape, -1, dtype=dtype)
-    if col == "from_multihot":
-        return np.zeros(out_shape, dtype=dtype)
-    if col == "target_per_src":
-        return np.full(out_shape, -1, dtype=dtype)
-    if col == "ships_per_src":
-        return np.full(out_shape, -1, dtype=dtype)
     if col == "target_pid_per_src":
         return np.full(out_shape, MAX_PLANETS, dtype=dtype)
     if col == "ship_pred_label":
         return np.full(out_shape, -1.0, dtype=dtype)
     if col == "template_ctx":
+        return np.zeros(out_shape, dtype=dtype)
+    if col in ("effective_source_mask", "should_learn_ship"):
         return np.zeros(out_shape, dtype=dtype)
     raise KeyError(f"no default registered for missing column: {col}")
 
@@ -256,7 +244,8 @@ def convert_split(
         time.sleep(10)
     else:
         raise RuntimeError(
-            f"verify failed after 3 attempts: missing={missing} zero_byte={zero_byte} out_dir={out_dir}"
+            f"verify failed after 3 attempts: missing={missing} "
+            f"zero_byte={zero_byte} out_dir={out_dir}"
         )
 
     logger.info("done split=%s -> %s", parquet_path.name, out_dir)

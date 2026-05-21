@@ -1,30 +1,34 @@
-"""Replay → parquet preprocess for imitation/case8.
+"""Replay → parquet preprocess for imitation/case11 (per_planet head only).
 
-Per-frame supervision schema:
+Per-frame supervision schema (3-layer mask design):
 
-  - planet_feats : (MAX_PLANETS * 35,) float32
-  - global_feats : (20,)              float32
-  - planet_mask  : (MAX_PLANETS,)     bool
-  - my_planet_mask, target_mask : (MAX_PLANETS,) bool
+  - planet_feats : (MAX_PLANETS * PLANET_FEAT_DIM,) float32
+  - global_feats : (GLOBAL_FEAT_DIM,)              float32
+  - planet_mask  : (MAX_PLANETS,)                  bool  — layer1: existence
+  - target_mask  : (MAX_PLANETS,)                  bool  — layer1: physical-rule
   - candidate_feats : (MAX_PLANETS * CAND_K * CAND_FEAT_DIM,) float32
-  - candidate_mask  : (MAX_PLANETS * CAND_K,) bool
-  - candidate_pid   : (MAX_PLANETS * CAND_K,) int32
-  - cand_slot_per_src : (MAX_PLANETS,) int32  (-1 = src not active in label)
-                        0 = no-op label (src had option to fire but did not)
-                        1..K-1 = candidate slot the actual fired target maps to
+  - candidate_mask  : (MAX_PLANETS * CAND_K,)      bool
+  - candidate_pid   : (MAX_PLANETS * CAND_K,)      int32
+  - effective_source_mask : (MAX_PLANETS,)         bool  — layer2: my_planet & ships>0
+  - should_learn_ship     : (MAX_PLANETS,)         bool  — layer3: fire-only ship_head
+  - target_pid_per_src    : (MAX_PLANETS,)         int32 (0..P-1=fire target slot,
+                                                         P = no-op sentinel)
+  - ship_pred_label       : (MAX_PLANETS,)         float32 (log1p(ships) for
+                                                            fired sources, -1.0
+                                                            otherwise)
   - is_noop : bool
 
-For "fired" sources: reverse-resolve the (angle, ships) to a target planet id;
-look up that pid in candidate_pid; if found at slot s, set cand_slot_per_src=s;
-if not present in candidates (rare, K=8 might not include the actual target),
-set cand_slot_per_src=-1 (excluded from loss).
-
-For "not-fired my planets": cand_slot_per_src=0 (no-op label).
-For "not my planets": cand_slot_per_src=-1.
+Mask layering (Lux3-derived):
+  layer1 (invalid-action): target_mask -1e9 on softmax (decoder side)
+  layer2 (existence/ownership): effective_source_mask drives the target_head
+         source axis. encoder still sees all planets (enemy/neutral as
+         observation context).
+  layer3 (conditional head): ship_head loss only on should_learn_ship rows.
 """
 
 from __future__ import annotations
 
+import datetime
 import gzip
 import hashlib
 import json
@@ -45,32 +49,17 @@ import typer
 import yaml
 
 from pipeline.imitation.case11.policy import featurizer
-from pipeline.imitation.case11.policy.candidates import CAND_FEAT_DIM, CAND_K
 from pipeline.imitation.case11.policy.featurizer import (
     MAX_PLANETS,
     HistoryState,
 )
 from pipeline.imitation.case11.policy.geometry import Planet, aim_with_prediction
-from pipeline.imitation.case11.policy.templates import (
-    T_NO_OP,
-    classify_actual_target,
-)
 
 logger = logging.getLogger(__name__)
 
-UNUSED_LABEL = -1
 ANGLE_TOLERANCE = 0.20  # radians (~11.5deg) — angle reverse-resolve match window
 PROGRESS_LOG_EVERY = 100  # log every N episodes processed (kept or skipped)
 FLUSH_EVERY_FRAMES = 5000  # flush parquet rows when buffer reaches this size
-SHIPS_BUCKETS = 4  # 0:25%, 1:50%, 2:75%, 3:100% (case7 流)
-
-
-def _ships_bucket(ships: int, src_ships: int) -> int:
-    if src_ships <= 0:
-        return 0
-    ratio = max(0.0, min(1.0, ships / max(1, src_ships)))
-    bucket = int(round(ratio * (SHIPS_BUCKETS - 1) - 0.001))
-    return max(0, min(SHIPS_BUCKETS - 1, bucket))
 
 
 @dataclass(frozen=True)
@@ -201,7 +190,7 @@ def _build_frame(
     planet_feats = batch.planet_feats[0].numpy().astype(np.float32)
     global_feats = batch.global_feats[0].numpy().astype(np.float32)
     planet_mask = batch.planet_mask[0].numpy().astype(np.bool_)
-    my_planet_mask = batch.my_planet_mask[0].numpy().astype(np.bool_)
+    effective_source_mask = batch.effective_source_mask[0].numpy().astype(np.bool_)
     target_mask = batch.target_mask[0].numpy().astype(np.bool_)
     cand_feats = batch.candidate_feats[0].numpy().astype(np.float32)
     cand_mask = batch.candidate_mask[0].numpy().astype(np.bool_)
@@ -218,27 +207,25 @@ def _build_frame(
     comets = list(obs.get("comets") or [])
     comet_ids = set(obs.get("comet_planet_ids") or [])
 
-    cand_slot_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
-    ship_label_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
-    # 3-head labels (case7 流): from_multihot / target_per_src (template id) /
-    # ships_per_src (4-bucket).
-    from_multihot = np.zeros(MAX_PLANETS, dtype=np.bool_)
-    target_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
-    ships_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
-    # candidate_ships variant 用: ships を 4-bucket 化 (cand_slot fired のみ)。
-    ships_bucket_per_src = np.full(MAX_PLANETS, UNUSED_LABEL, dtype=np.int32)
+    # my_planet_mask は label 生成の素材としてのみ使う。BatchFeatures には
+    # effective_source_mask (my_planet & ships>0) しか乗らない。preprocess は
+    # 「自軍所有」自体を素材として参照する必要があるので、ships=0 source の
+    # default no-op label を埋めるためにここで再計算する。
+    my_planet_mask = np.zeros(MAX_PLANETS, dtype=np.bool_)
+    for slot, pid in enumerate(snap.planet_ids):
+        if pid < 0 or slot >= MAX_PLANETS:
+            continue
+        planet = by_id.get(int(pid))
+        if planet is None:
+            continue
+        if int(planet.owner) == player:
+            my_planet_mask[slot] = True
+
     # per_planet head 用ラベル: target slot 0..MAX_PLANETS-1 = fire to that slot,
-    # MAX_PLANETS = no-op sentinel (= NUM_TARGETS+1 と同義)。
+    # MAX_PLANETS = no-op sentinel.
     target_pid_per_src = np.full(MAX_PLANETS, MAX_PLANETS, dtype=np.int32)
     # ship_pred_label: log1p(ships) for fired sources, -1.0 otherwise.
     ship_pred_label = np.full(MAX_PLANETS, -1.0, dtype=np.float32)
-
-    # Default: my_planets that did not fire → label = 0 (no-op slot)
-    # per_planet 側は default = no-op (MAX_PLANETS) のまま放置 (上で初期化済み)
-    for slot in range(MAX_PLANETS):
-        if my_planet_mask[slot]:
-            cand_slot_per_src[slot] = 0
-            target_per_src[slot] = T_NO_OP
 
     fired_total = 0
     outside = 0
@@ -258,65 +245,37 @@ def _build_frame(
             src, angle, ships, planets, initial_by_id, ang_vel, comets, comet_ids
         )
         fired_total += 1
-        # 3-head label: from は fired を multihot、target は template 分類、
-        # ships は src.ships に対する比率の bucket。
-        from_multihot[slot] = True
-        ships_per_src[slot] = int(_ships_bucket(ships, src.ships))
         # per_planet ships regression label (log1p space).
         ship_pred_label[slot] = float(math.log1p(max(0, ships)))
         if target_pid is None:
-            target_template = T_NO_OP
-            cand_slot_per_src[slot] = UNUSED_LABEL
             outside += 1
+            continue
+        # per_planet target slot label (planet index in pid_to_slot).
+        tgt_slot = pid_to_slot.get(int(target_pid))
+        if tgt_slot is not None and 0 <= tgt_slot < MAX_PLANETS:
+            target_pid_per_src[slot] = int(tgt_slot)
         else:
-            # per_planet target slot label (planet index in pid_to_slot).
-            tgt_slot = pid_to_slot.get(int(target_pid))
-            if tgt_slot is not None and 0 <= tgt_slot < MAX_PLANETS:
-                target_pid_per_src[slot] = int(tgt_slot)
-            tgt_row = next(
-                (row for row in raw_planets if int(row[0]) == int(target_pid)), None
-            )
-            if tgt_row is None:
-                target_template = T_NO_OP
-            else:
-                target_template = int(
-                    classify_actual_target(
-                        list(raw_planets[slot]), tgt_row, raw_planets, player
-                    )
-                )
-            # candidate label: K=8 内に target_pid があれば slot_idx、なければ UNUSED。
-            slot_idx = -1
-            for k in range(1, CAND_K):
-                if int(cand_pid[slot, k]) == int(target_pid):
-                    slot_idx = k
-                    break
-            if slot_idx == -1:
-                cand_slot_per_src[slot] = UNUSED_LABEL
-                outside += 1
-            else:
-                cand_slot_per_src[slot] = slot_idx
-                ship_label_per_src[slot] = ships
-                ships_bucket_per_src[slot] = int(_ships_bucket(ships, src.ships))
-        target_per_src[slot] = int(target_template)
+            outside += 1
 
-    is_noop = bool(np.all(cand_slot_per_src[my_planet_mask] == 0))
+    is_noop = bool(np.all(target_pid_per_src[my_planet_mask] == MAX_PLANETS))
+
+    # effective_source_mask は featurizer 由来 (BatchFeatures から既に抽出)。
+    # should_learn_ship (layer3) は teacher action が "fire" の source のみ
+    # ship_head に学習させるためのマスク。
+    no_op_idx = MAX_PLANETS
+    should_learn_ship = effective_source_mask & (target_pid_per_src != no_op_idx)
 
     row = {
         "planet_feats": planet_feats.reshape(-1).tolist(),
         "global_feats": global_feats.tolist(),
         "planet_mask": planet_mask.tolist(),
-        "my_planet_mask": my_planet_mask.tolist(),
         "target_mask": target_mask.tolist(),
         "template_ctx": template_ctx.reshape(-1).tolist(),
         "candidate_feats": cand_feats.reshape(-1).tolist(),
         "candidate_mask": cand_mask.reshape(-1).tolist(),
         "candidate_pid": cand_pid.reshape(-1).tolist(),
-        "cand_slot_per_src": cand_slot_per_src.tolist(),
-        "ship_label_per_src": ship_label_per_src.tolist(),
-        "ships_bucket_per_src": ships_bucket_per_src.tolist(),
-        "from_multihot": from_multihot.tolist(),
-        "target_per_src": target_per_src.tolist(),
-        "ships_per_src": ships_per_src.tolist(),
+        "effective_source_mask": effective_source_mask.tolist(),
+        "should_learn_ship": should_learn_ship.tolist(),
         "target_pid_per_src": target_pid_per_src.tolist(),
         "ship_pred_label": ship_pred_label.tolist(),
         "is_noop": is_noop,
@@ -421,9 +380,29 @@ def _filter_index(
     index: pl.DataFrame,
     modes: list[str],
     rating_quantile: float,
+    recent_days: int | None = None,
+    top_winner_rank: int | None = None,
 ) -> tuple[pl.DataFrame, float]:
     df = index.filter(pl.col("mode").is_in(modes))
     df = df.filter(~pl.col("draw"))
+    if recent_days is not None and recent_days > 0:
+        start_d = df["started_at"].str.slice(0, 10).str.to_date(format="%Y-%m-%d")
+        max_raw = start_d.max()
+        if not isinstance(max_raw, datetime.date):
+            raise RuntimeError(f"started_at max is not a date: {max_raw!r}")
+        cutoff_d = max_raw - datetime.timedelta(days=int(recent_days))
+        df = (
+            df.with_columns(start_d.alias("_start_d"))
+            .filter(pl.col("_start_d") >= cutoff_d)
+            .drop("_start_d")
+        )
+    if top_winner_rank is not None and top_winner_rank > 0:
+        winner_rank = (
+            pl.when(pl.col("winner") == 0)
+            .then(pl.col("agent_0_team_rank"))
+            .otherwise(pl.col("agent_1_team_rank"))
+        )
+        df = df.filter((winner_rank > 0) & (winner_rank <= int(top_winner_rank)))
     rating_cols = [c for c in df.columns if c.endswith("_rating_mu")]
     rating = pl.concat([df.select(pl.col(c).alias("mu")) for c in rating_cols]).filter(
         pl.col("mu") > 0
@@ -444,18 +423,13 @@ def _arrow_schema() -> pa.Schema:
             pa.field("planet_feats", pa.list_(pa.float32())),
             pa.field("global_feats", pa.list_(pa.float32())),
             pa.field("planet_mask", pa.list_(pa.bool_())),
-            pa.field("my_planet_mask", pa.list_(pa.bool_())),
             pa.field("target_mask", pa.list_(pa.bool_())),
             pa.field("template_ctx", pa.list_(pa.float32())),
             pa.field("candidate_feats", pa.list_(pa.float32())),
             pa.field("candidate_mask", pa.list_(pa.bool_())),
             pa.field("candidate_pid", pa.list_(pa.int32())),
-            pa.field("cand_slot_per_src", pa.list_(pa.int32())),
-            pa.field("ship_label_per_src", pa.list_(pa.int32())),
-            pa.field("ships_bucket_per_src", pa.list_(pa.int32())),
-            pa.field("from_multihot", pa.list_(pa.bool_())),
-            pa.field("target_per_src", pa.list_(pa.int32())),
-            pa.field("ships_per_src", pa.list_(pa.int32())),
+            pa.field("effective_source_mask", pa.list_(pa.bool_())),
+            pa.field("should_learn_ship", pa.list_(pa.bool_())),
             pa.field("target_pid_per_src", pa.list_(pa.int32())),
             pa.field("ship_pred_label", pa.list_(pa.float32())),
             pa.field("is_noop", pa.bool_()),
@@ -514,25 +488,29 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     max_episodes = data_cfg.get("max_episodes")
     winners_only = bool(data_cfg.get("winners_only", False))
     top_team_rank = int(data_cfg.get("top_team_rank", 0) or 0)
+    recent_days_cfg = data_cfg.get("recent_days")
+    recent_days = int(recent_days_cfg) if recent_days_cfg else None
+    top_winner_rank_cfg = data_cfg.get("top_winner_rank")
+    top_winner_rank = int(top_winner_rank_cfg) if top_winner_rank_cfg else None
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
     base_dir = index_path.parent
 
     logger.info(
-        "preprocess case8 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
+        "preprocess case11 start: planet_dim=%d global_dim=%d "
         "modes=%s rating_q=%.2f val_split=%.2f max_episodes=%s "
-        "winners_only=%s top_team_rank=%d",
+        "winners_only=%s top_team_rank=%d recent_days=%s top_winner_rank=%s",
         featurizer.PLANET_FEAT_DIM,
         featurizer.GLOBAL_FEAT_DIM,
-        CAND_K,
-        CAND_FEAT_DIM,
         modes,
         rating_quantile,
         val_split,
         max_episodes,
         winners_only,
         top_team_rank,
+        recent_days,
+        top_winner_rank,
     )
 
     # Hive-partitioned index parquet has heterogeneous schemas across files —
@@ -552,7 +530,13 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     arrow_table = pa_ds.dataset(parquet_files, format="parquet").to_table()
     index = pl.from_arrow(arrow_table)
     assert isinstance(index, pl.DataFrame)
-    filtered, cutoff = _filter_index(index, modes, rating_quantile)
+    filtered, cutoff = _filter_index(
+        index,
+        modes,
+        rating_quantile,
+        recent_days=recent_days,
+        top_winner_rank=top_winner_rank,
+    )
     episodes_total = filtered.height
     if max_episodes is not None:
         filtered = filtered.head(int(max_episodes))

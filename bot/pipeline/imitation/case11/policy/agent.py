@@ -113,10 +113,22 @@ def _get_model() -> Case11Policy:
 
 
 def _maybe_reset_history(obs: dict[str, Any]) -> None:
+    """Reset history at episode boundaries.
+
+    2026-05-21 trap: the Rust simulator (`orbit_wars_rust.run_episode`) calls
+    the agent **3 times at step=0** (a probe + two real calls) before
+    advancing to step=1. The naive condition `step <= last_step` then
+    clobbers history on every duplicate-step call, which silently degrades
+    agents that depend on `from_multihot` / multi-step state. So we:
+      * clear only when this is the very first call of the process
+        (last_step is None), OR
+      * the simulator restarted (step strictly less than last_step).
+    Duplicate same-step calls are now idempotent w.r.t. history.
+    """
     step = int(obs.get("step", 0) or 0)
-    if step == 0:
+    if _HISTORY.last_step is None:
         _HISTORY.clear()
-    elif _HISTORY.last_step is not None and step <= _HISTORY.last_step:
+    elif step < _HISTORY.last_step:
         _HISTORY.clear()
 
 
@@ -127,6 +139,11 @@ def agent(obs: Any, *_: Any, **__: Any) -> list[list[int | float]]:
     # framework env.run() path, and the agent never produces a fire action.
     obs_dict = obs if isinstance(obs, dict) else dict(obs)
     _maybe_reset_history(obs_dict)
+    # 2026-05-21 trap: same step can call us multiple times under the Rust
+    # simulator (probe + real step calls). Skip the history.append in that
+    # case so the launch_event deque doesn't accumulate duplicates.
+    cur_step = int(obs_dict.get("step", 0) or 0)
+    update_allowed = _HISTORY.last_step is None or cur_step > _HISTORY.last_step
     model = _get_model()
     batch, snapshot = featurize(obs_dict, _HISTORY)
     with torch.no_grad():
@@ -141,5 +158,6 @@ def agent(obs: Any, *_: Any, **__: Any) -> list[list[int | float]]:
         head_mode=_HEAD_MODE,
         template_ctx=batch.template_ctx[0],
     )
-    update_history(_HISTORY, obs_dict, actions)
+    if update_allowed:
+        update_history(_HISTORY, obs_dict, actions)
     return actions

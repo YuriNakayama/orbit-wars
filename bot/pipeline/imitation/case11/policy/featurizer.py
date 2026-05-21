@@ -199,7 +199,10 @@ def featurize(
     n = min(len(raw_planets), MAX_PLANETS)
     planet_feats = torch.zeros((MAX_PLANETS, PLANET_FEAT_DIM), dtype=torch.float32)
     planet_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
-    my_planet_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
+    # effective_source_mask: my_planet & ships>0. Replaces the legacy
+    # my_planet_mask in BatchFeatures so encoder/decoder only sees planets
+    # that can actually fire (ships==0 sources are physical no-ops).
+    effective_source_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
     target_mask = torch.zeros(MAX_PLANETS, dtype=torch.bool)
     candidate_feats = torch.zeros(
         (MAX_PLANETS, CAND_K, CAND_FEAT_DIM), dtype=torch.float32
@@ -406,7 +409,11 @@ def featurize(
             planet_feats[slot, j] = feats[j]
         planet_mask[slot] = True
         if is_mine:
-            my_planet_mask[slot] = True
+            # effective_source_mask: my_planet & ships>0. ships==0 sources
+            # cannot fire so they are excluded from the source axis entirely
+            # (layer2 mask, Lux3-derived).
+            if ships_i > 0:
+                effective_source_mask[slot] = True
             my_planet_ids.append(int(pid))
             cand_feats_np, cand_mask_np, cand_pids = build_candidate_block(
                 list(raw_planets[slot]), raw_planets, player
@@ -492,8 +499,8 @@ def featurize(
     batch = BatchFeatures(
         planet_feats=planet_feats.unsqueeze(0),
         planet_mask=planet_mask.unsqueeze(0),
-        my_planet_mask=my_planet_mask.unsqueeze(0),
         target_mask=target_mask.unsqueeze(0),
+        effective_source_mask=effective_source_mask.unsqueeze(0),
         global_feats=global_feats.unsqueeze(0),
         template_ctx=template_ctx.unsqueeze(0),
         candidate_feats=candidate_feats.unsqueeze(0),

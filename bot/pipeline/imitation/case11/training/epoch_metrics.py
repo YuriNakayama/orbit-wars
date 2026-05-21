@@ -1,4 +1,13 @@
-"""Epoch-level diagnostic metrics for case11 imitation training."""
+"""Epoch-level diagnostic metrics for case11 imitation training (per_planet head).
+
+Two streams of metrics:
+
+  fire     binary: "did the source fire?" — derived from target_pid != no_op.
+  decision multi : "which target did the source pick?" — softmax over (P+1).
+
+The ship-pred regression head is summarized by ship_mae/ship_loss in the
+loss report and not duplicated here.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +27,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from pipeline.imitation.case11.policy.templates import NUM_TEMPLATES
 from pipeline.imitation.case11.policy.types import PolicyOutput
 from pipeline.imitation.case11.training.dataset import BatchedSample
 
@@ -38,16 +46,15 @@ class _MultiStore:
 class EpochMetricAccumulator:
     """Collect logits/labels and compute non-accuracy diagnostics per epoch.
 
-    Stores at most `max_samples` examples per metric stream. This keeps train
-    epochs bounded while still making validation AUC/F1/MAE comparable.
+    Stores at most `max_samples` examples per metric stream. Bounds train
+    epochs while still making validation AUC/F1 comparable.
     """
 
     def __init__(self, max_samples: int = 500_000) -> None:
         self.max_samples = max(0, int(max_samples))
         self.fire = _BinaryStore()
         self.decision = _MultiStore()
-        self.ships = _MultiStore()
-        self._counts = {"fire": 0, "decision": 0, "ships": 0}
+        self._counts = {"fire": 0, "decision": 0}
 
     def update(
         self,
@@ -55,25 +62,30 @@ class EpochMetricAccumulator:
         output: PolicyOutput,
         batch: BatchedSample,
     ) -> None:
-        my = batch.my_planet_mask.bool()
-        if head_mode == "three_head":
-            self._update_three_head(output, batch, my)
-        elif head_mode == "candidate_ships":
-            self._update_candidate_ships(output, batch, my)
-        elif head_mode == "template_ships":
-            self._update_template_ships(output, batch, my)
-        elif head_mode == "per_planet":
-            self._update_per_planet(output, batch, my)
-        elif head_mode == "dual":
-            self._update_three_head(output, batch, my)
-        else:
-            self._update_candidate_decision(output, batch, my)
+        if head_mode != "per_planet":
+            raise ValueError(
+                f"case11 supports only head_mode='per_planet', got {head_mode!r}"
+            )
+        # Restrict to fire-eligible sources (layer2). Same row selection as
+        # the loss in losses.py so metrics report on the trained subset.
+        active = batch.effective_source_mask.bool()
+        if not active.any():
+            return
+        # last index of (P+1) is the no-op sentinel.
+        no_op_idx = int(output.per_planet_logits.shape[-1]) - 1
+        probs = _to_numpy(torch.softmax(output.per_planet_logits[active], dim=-1))
+        labels = _to_numpy(batch.target_pid_per_src[active]).astype(np.int64)
+        self._add_binary(
+            "fire",
+            (labels != no_op_idx).astype(np.int64),
+            1.0 - probs[:, no_op_idx],
+        )
+        self._add_multi("decision", labels, probs)
 
     def compute(self) -> dict[str, float]:
         out: dict[str, float] = {}
         out.update(_prefix("fire", _binary_metrics(self.fire)))
         out.update(_prefix("decision", _multi_metrics(self.decision)))
-        out.update(_prefix("ships", _multi_metrics(self.ships)))
         return out
 
     def _room(self, name: str, n: int) -> int:
@@ -86,131 +98,17 @@ class EpochMetricAccumulator:
         n = self._room(name, int(y_true.shape[0]))
         if n <= 0:
             return
-        store = self.fire
-        store.y_true.append(y_true[:n].astype(np.int64, copy=False))
-        store.y_score.append(y_score[:n].astype(np.float64, copy=False))
+        self.fire.y_true.append(y_true[:n].astype(np.int64, copy=False))
+        self.fire.y_score.append(y_score[:n].astype(np.float64, copy=False))
         self._counts[name] += n
 
     def _add_multi(self, name: str, y_true: np.ndarray, y_prob: np.ndarray) -> None:
         n = self._room(name, int(y_true.shape[0]))
         if n <= 0:
             return
-        store = self.decision if name == "decision" else self.ships
-        store.y_true.append(y_true[:n].astype(np.int64, copy=False))
-        store.y_prob.append(y_prob[:n].astype(np.float64, copy=False))
+        self.decision.y_true.append(y_true[:n].astype(np.int64, copy=False))
+        self.decision.y_prob.append(y_prob[:n].astype(np.float64, copy=False))
         self._counts[name] += n
-
-    def _update_three_head(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-    ) -> None:
-        if output.from_logits is None or output.target_logits is None:
-            return
-        y_fire = _to_numpy(batch.from_multihot[my]).astype(np.int64)
-        s_fire = _to_numpy(torch.sigmoid(output.from_logits[my]))
-        self._add_binary("fire", y_fire, s_fire)
-
-        target_valid = my & (batch.target_per_src != -1)
-        if target_valid.any():
-            self._add_multi(
-                "decision",
-                _to_numpy(batch.target_per_src[target_valid]).astype(np.int64),
-                _to_numpy(torch.softmax(output.target_logits[target_valid], dim=-1)),
-            )
-        self._update_ships(output, batch, my, use_bucket=False)
-
-    def _update_candidate_ships(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-    ) -> None:
-        self._update_candidate_decision(output, batch, my)
-        self._update_ships(output, batch, my, use_bucket=True)
-
-    def _update_template_ships(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-    ) -> None:
-        if output.target_logits is None:
-            return
-        labels_full = torch.where(
-            batch.target_per_src >= 0,
-            batch.target_per_src,
-            torch.full_like(batch.target_per_src, NUM_TEMPLATES - 1),
-        )
-        probs = _to_numpy(torch.softmax(output.target_logits[my], dim=-1))
-        labels = _to_numpy(labels_full[my]).astype(np.int64)
-        self._add_binary(
-            "fire",
-            (labels != NUM_TEMPLATES - 1).astype(np.int64),
-            1.0 - probs[:, NUM_TEMPLATES - 1],
-        )
-        self._add_multi("decision", labels, probs)
-        self._update_ships(output, batch, my, use_bucket=False)
-
-    def _update_per_planet(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-    ) -> None:
-        if output.per_planet_logits is None:
-            return
-        # last index of (P+1) is the no-op sentinel.
-        no_op_idx = int(output.per_planet_logits.shape[-1]) - 1
-        if not my.any():
-            return
-        probs = _to_numpy(torch.softmax(output.per_planet_logits[my], dim=-1))
-        labels = _to_numpy(batch.target_pid_per_src[my]).astype(np.int64)
-        self._add_binary(
-            "fire",
-            (labels != no_op_idx).astype(np.int64),
-            1.0 - probs[:, no_op_idx],
-        )
-        self._add_multi("decision", labels, probs)
-
-    def _update_candidate_decision(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-    ) -> None:
-        if output.candidate_logits is None:
-            return
-        valid = my & (batch.cand_slot_per_src != -1)
-        if not valid.any():
-            return
-        probs = _to_numpy(torch.softmax(output.candidate_logits[valid], dim=-1))
-        labels = _to_numpy(batch.cand_slot_per_src[valid]).astype(np.int64)
-        self._add_binary("fire", (labels != 0).astype(np.int64), 1.0 - probs[:, 0])
-        self._add_multi("decision", labels, probs)
-
-    def _update_ships(
-        self,
-        output: PolicyOutput,
-        batch: BatchedSample,
-        my: torch.Tensor,
-        *,
-        use_bucket: bool,
-    ) -> None:
-        if output.ships_logits is None:
-            return
-        labels_tensor = (
-            batch.ships_bucket_per_src if use_bucket else batch.ships_per_src
-        )
-        valid = my & (labels_tensor != -1)
-        if not valid.any():
-            return
-        self._add_multi(
-            "ships",
-            _to_numpy(labels_tensor[valid]).astype(np.int64),
-            _to_numpy(torch.softmax(output.ships_logits[valid], dim=-1)),
-        )
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -300,4 +198,4 @@ def _ovr_auc_present_labels(
 
 
 def _prefix(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
-    return {f"{prefix}_{key}": value for key, value in metrics.items()}
+    return {f"{prefix}_{k}": v for k, v in metrics.items()}
