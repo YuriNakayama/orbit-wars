@@ -329,6 +329,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
     },
+    # reinforce_case1_kaggle_smoke: Kaggle Kernel smoke variant. BC warm-start
+    # disabled because the Kaggle Kernel template has no DVC pull cell to
+    # fetch case9 per_planet BC weights. 6 iter x 4 ep — verifies that
+    # reinforce/case1 boots and PPO update / artifact collection survive on
+    # Kaggle GPU.
+    "reinforce_case1_kaggle_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_smoke",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
