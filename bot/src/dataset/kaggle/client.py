@@ -113,10 +113,17 @@ def _post(
     *,
     timeout: float,
     base_url: str = BASE_URL,
+    bearer_token: str | None = None,
 ) -> dict[str, Any]:
     url = f"{base_url}{path}"
+    # Bearer が指定された場合のみ Authorization ヘッダを上書き。session.auth (Basic)
+    # は使われないが、新エンドポイント側 anti-abuse 対策で公式 SDK と同じ Bearer
+    # 認証を使う狙い。それ以外 (GetTeam / ListEpisodes) は旧 path + Basic のまま。
+    extra_headers: dict[str, str] | None = None
+    if bearer_token:
+        extra_headers = {"Authorization": f"Bearer {bearer_token}"}
     try:
-        resp = session.post(url, json=body, timeout=timeout)
+        resp = session.post(url, json=body, timeout=timeout, headers=extra_headers)
         resp.raise_for_status()
         payload = resp.json()
     except requests.exceptions.RequestException as exc:
@@ -184,14 +191,20 @@ def get_episode_replay(
     新エンドポイント (api.kaggle.com/v1/competitions.CompetitionApiService) を
     使用する。旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com)
     は 2026-05 ごろ廃止され 404 を返すため。
+
+    `KAGGLE_API_TOKEN` 環境変数が設定されていれば Bearer 認証で叩く (公式 SDK
+    と同じ経路)。GitHub Actions の共有 IP からの Basic auth + 短時間連続 req は
+    anti-abuse で 401 になるため、Bearer に切り替えると緩和される想定。
     """
 
+    bearer = os.environ.get("KAGGLE_API_TOKEN") or None
     return _post(
         session,
         "CompetitionApiService/GetEpisodeReplay",
         {"episodeId": episode_id},
         timeout=timeout,
         base_url=REPLAY_BASE_URL,
+        bearer_token=bearer,
     )
 
 
