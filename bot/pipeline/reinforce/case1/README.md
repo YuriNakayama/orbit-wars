@@ -100,3 +100,88 @@ agent registry: `rl_v1` として `bot/src/dataset/selfplay/agents.py` に登録
 - **inference**: greedy argmax (target) + Gaussian 平均 (ships) で
   `agent.py` の `greedy_action` 経路を通る。
 ```
+
+## JAX 化 (2026-05-21、PR #74)
+
+PPO 学習を end-to-end JAX 化し、PyTorch baseline (270s/iter) に対して
+**GPU で 17-18× の高速化** を達成。100-iter 学習が **7.5h → 25 min** に短縮。
+
+### 速度比較 (16 ep × 500 step / iter)
+
+| 環境 | wall-clock | speedup | 内訳 |
+|---|---|---|---|
+| PyTorch baseline (pod CPU) | 270s | 1.0× | rollout 247s + update 23s |
+| JAX on M-series CPU (laptop) | 16.7s | **16×** | warm |
+| JAX on RTX 4090 + W6-a (warm) | **15s** | **17-18×** | rollout 14s + update **0.54s** |
+
+PPO update 単体は **92× 高速化** (50s → 0.54s)。warm iter は rollout 14s が
+支配的で、scan body の per-step compute density (1.8 ms/step on RTX 4090)
+が現状の上限。
+
+### 実装の地図
+
+PyTorch 版と並走する形で `*_jax.py` を新設:
+
+```
+pipeline/reinforce/case1/
+├── policy/
+│   ├── featurizer_jax.py      JAX featurizer (planet 41 + global 20 + template_ctx + candidate + timeline)
+│   ├── model_jax.py           ActorCriticJax (Equinox 移植 + load_bc_weights_jax)
+│   ├── sampling_jax.py        sample_action_jax + sampled_action_to_env_actions
+│   └── sampling_eval_jax.py   evaluate_actions_jax (PPO update での log_prob 再計算)
+└── training/
+    ├── rollout_jax.py         collect_rollout_jax (vmap over episodes, lax.scan over horizon)
+    ├── ppo_jax.py             ppo_update_jax (Optax + Equinox autograd, 単一 jit)
+    └── train_jax.py           end-to-end PPO loop
+```
+
+依存: `equinox>=0.11`, `optax>=0.2`。GPU 実行時は `[dependency-groups] cuda`
+で `jax-cuda12-plugin / pjrt + nvidia-cudnn-cu12>=9.8` を opt-in install
+(`uv sync --no-dev --group env --group cuda`, Linux marker)。
+
+### Parity 保証
+
+- **JAX env vs Rust simulator**: trajectory parity 1e-5 (Rust と 500-step
+  完全一致、622 件 jax_env tests)
+- **JAX featurizer vs PyTorch**: tol=1e-4 で全 41 planet + 20 global + 40
+  template_ctx + 14×8 candidate + 6 timeline 列が bit 一致 (74 件
+  `test_featurizer_jax_parity.py`)
+- **JAX model vs PyTorch ActorCritic**: forward output parity 1e-6
+  (7 件 `test_model_jax_parity.py`、3.1M params 完全一致)
+
+BC 重み (case9_per_planet) は `load_bc_weights_jax(model, weights_path)`
+で PyTorch `.pt` から numpy 経由でロード可能。
+
+### Phase の流れ
+
+W1 → W2a-f → W3 → W4 → W4-c → W5 → W6-a の 7 段階。詳細は
+`docs/experiment/reinforce/20260521_case1_jax_acceleration/iter1_result.md`
+に記録 (Numbers / Diagnosis / Decision / Artifacts)。
+
+W6-b (env.reset JAX 化) と W6-c (学習ループ lax.scan) は **deferred** —
+rollout の真の bottleneck は scan body の per-step compute density で、
+reset 高速化は ROI 低いと判明。さらなる速度向上を狙うなら bf16 化や
+vmap batch 拡大が次の選択肢。
+
+### 使い方 (JAX 学習)
+
+```bash
+cd bot
+
+# CPU smoke (1 iter × 4 ep × 50 step)
+uv run python -m pipeline.reinforce.case1.training.train_jax \
+  --config pipeline/reinforce/case1/configs/train_jax_smoke.yaml
+
+# 本番 (5 iter × 16 ep × 500 step、BC warm-start + kl anchor)
+uv run python -m pipeline.reinforce.case1.training.train_jax \
+  --config pipeline/reinforce/case1/configs/train_jax.yaml
+
+# RunPod GPU bench (現状の wall-clock を pod で計測)
+git push origin <branch>
+dev/runpod train <sha> --case bench_rollout_gpu --cloud-type ALL
+```
+
+train_jax の出力は PyTorch 版 (`training/train.py`) と並走可能。`best.pt`
+は numpy npz として保存される (JAX leaves を直接 dump)。PyTorch inference
+パスへの再ロードは未対応 (本 PR スコープ外、follow-up)。
+
