@@ -131,7 +131,7 @@ fi
 # .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
 # boto3 default credential chain がそのまま拾う。
 # 焼込み済の場合は dvc pull が cache hit でほぼゼロ秒で完了する.
-uv run --project backend dvc pull data/lake/kaggle_episodes/matches.dvc
+uv run --project backend dvc pull data/lake/kaggle_episodes/matches/index.parquet.dvc
 uv run --project backend dvc pull
 
 echo "[onstart] step=mkdir_run"

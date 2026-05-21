@@ -97,7 +97,7 @@ def _record_from_dict(row: dict[str, Any]) -> MatchRecord:
         agent_versions=tuple(row["agent_versions"]),
         agent_scores=tuple(row["agent_scores"]),
         agent_timings=timings,
-        replay_path=str(row["replay_path"]),
+        replay_uri=str(row["replay_uri"]),
         git_sha=str(row["git_sha"]),
     )
 
@@ -133,5 +133,5 @@ def run_episodes(spec: RunSpec, progress: Progress | None = None) -> list[MatchR
         if progress is not None and task_id is not None:
             progress.advance(task_id)
 
-    recorder.write_run(records, replay_bytes, spec.data_root)
+    recorder.write_run(records, replay_bytes, spec.data_root, source="selfplay")
     return records

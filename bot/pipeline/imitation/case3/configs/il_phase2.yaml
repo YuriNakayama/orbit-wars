@@ -8,7 +8,6 @@ seed: 0
 
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
-  replay_dir: data/lake/kaggle_episodes/matches/replays
   featurizer: phase2
   out_train: data/mart/imitation/case3/train_phase2_fixed.parquet
   out_val: data/mart/imitation/case3/val_phase2_fixed.parquet

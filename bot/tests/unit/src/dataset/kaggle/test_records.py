@@ -93,7 +93,10 @@ def test_build_match_record_1v1_winner_by_reward() -> None:
     assert record.agent_names == ("kaggle_sub_111", "kaggle_sub_222")
     assert record.agent_kaggle_meta[0].rating_mu == pytest.approx(1490.0)
     assert record.agent_kaggle_meta[0].team_id == 15637383
-    assert record.replay_path == "replays/kaggle_ep_7.json.gz"
+    assert (
+        record.replay_uri
+        == "s3://orbit-wars-dvc-286854171013/replays/kaggle/kaggle_ep_7.json.gz"
+    )
 
 
 def test_build_match_record_ffa4_draw_when_tied() -> None:

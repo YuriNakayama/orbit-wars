@@ -11,6 +11,45 @@ import pytest
 from dataset.kaggle import scraper
 from dataset.kaggle.rate_limit import TokenBucket
 from dataset.kaggle.types import ScrapeSpec, TeamRank
+from dataset.storage import recorder
+from dataset.storage.paths import REPLAY_S3_BUCKET, REPLAY_S3_PREFIX
+
+
+class _FakeFile:
+    def __init__(self, key: str, mode: str, backing: dict[str, bytes]) -> None:
+        self._key = key
+        self._mode = mode
+        self._backing = backing
+        self._buf = bytearray()
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if "w" in self._mode:
+            self._backing[self._key] = bytes(self._buf)
+
+    def write(self, data: bytes) -> int:
+        self._buf.extend(data)
+        return len(data)
+
+    def read(self) -> bytes:
+        return self._backing[self._key]
+
+
+class _FakeFS:
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self._store = store
+
+    def open(self, path: str, mode: str = "rb"):  # type: ignore[no-untyped-def]
+        return _FakeFile(path.removeprefix("s3://"), mode, self._store)
+
+
+@pytest.fixture
+def fake_s3(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(recorder, "_s3", lambda: _FakeFS(store))
+    return store
 
 
 def _team(team_id: int, *, rank: int = 1) -> TeamRank:
@@ -127,7 +166,9 @@ def test_run_records_carry_team_rank(tmp_path: Path) -> None:
     assert int(df.row(0, named=True)["agent_0_team_rank"]) == 42
 
 
-def test_run_writes_records_and_replays(tmp_path: Path) -> None:
+def test_run_writes_records_and_replays(
+    tmp_path: Path, fake_s3: dict[str, bytes]
+) -> None:
     spec = _make_spec(tmp_path)
     episodes = [_episode(1), _episode(2, agent_count=4)]
 
@@ -145,9 +186,9 @@ def test_run_writes_records_and_replays(tmp_path: Path) -> None:
     assert result.episodes_fetched == 2
     assert result.records_written == 2
     assert result.replays_written == 2
-    replays_dir = tmp_path / "matches" / "replays"
-    assert (replays_dir / "kaggle_ep_1.json.gz").exists()
-    assert (replays_dir / "kaggle_ep_2.json.gz").exists()
+    prefix = f"{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/kaggle"
+    assert f"{prefix}/kaggle_ep_1.json.gz" in fake_s3
+    assert f"{prefix}/kaggle_ep_2.json.gz" in fake_s3
 
 
 def test_run_dry_run_skips_disk_writes(tmp_path: Path) -> None:

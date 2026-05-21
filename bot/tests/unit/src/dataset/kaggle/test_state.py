@@ -41,7 +41,7 @@ def _record(
             AgentTiming(0, 0.0, 0.0, 0.0),
             AgentTiming(0, 0.0, 0.0, 0.0),
         ),
-        replay_path=f"replays/{match_id}.json.gz",
+        replay_uri=f"replays/{match_id}.json.gz",
         git_sha="",
         source=source,
         episode_id=episode_id,

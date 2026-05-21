@@ -36,7 +36,7 @@ def _record(
         agent_versions=tuple("v" for _ in range(n)),
         agent_scores=tuple(0 for _ in range(n)),
         agent_timings=timings,
-        replay_path="",
+        replay_uri="",
         git_sha="",
     )
 

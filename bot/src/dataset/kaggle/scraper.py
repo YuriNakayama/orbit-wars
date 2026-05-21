@@ -99,7 +99,7 @@ def _flush(acc: _Accumulator, spec: ScrapeSpec) -> tuple[int, int]:
         return 0, 0
     recorder.write_records(acc.buffered_records, spec.data_root)
     for match_id, payload in acc.buffered_replays.items():
-        recorder.write_replay(match_id, payload, spec.data_root)
+        recorder.write_replay(match_id, payload, source="kaggle")
     written_records = len(acc.buffered_records)
     written_replays = len(acc.buffered_replays)
     acc.buffered_records = []

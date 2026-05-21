@@ -26,7 +26,7 @@ def _sample_record(num_agents: int = 2) -> MatchRecord:
         agent_versions=tuple("abc1234" for _ in range(num_agents)),
         agent_scores=tuple(10 + i for i in range(num_agents)),
         agent_timings=timings,
-        replay_path="replays/m1.json.gz",
+        replay_uri="replays/m1.json.gz",
         git_sha="abc1234",
     )
 

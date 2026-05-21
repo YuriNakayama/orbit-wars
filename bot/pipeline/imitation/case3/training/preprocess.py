@@ -7,7 +7,6 @@ included.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import logging
@@ -21,6 +20,7 @@ import polars as pl
 import typer
 import yaml
 
+from dataset.storage.loader import load_replay_payload_from_uri
 from pipeline.imitation.case3.policy import featurizer_phase2
 from pipeline.imitation.case3.policy.featurizer_phase2 import (
     MAX_PLANETS,
@@ -223,13 +223,12 @@ def _build_frame(
 
 
 def _iter_episode_frames(
-    replay_path: Path,
+    replay_uri: str,
     player_slots: list[int],
     featurizer_mod: Any,
     featurizer_name: str,
 ) -> list[dict[str, Any]]:
-    with gzip.open(replay_path, "rt") as f:
-        data = json.load(f)
+    data = load_replay_payload_from_uri(replay_uri)
     steps = data.get("steps", [])
     out: list[dict[str, Any]] = []
     # Per-slot history for phase2: mutated in-place across an episode.
@@ -371,7 +370,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
-    base_dir = index_path.parent
     featurizer_name = str(data_cfg.get("featurizer", "baseline"))
     if featurizer_name not in FEATURIZERS:
         raise ValueError(
@@ -402,13 +400,14 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         slots = _player_slots(rec, _num_player_slots(rec, modes))
         if not slots:
             continue
-        rp = rec.get("replay_path") or ""
-        replay_path = (base_dir / rp).resolve() if rp else None
-        if replay_path is None or not replay_path.exists():
+        uri = rec.get("replay_uri") or ""
+        if not uri:
             continue
-        frames = _iter_episode_frames(
-            replay_path, slots, featurizer_mod, featurizer_name
-        )
+        try:
+            frames = _iter_episode_frames(uri, slots, featurizer_mod, featurizer_name)
+        except (OSError, ValueError) as exc:
+            logger.warning("skip replay %s: %s", uri, exc)
+            continue
         if not frames:
             continue
         bucket = _split_episode(str(rec["match_id"]), val_split)

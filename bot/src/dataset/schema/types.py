@@ -80,7 +80,7 @@ class MatchRecord:
     agent_versions: tuple[str, ...]
     agent_scores: tuple[int, ...]
     agent_timings: tuple[AgentTiming, ...]
-    replay_path: str
+    replay_uri: str
     git_sha: str
     source: str = SOURCE_SELFPLAY
     episode_id: int = -1
@@ -99,7 +99,7 @@ class MatchRecord:
             "turns": self.turns,
             "winner": self.winner,
             "draw": self.draw,
-            "replay_path": self.replay_path,
+            "replay_uri": self.replay_uri,
             "git_sha": self.git_sha,
             "source": self.source,
             "episode_id": self.episode_id,
@@ -196,7 +196,7 @@ class MatchRecord:
             agent_versions=tuple(versions),
             agent_scores=tuple(scores),
             agent_timings=tuple(timings),
-            replay_path=str(row.get("replay_path", "")),
+            replay_uri=str(row.get("replay_uri", "")),
             git_sha=str(row.get("git_sha", "")),
             source=str(row.get("source", SOURCE_SELFPLAY) or SOURCE_SELFPLAY),
             episode_id=int(row.get("episode_id", -1)),

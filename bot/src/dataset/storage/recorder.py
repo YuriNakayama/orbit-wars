@@ -1,13 +1,17 @@
-"""Persist match records and replay bytes to local disk."""
+"""Persist match records (index) locally and replay bytes to S3."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import polars as pl
+import s3fs
 
 from dataset.schema import MatchRecord
-from dataset.storage.paths import index_root, replays_root
+from dataset.storage.paths import index_root, replay_uri
+
+logger = logging.getLogger(__name__)
 
 
 def _partition_dir(data_root: Path, mode: str) -> Path:
@@ -46,21 +50,43 @@ def write_records(records: list[MatchRecord], data_root: Path) -> list[Path]:
     return written
 
 
-def write_replay(match_id: str, replay_bytes: bytes, data_root: Path) -> Path:
-    replays_dir = replays_root(data_root)
-    replays_dir.mkdir(parents=True, exist_ok=True)
-    target = replays_dir / f"{match_id}.json.gz"
-    target.write_bytes(replay_bytes)
-    return target
+def _s3() -> s3fs.S3FileSystem:
+    # Anonymous=False uses AWS_* env vars / shared credentials / IAM role.
+    return s3fs.S3FileSystem()
+
+
+def write_replay(match_id: str, replay_bytes: bytes, *, source: str) -> str:
+    """Write a replay payload to S3 and return its s3:// URI.
+
+    `source` must be `"kaggle"` or `"selfplay"`. The URI returned matches
+    `paths.replay_uri(match_id, source)` and is what consumers should store
+    in `MatchRecord.replay_uri`.
+    """
+
+    uri = replay_uri(match_id, source)
+    fs = _s3()
+    # s3fs writes via `with fs.open(...) as f: f.write(bytes)` — atomic per object.
+    with fs.open(uri, "wb") as f:
+        f.write(replay_bytes)
+    logger.debug("wrote replay %s (%d bytes)", uri, len(replay_bytes))
+    return uri
 
 
 def write_run(
     records: list[MatchRecord],
     replay_bytes: dict[str, bytes],
     data_root: Path,
-) -> list[Path]:
-    """Write all records and replays for a completed run."""
-    written = write_records(records, data_root)
-    for match_id, payload in replay_bytes.items():
-        written.append(write_replay(match_id, payload, data_root))
-    return written
+    *,
+    source: str,
+) -> tuple[list[Path], list[str]]:
+    """Write all records and replays for a completed run.
+
+    Returns (written_index_files, written_replay_uris).
+    """
+
+    written_index = write_records(records, data_root)
+    written_uris: list[str] = [
+        write_replay(match_id, payload, source=source)
+        for match_id, payload in replay_bytes.items()
+    ]
+    return written_index, written_uris

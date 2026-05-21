@@ -16,6 +16,7 @@ from typing import Any
 
 from dataset.schema import AgentTiming, MatchSpec
 from dataset.selfplay.agents import resolve
+from dataset.storage.paths import replay_uri
 
 TIMEOUT_THRESHOLD_SEC = 1.0
 
@@ -118,12 +119,12 @@ def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
     agent_timings = tuple(_summarize_timings(t) for t in timings_per_agent)
 
     replay_bytes: bytes | None = None
-    replay_path = ""
+    replay_uri_str = ""
     if spec.save_replay:
         payload = env.toJSON() if hasattr(env, "toJSON") else {"steps": env.steps}
         encoded = json.dumps(payload, default=str).encode("utf-8")
         replay_bytes = gzip.compress(encoded)
-        replay_path = f"replays/{spec.match_id}.json.gz"
+        replay_uri_str = replay_uri(spec.match_id, "selfplay")
 
     record = {
         "match_id": spec.match_id,
@@ -139,7 +140,7 @@ def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
         "agent_versions": tuple(a.version for a in spec.agents),
         "agent_scores": tuple(scores),
         "agent_timings": agent_timings,
-        "replay_path": replay_path,
+        "replay_uri": replay_uri_str,
         "git_sha": spec.agents[0].version if spec.agents else "",
     }
     return record, replay_bytes

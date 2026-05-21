@@ -17,5 +17,6 @@ df
 
 # %%
 match_id = df["match_id"][0]
-env = load_replay(match_id, data_root=DATA_ROOT)
+# Source is "selfplay" for data/output matches and "kaggle" for kaggle_episodes.
+env = load_replay(match_id, source="selfplay")
 env.render(mode="ipython", width=800, height=600)

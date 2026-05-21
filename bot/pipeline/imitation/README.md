@@ -1,6 +1,6 @@
 # Imitation Learning Cases
 
-過去 Kaggle 上位リプレイ (`data/lake/kaggle_episodes/matches/`) からの **行動クローニング (BC)** で
+過去 Kaggle 上位リプレイ (index: `data/lake/kaggle_episodes/matches/index.parquet/`, payload: `s3://orbit-wars-dvc-286854171013/replays/kaggle/`) からの **行動クローニング (BC)** で
 動く PyTorch エージェント群。各 case は独立提出パッケージで、`rulebase/case1` (`baseline_v1`, LB897) 相手に
 1v1 勝率 ≥ 50% を目標に改善を重ねる。
 

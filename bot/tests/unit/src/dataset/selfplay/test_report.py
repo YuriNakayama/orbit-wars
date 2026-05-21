@@ -35,7 +35,7 @@ def _record(
         agent_versions=("v", "v"),
         agent_scores=(0, 0),
         agent_timings=timings,
-        replay_path="",
+        replay_uri="",
         git_sha="",
     )
 

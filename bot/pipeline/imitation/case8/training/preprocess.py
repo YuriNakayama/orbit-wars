@@ -25,7 +25,6 @@ For "not my planets": cand_slot_per_src=-1.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import logging
@@ -44,6 +43,7 @@ import pyarrow.parquet as pq
 import typer
 import yaml
 
+from dataset.storage.loader import load_replay_payload_from_uri
 from pipeline.imitation.case8.policy import featurizer
 from pipeline.imitation.case8.policy.candidates import CAND_FEAT_DIM, CAND_K
 from pipeline.imitation.case8.policy.featurizer import (
@@ -235,11 +235,10 @@ def _build_frame(
 
 
 def _iter_episode_frames(
-    replay_path: Path,
+    replay_uri: str,
     player_slots: list[int],
 ) -> tuple[list[dict[str, Any]], int, int]:
-    with gzip.open(replay_path, "rt") as f:
-        data = json.load(f)
+    data = load_replay_payload_from_uri(replay_uri)
     steps = data.get("steps", [])
     out: list[dict[str, Any]] = []
     histories: dict[int, HistoryState] = {slot: HistoryState() for slot in player_slots}
@@ -285,7 +284,6 @@ class _EpisodeResult:
 
 def _process_episode(
     rec: dict[str, Any],
-    base_dir: Path,
     val_split: float,
     num_player_slots: int,
 ) -> _EpisodeResult:
@@ -298,13 +296,17 @@ def _process_episode(
             bucket="", frames=[], fired=0, outside=0, skip_reason="no_slots"
         )
     slots = list(range(num_player_slots))
-    rp = rec.get("replay_path") or ""
-    replay_path = (base_dir / rp).resolve() if rp else None
-    if replay_path is None or not replay_path.exists():
+    uri = rec.get("replay_uri") or ""
+    if not uri:
         return _EpisodeResult(
             bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
         )
-    frames, fired, outside = _iter_episode_frames(replay_path, slots)
+    try:
+        frames, fired, outside = _iter_episode_frames(uri, slots)
+    except (OSError, ValueError):
+        return _EpisodeResult(
+            bucket="", frames=[], fired=0, outside=0, skip_reason="no_replay"
+        )
     if not frames:
         return _EpisodeResult(
             bucket="", frames=[], fired=fired, outside=outside, skip_reason="no_frames"
@@ -406,7 +408,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
     index_path = _abspath(data_cfg["kaggle_index_root"])
-    base_dir = index_path.parent
 
     logger.info(
         "preprocess case8 start: planet_dim=%d global_dim=%d cand_K=%d cand_dim=%d "
@@ -515,7 +516,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             for processed, rec in enumerate(rows, start=1):
                 try:
                     result = _process_episode(
-                        rec, base_dir, val_split, _num_player_slots(rec, modes)
+                        rec, val_split, _num_player_slots(rec, modes)
                     )
                     _consume_result(result)
                 finally:
@@ -534,7 +535,6 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                     fut = pool.submit(
                         _process_episode,
                         rec,
-                        base_dir,
                         val_split,
                         _num_player_slots(rec, modes),
                     )

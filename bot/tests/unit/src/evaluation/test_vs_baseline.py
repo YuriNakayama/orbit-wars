@@ -21,7 +21,7 @@ def _record(winner: int, *, draw: bool = False) -> MatchRecord:
         agent_versions=("v0", "v0"),
         agent_scores=(0, 0),
         agent_timings=tuple(),
-        replay_path="",
+        replay_uri="",
         git_sha="abc",
     )
 

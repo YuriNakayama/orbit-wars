@@ -25,14 +25,10 @@ class PolicyOutput:
     """All variants populate the fields they use; others are None."""
 
     from_logits: torch.Tensor | None = None
-    target_logits: torch.Tensor | None = (
-        None  # (B, P, NUM_TEMPLATES) — template_ships
-    )
+    target_logits: torch.Tensor | None = None  # (B, P, NUM_TEMPLATES) — template_ships
     # (B, P, ships_buckets) — candidate_ships / template_ships
     ships_logits: torch.Tensor | None = None
-    candidate_logits: torch.Tensor | None = (
-        None  # (B, P, CAND_K) — candidate_ships
-    )
+    candidate_logits: torch.Tensor | None = None  # (B, P, CAND_K) — candidate_ships
     ship_pred: torch.Tensor | None = None
 
 

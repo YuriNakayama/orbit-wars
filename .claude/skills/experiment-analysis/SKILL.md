@@ -160,7 +160,7 @@ Do not auto-spawn other skills. Suggest by name only.
 
 ```bash
 python3 .claude/skills/experiment-analysis/scripts/pick_match_pair.py \
-  --replays-dir /Users/user/project/orbit-wars/data/lake/selfplay/matches/replays \
+  --replays-uri-prefix s3://orbit-wars-dvc-286854171013/replays/selfplay \
   --self-player-id 1 \
   --limit 200
 ```

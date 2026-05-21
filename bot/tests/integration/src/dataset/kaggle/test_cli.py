@@ -111,7 +111,9 @@ def test_list_empty_prints_no_matches(tmp_path: Path) -> None:
     assert "no matches found" in result.stdout
 
 
-def test_inspect_reads_stored_replay(tmp_path: Path) -> None:
+def test_inspect_reads_stored_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     payload = {
         "name": "orbit_wars",
         "steps": [
@@ -119,16 +121,37 @@ def test_inspect_reads_stored_replay(tmp_path: Path) -> None:
             [{"status": "DONE", "reward": 10.0}, {"status": "DONE", "reward": -5.0}],
         ],
     }
-    replays = tmp_path / "matches" / "replays"
-    replays.mkdir(parents=True)
-    (replays / "kaggle_ep_42.json.gz").write_bytes(
-        gzip.compress(json.dumps(payload).encode("utf-8"))
-    )
+    raw = gzip.compress(json.dumps(payload).encode("utf-8"))
+
+    # Stub `loader._s3()` with an in-memory store seeded for the kaggle URI.
+    from dataset.storage import loader
+    from dataset.storage.paths import REPLAY_S3_BUCKET, REPLAY_S3_PREFIX
+
+    store = {
+        f"{REPLAY_S3_BUCKET}/{REPLAY_S3_PREFIX}/kaggle/kaggle_ep_42.json.gz": raw,
+    }
+
+    class _FakeFile:
+        def __init__(self, key: str, mode: str) -> None:
+            self._key = key
+            self._mode = mode
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def read(self) -> bytes:
+            return store[self._key]
+
+    class _FakeFS:
+        def open(self, path: str, mode: str = "rb"):  # type: ignore[no-untyped-def]
+            return _FakeFile(path.removeprefix("s3://"), mode)
+
+    monkeypatch.setattr(loader, "_s3", lambda: _FakeFS())
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.app, ["kaggle", "inspect", "42", "--data-root", str(tmp_path)]
-    )
+    result = runner.invoke(cli.app, ["kaggle", "inspect", "42"])
     assert result.exit_code == 0, result.stdout
     assert "episode_id: 42" in result.stdout
     assert "turns: 2" in result.stdout

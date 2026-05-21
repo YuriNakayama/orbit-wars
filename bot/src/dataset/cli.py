@@ -191,10 +191,14 @@ def list_cmd(
 @app.command("replay-inspect")
 def replay_inspect(
     match_id: str = typer.Argument(..., help="match_id to inspect."),
-    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+    source: str = typer.Option(
+        "selfplay",
+        "--source",
+        help="Replay source layout: 'selfplay' or 'kaggle'.",
+    ),
 ) -> None:
     """Print terminal observation and winner for a stored replay."""
-    payload = loader.load_replay_payload(match_id, data_root=data_root)
+    payload = loader.load_replay_payload(match_id, source=source)
     steps = payload.get("steps", [])
     if not steps:
         console.print("[red]replay has no steps[/red]")
@@ -315,8 +319,8 @@ def kaggle_scrape_fetch(
         "",
         "--checkpoint-cmd",
         help="Shell command to run at each checkpoint (e.g. 'dvc commit -f "
-        "data/lake/kaggle_episodes/matches.dvc && dvc push'). Receives "
-        "CHECKPOINT_IDX/CHECKPOINT_TOTAL env vars.",
+        "data/lake/kaggle_episodes/matches/index.parquet.dvc && dvc push'). "
+        "Receives CHECKPOINT_IDX/CHECKPOINT_TOTAL env vars.",
     ),
     finalize_cmd: str = typer.Option(
         "",
@@ -452,13 +456,10 @@ def kaggle_list(
 @kaggle_app.command("inspect")
 def kaggle_inspect(
     episode_id: int = typer.Argument(..., help="Kaggle episode id."),
-    data_root: Path = typer.Option(
-        DEFAULT_KAGGLE_ROOT, "--data-root", help="Root directory."
-    ),
 ) -> None:
     """Print turns / status / reward for a stored Kaggle episode."""
 
-    payload = loader.load_replay_payload(f"kaggle_ep_{episode_id}", data_root=data_root)
+    payload = loader.load_replay_payload(f"kaggle_ep_{episode_id}", source="kaggle")
     steps = payload.get("steps", [])
     if not steps:
         console.print("[red]replay has no steps[/red]")

@@ -3,7 +3,6 @@ seed: 0
 
 data:
   kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
-  replay_dir: data/lake/kaggle_episodes/matches/replays
   featurizer: baseline       # baseline (planet=18, global=11) or phase1 (planet=33, global=16)
   out_train: data/mart/imitation/case2/train_baseline.parquet
   out_val: data/mart/imitation/case2/val_baseline.parquet
