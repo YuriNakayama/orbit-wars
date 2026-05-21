@@ -18,6 +18,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 BASE_URL = "https://www.kaggle.com/api/i/competitions."
+# GetEpisodeReplay は 2026-05 ごろ Kaggle 側で別サービスに移行され、
+# 旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com 側) は
+# 404 を返すようになった。replay 取得だけ別 base URL + 別サービス名で叩く。
+REPLAY_BASE_URL = "https://api.kaggle.com/v1/competitions."
 LEADERBOARD_BOOTSTRAP_URL = "https://www.kaggle.com/competitions/orbit-wars/leaderboard"
 
 
@@ -108,8 +112,9 @@ def _post(
     body: dict[str, Any],
     *,
     timeout: float,
+    base_url: str = BASE_URL,
 ) -> dict[str, Any]:
-    url = f"{BASE_URL}{path}"
+    url = f"{base_url}{path}"
     try:
         resp = session.post(url, json=body, timeout=timeout)
         resp.raise_for_status()
@@ -174,13 +179,19 @@ def get_episode_replay(
     *,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """Episode の完全な replay JSON (configuration / steps) を取得。"""
+    """Episode の完全な replay JSON (configuration / steps) を取得。
+
+    新エンドポイント (api.kaggle.com/v1/competitions.CompetitionApiService) を
+    使用する。旧 `competitions.EpisodeService/GetEpisodeReplay` (www.kaggle.com)
+    は 2026-05 ごろ廃止され 404 を返すため。
+    """
 
     return _post(
         session,
-        "EpisodeService/GetEpisodeReplay",
+        "CompetitionApiService/GetEpisodeReplay",
         {"episodeId": episode_id},
         timeout=timeout,
+        base_url=REPLAY_BASE_URL,
     )
 
 

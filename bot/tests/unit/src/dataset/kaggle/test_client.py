@@ -102,7 +102,9 @@ def test_get_episode_replay_posts_expected_body() -> None:
 
     assert out["steps"] == []
     args, kwargs = session.post.call_args
-    assert args[0].endswith(".EpisodeService/GetEpisodeReplay")
+    # 2026-05 以降 replay は別エンドポイント (api.kaggle.com/v1/competitions.CompetitionApiService)
+    assert args[0].startswith(client.REPLAY_BASE_URL)
+    assert args[0].endswith("CompetitionApiService/GetEpisodeReplay")
     assert kwargs["json"] == {"episodeId": 42}
 
 
