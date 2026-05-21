@@ -122,8 +122,38 @@ def test_runpod_id_without_run_dir_raises(monkeypatch: pytest.MonkeyPatch) -> No
 def test_both_provider_ids_set_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORBIT_WARS_VAST_INSTANCE_ID", "12345")
     monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "abcd1234")
+    monkeypatch.delenv("ORBIT_WARS_KAGGLE_KERNEL_SLUG", raising=False)
     monkeypatch.setenv("ORBIT_WARS_RUN_DIR", "/tmp/whatever")
-    with pytest.raises(RuntimeError, match="Both"):
+    with pytest.raises(RuntimeError, match="Multiple provider"):
+        _resolve_run_dir()
+
+
+def test_kaggle_kernel_slug_without_run_dir_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORBIT_WARS_KAGGLE_KERNEL_SLUG", "user/orbit-wars-case1")
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_RUNPOD_POD_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_RUN_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="ORBIT_WARS_RUN_DIR"):
+        _resolve_run_dir()
+
+
+def test_vast_and_kaggle_kernel_set_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORBIT_WARS_VAST_INSTANCE_ID", "12345")
+    monkeypatch.setenv("ORBIT_WARS_KAGGLE_KERNEL_SLUG", "user/orbit-wars-case1")
+    monkeypatch.delenv("ORBIT_WARS_RUNPOD_POD_ID", raising=False)
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", "/tmp/whatever")
+    with pytest.raises(RuntimeError, match="Multiple provider"):
+        _resolve_run_dir()
+
+
+def test_runpod_and_kaggle_kernel_set_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "pod_abc")
+    monkeypatch.setenv("ORBIT_WARS_KAGGLE_KERNEL_SLUG", "user/orbit-wars-case1")
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", "/tmp/whatever")
+    with pytest.raises(RuntimeError, match="Multiple provider"):
         _resolve_run_dir()
 
 
@@ -147,6 +177,7 @@ def test_run_dir_override_records_runpod_fields(
     monkeypatch.setenv("ORBIT_WARS_RUNPOD_POD_ID", "pod-abc123")
     monkeypatch.setenv("ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT", json.dumps(snapshot))
     monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_KAGGLE_KERNEL_SLUG", raising=False)
 
     train(_build_cfg(train_path, val_path, canonical))
 
@@ -155,3 +186,61 @@ def test_run_dir_override_records_runpod_fields(
     assert meta["runpod_offer_snapshot"] == snapshot
     assert meta["vast_instance_id"] is None
     assert meta["vast_offer_snapshot"] is None
+    assert meta["kaggle_kernel_meta"] is None
+
+
+def test_run_dir_override_records_kaggle_kernel_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mini_dataset: tuple[Path, Path],
+) -> None:
+    train_path, val_path = mini_dataset
+    canonical = tmp_path / "canonical_should_not_be_written.pt"
+    run_dir = tmp_path / "run_kaggle"
+    kk_meta = {
+        "kernel_slug": "yuri/orbit-wars-case1-20260520",
+        "kernel_version": 3,
+        "dataset_slug": "yuri/orbit-wars-bot",
+        "dataset_version": "v17",
+        "accelerator": "gpu-t4x2",
+        "internet_enabled": True,
+    }
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("ORBIT_WARS_RUN_ID", "test_kaggle_run")
+    monkeypatch.setenv("ORBIT_WARS_GIT_SHA", "abc1234deadbeef")
+    monkeypatch.setenv("ORBIT_WARS_GIT_BRANCH", "feature/test")
+    monkeypatch.setenv(
+        "ORBIT_WARS_KAGGLE_KERNEL_SLUG", "yuri/orbit-wars-case1-20260520"
+    )
+    monkeypatch.setenv("ORBIT_WARS_KAGGLE_KERNEL_META", json.dumps(kk_meta))
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_RUNPOD_POD_ID", raising=False)
+
+    train(_build_cfg(train_path, val_path, canonical))
+
+    meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert meta["kaggle_kernel_meta"] == kk_meta
+    assert meta["vast_instance_id"] is None
+    assert meta["runpod_pod_id"] is None
+
+
+def test_kaggle_kernel_meta_malformed_json_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mini_dataset: tuple[Path, Path],
+) -> None:
+    train_path, val_path = mini_dataset
+    canonical = tmp_path / "canonical.pt"
+    run_dir = tmp_path / "run_bad"
+    monkeypatch.setenv("ORBIT_WARS_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("ORBIT_WARS_RUN_ID", "test_bad_kk_meta")
+    monkeypatch.setenv("ORBIT_WARS_GIT_SHA", "abc1234deadbeef")
+    monkeypatch.setenv(
+        "ORBIT_WARS_KAGGLE_KERNEL_SLUG", "yuri/orbit-wars-case1-20260520"
+    )
+    monkeypatch.setenv("ORBIT_WARS_KAGGLE_KERNEL_META", "not-json{")
+    monkeypatch.delenv("ORBIT_WARS_VAST_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("ORBIT_WARS_RUNPOD_POD_ID", raising=False)
+
+    with pytest.raises(RuntimeError, match="ORBIT_WARS_KAGGLE_KERNEL_META"):
+        train(_build_cfg(train_path, val_path, canonical))
