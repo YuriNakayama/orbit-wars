@@ -241,8 +241,7 @@ def dataset_push(
         except Exception as e:
             console.print(
                 _prefix(
-                    f"[yellow]dataset_create_version failed ({e}); "
-                    "trying create_new[/]"
+                    f"[yellow]dataset_create_version failed ({e}); trying create_new[/]"
                 )
             )
             result = create_new_dataset(api, work_dir, commit_sha=commit_sha)
@@ -884,7 +883,9 @@ def exec_cmd(
     run_id: str = typer.Argument(...),
     case: str = typer.Option(DEFAULT_CASE, "--case"),
     cwd: str | None = typer.Option(
-        None, "--cwd", help="working dir on kernel side (default: /tmp/orbit-wars-repo/bot)"
+        None,
+        "--cwd",
+        help="working dir on kernel side (default: /tmp/orbit-wars-repo/bot)",
     ),
     timeout: float = typer.Option(300.0, "--timeout", help="per-cmd timeout (sec)"),
     await_timeout: float = typer.Option(

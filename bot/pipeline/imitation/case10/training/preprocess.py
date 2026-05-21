@@ -806,9 +806,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
         inflight_cap,
     )
 
-    rec_by_match: dict[str, dict[str, Any]] = {
-        str(r["match_id"]): r for r in rows
-    }
+    rec_by_match: dict[str, dict[str, Any]] = {str(r["match_id"]): r for r in rows}
 
     def _consume_result(result: _EpisodeResult) -> None:
         nonlocal kept, fired_total, outside_total
@@ -825,7 +823,9 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
             outside_total += result.outside
             return
         writer = val_writer if result.bucket == "val" else train_writer
-        index_writer = val_index_writer if result.bucket == "val" else train_index_writer
+        index_writer = (
+            val_index_writer if result.bucket == "val" else train_index_writer
+        )
         rec = rec_by_match.get(result.match_id, {})
         meta_static = _episode_meta_fields(rec)
         for frame, meta in zip(result.frames, result.metas, strict=True):

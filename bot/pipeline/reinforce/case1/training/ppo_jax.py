@@ -98,9 +98,7 @@ def _bc_kl_jax(
     log_p_bc = jax.nn.log_softmax(bc_out.per_planet_logits, axis=-1)
     p_new = jnp.exp(log_p_new)
     cat_kl = jnp.sum(p_new * (log_p_new - log_p_bc), axis=-1)  # (B, P)
-    cat_kl = jnp.sum(
-        jnp.where(my_mask, cat_kl, 0.0), axis=-1
-    )  # (B,)
+    cat_kl = jnp.sum(jnp.where(my_mask, cat_kl, 0.0), axis=-1)  # (B,)
     std_new = jnp.maximum(1e-3, jnp.exp(new_out.ship_log_std))
     std_bc = jnp.maximum(1e-3, jnp.exp(bc_out.ship_log_std))
     var_new = std_new**2
@@ -108,7 +106,8 @@ def _bc_kl_jax(
     mean_new = new_out.ship_mean  # (B, P)
     mean_bc = bc_out.ship_mean
     gauss_kl_per = (
-        jnp.log(std_bc) - jnp.log(std_new)
+        jnp.log(std_bc)
+        - jnp.log(std_new)
         + (var_new + (mean_new - mean_bc) ** 2) / (2 * var_bc)
         - 0.5
     )  # (B, P)
@@ -149,9 +148,7 @@ def _ppo_loss(
     )
     ratio = jnp.exp(new_lp - old_log_probs)
     unclipped = ratio * advantages
-    clipped = (
-        jnp.clip(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * advantages
-    )
+    clipped = jnp.clip(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * advantages
     policy_loss = -jnp.mean(jnp.minimum(unclipped, clipped))
     value_loss = jnp.mean((output.value - returns) ** 2)
     entropy_mean = jnp.mean(entropy)
@@ -169,9 +166,7 @@ def _ppo_loss(
         + cfg.kl_beta * bc_kl
     )
     approx_kl = jnp.mean(old_log_probs - new_lp)
-    clip_frac = jnp.mean(
-        (jnp.abs(ratio - 1.0) > cfg.clip_eps).astype(jnp.float32)
-    )
+    clip_frac = jnp.mean((jnp.abs(ratio - 1.0) > cfg.clip_eps).astype(jnp.float32))
     aux = {
         "policy_loss": policy_loss,
         "value_loss": value_loss,
@@ -250,13 +245,12 @@ def ppo_update_jax(
 
     advantages = rollout.advantages
     if cfg.normalize_advantage and n > 1:
-        advantages = (advantages - jnp.mean(advantages)) / (
-            jnp.std(advantages) + 1e-8
-        )
+        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
     rollout = rollout._replace(advantages=advantages)
 
     target_kl_thresh = (
-        jnp.float32(cfg.target_kl) if cfg.target_kl is not None
+        jnp.float32(cfg.target_kl)
+        if cfg.target_kl is not None
         else jnp.float32(jnp.inf)
     )
 
@@ -301,9 +295,7 @@ def ppo_update_jax(
         new_alive = alive_c & (epoch_mean_kl <= target_kl_thresh)
         new_epochs_done = epochs_done_c + alive_c.astype(jnp.float32)
         # Average the per-minibatch aux for this epoch.
-        epoch_aux = jax.tree.map(
-            lambda x: jnp.mean(x, axis=0), mb_aux
-        )
+        epoch_aux = jax.tree.map(lambda x: jnp.mean(x, axis=0), mb_aux)
         return (model_new, opt_new, new_alive, new_epochs_done), epoch_aux
 
     # Per-epoch PRNG keys (distinct from `key` which is consumed).
@@ -314,8 +306,8 @@ def ppo_update_jax(
         jnp.bool_(True),
         jnp.float32(0.0),
     )
-    (model_final, opt_final, _alive_final, epochs_run), epoch_aux_stack = (
-        jax.lax.scan(epoch_step, init_carry, epoch_keys)
+    (model_final, opt_final, _alive_final, epochs_run), epoch_aux_stack = jax.lax.scan(
+        epoch_step, init_carry, epoch_keys
     )
 
     # Means over epochs (each is already an epoch-averaged scalar).

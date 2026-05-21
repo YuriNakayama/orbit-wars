@@ -27,9 +27,9 @@ def evaluate_actions_jax(
     )
     log_softmax = jax.nn.log_softmax(safe_logits, axis=-1)
     clamped_idx = jnp.clip(target_slot, 0, n_classes - 1)
-    t_lp = jnp.take_along_axis(
-        log_softmax, clamped_idx[..., None], axis=-1
-    ).squeeze(-1)  # (B, P)
+    t_lp = jnp.take_along_axis(log_softmax, clamped_idx[..., None], axis=-1).squeeze(
+        -1
+    )  # (B, P)
     probs = jnp.exp(log_softmax)
     t_ent = -jnp.sum(probs * log_softmax, axis=-1)  # (B, P)
 
@@ -39,9 +39,7 @@ def evaluate_actions_jax(
     std = jnp.maximum(1e-3, jnp.exp(log_std))
     std_b = jnp.broadcast_to(std, mean.shape)
     var = std_b**2
-    s_lp = -0.5 * jnp.log(2 * jnp.pi * var) - 0.5 * (
-        (log1p_ships - mean) ** 2
-    ) / var
+    s_lp = -0.5 * jnp.log(2 * jnp.pi * var) - 0.5 * ((log1p_ships - mean) ** 2) / var
     s_ent = 0.5 * (jnp.log(2 * jnp.pi * var) + 1.0)
 
     mask_f = my_planet_mask.astype(jnp.float32)

@@ -46,8 +46,7 @@ def _torch_to_jax_models(torch_seed: int) -> tuple[ActorCritic, ActorCriticJax]:
         jax_model = ActorCriticJax.from_init(jax.random.PRNGKey(0))
         jax_model, loaded, missing = load_bc_weights_jax(jax_model, weights_path)
         assert missing == 0, (
-            f"BC load left {missing} torch keys unmapped; "
-            f"loaded={loaded}"
+            f"BC load left {missing} torch keys unmapped; loaded={loaded}"
         )
         return torch_model, jax_model
     finally:
@@ -73,24 +72,19 @@ def test_forward_parity(seed: int, torch_seed: int) -> None:
         - np.asarray(jax_out.per_planet_logits[0])
     )
     diff_ship = np.abs(
-        torch_out.ship_mean[0].cpu().numpy()
-        - np.asarray(jax_out.ship_mean[0])
+        torch_out.ship_mean[0].cpu().numpy() - np.asarray(jax_out.ship_mean[0])
     )
-    diff_value = abs(
-        torch_out.value.item() - float(jax_out.value[0])
-    )
+    diff_value = abs(torch_out.value.item() - float(jax_out.value[0]))
 
     assert diff_pl.max() < PARITY_TOL, (
         f"seed={seed} torch_seed={torch_seed} "
         f"per_planet_logits max diff {diff_pl.max():.3e}"
     )
     assert diff_ship.max() < PARITY_TOL, (
-        f"seed={seed} torch_seed={torch_seed} "
-        f"ship_mean max diff {diff_ship.max():.3e}"
+        f"seed={seed} torch_seed={torch_seed} ship_mean max diff {diff_ship.max():.3e}"
     )
     assert diff_value < PARITY_TOL, (
-        f"seed={seed} torch_seed={torch_seed} "
-        f"value diff {diff_value:.3e}"
+        f"seed={seed} torch_seed={torch_seed} value diff {diff_value:.3e}"
     )
 
 
@@ -100,9 +94,7 @@ def test_bc_weight_count_matches() -> None:
 
     torch.manual_seed(0)
     torch_model = ActorCritic(ModelConfig())
-    torch_n = sum(
-        p.numel() for p in torch_model.parameters() if p.requires_grad
-    )
+    torch_n = sum(p.numel() for p in torch_model.parameters() if p.requires_grad)
 
     jax_model = ActorCriticJax.from_init(jax.random.PRNGKey(0))
     params = eqx.filter(jax_model, eqx.is_array)

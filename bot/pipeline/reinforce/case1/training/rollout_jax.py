@@ -81,9 +81,7 @@ def _empty_jax_actions() -> jax.Array:
     )
 
 
-def _ship_totals(
-    state: EnvState, player: int
-) -> tuple[jax.Array, jax.Array]:
+def _ship_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
     """Sum (own, enemy) ships across the current planet table."""
     owner = state.planet_owner
     valid = state.planet_valid
@@ -139,9 +137,21 @@ def _rollout_one_env(
             jax.Array,
         ],
         tuple[
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
         ],
     ]:
         state, history, prev_diff, done_already, key, ep_outcome = carry
@@ -315,17 +325,11 @@ def collect_rollout_jax(
     # stack into a single batched EnvState so vmap can broadcast model
     # parameters across the episode axis. This keeps the jit cache to
     # ONE compilation regardless of episode count.
-    init_states = [
-        reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)
-    ]
-    batched_state = jax.tree.map(
-        lambda *xs: jnp.stack(xs, axis=0), *init_states
-    )
+    init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
+    batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
     # vmap over (key, init_state); model is broadcast (in_axes=None).
-    vmapped = jax.vmap(
-        _rollout_one_env, in_axes=(None, 0, 0, None, None, None)
-    )
+    vmapped = jax.vmap(_rollout_one_env, in_axes=(None, 0, 0, None, None, None))
     return vmapped(model, keys, batched_state, horizon, shaping_coef, seat)
 
 

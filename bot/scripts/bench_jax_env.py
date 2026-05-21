@@ -98,9 +98,7 @@ def bench_jax(
 ) -> None:
     """Benchmark JAX env. Uses `lax.scan` for the inner loop."""
     if device != jax.default_backend():
-        typer.echo(
-            f"requested device={device} default={jax.default_backend()}"
-        )
+        typer.echo(f"requested device={device} default={jax.default_backend()}")
 
     # Build initial states (CPU). vmap across episodes if requested.
     states = [reset(seed + i, num_agents=2) for i in range(episodes)]

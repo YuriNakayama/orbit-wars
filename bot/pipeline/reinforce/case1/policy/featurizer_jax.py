@@ -119,15 +119,9 @@ def init_history_jax() -> HistoryStateJax:
     """Empty history (matches PyTorch `HistoryState()` semantics)."""
     return HistoryStateJax(
         snap_ships=jnp.zeros((N_PREV_SNAPSHOTS, MAX_PLANETS), dtype=jnp.int32),
-        snap_owner=jnp.full(
-            (N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32
-        ),
-        snap_pid=jnp.full(
-            (N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32
-        ),
-        snap_valid=jnp.zeros(
-            (N_PREV_SNAPSHOTS, MAX_PLANETS), dtype=jnp.bool_
-        ),
+        snap_owner=jnp.full((N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32),
+        snap_pid=jnp.full((N_PREV_SNAPSHOTS, MAX_PLANETS), -1, dtype=jnp.int32),
+        snap_valid=jnp.zeros((N_PREV_SNAPSHOTS, MAX_PLANETS), dtype=jnp.bool_),
         snap_count=jnp.int32(0),
         snap_head=jnp.int32(0),
         launch_step=jnp.full((LAUNCH_BUFFER,), -1, dtype=jnp.int32),
@@ -225,9 +219,9 @@ def _build_template_ctx(
     INF = jnp.float32(jnp.inf)
     NEG_INF = jnp.float32(-jnp.inf)
 
-    def masked_argmin(values: jax.Array, mask: jax.Array) -> tuple[
-        jax.Array, jax.Array
-    ]:
+    def masked_argmin(
+        values: jax.Array, mask: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
         """Return (idx, has_any) per row. idx is 0 when has_any=False."""
         masked = jnp.where(mask, values, INF)
         idx = jnp.argmin(masked, axis=-1)
@@ -250,9 +244,7 @@ def _build_template_ctx(
     # T0 NEAREST_NEUTRAL_LOW: nearest neutral with ships <= max(1, src.ships)
     # Fallback to nearest neutral if no low-ships candidate.
     cap_per_src = jnp.maximum(1.0, ships_f)  # (P,)
-    low_neutral_mask = t_is_neutral & (
-        ships_f[None, :] <= cap_per_src[:, None]
-    )
+    low_neutral_mask = t_is_neutral & (ships_f[None, :] <= cap_per_src[:, None])
     idx_low, has_low = masked_argmin(dist_st, low_neutral_mask)
     idx_any_neutral, has_neutral = masked_argmin(dist_st, t_is_neutral)
     t0_idx = jnp.where(has_low, idx_low, idx_any_neutral)
@@ -286,17 +278,11 @@ def _build_template_ctx(
     # Per-src per-tgt distance from each tgt's xy to (ex, ey).
     # The distance only depends on tgt, but we need shape (P_src, P_tgt).
     tgt_to_centroid = jnp.sqrt((px - ex) ** 2 + (py - ey) ** 2)  # (P,)
-    t4_centroid_dist = jnp.broadcast_to(
-        tgt_to_centroid[None, :], (P, P)
-    )
+    t4_centroid_dist = jnp.broadcast_to(tgt_to_centroid[None, :], (P, P))
     # Per-src branching: if no enemy OR no mine_other, use nearest
     # mine_other by src-distance (matches PyTorch fallback).
-    nearest_mine_idx, has_mine_other = masked_argmin(
-        dist_st, mine_other_mask_2d
-    )
-    frontline_idx, _ = masked_argmin(
-        t4_centroid_dist, mine_other_mask_2d
-    )
+    nearest_mine_idx, has_mine_other = masked_argmin(dist_st, mine_other_mask_2d)
+    frontline_idx, _ = masked_argmin(t4_centroid_dist, mine_other_mask_2d)
     # Has enemy globally? has_any_enemy across all sources is the same
     # value, but we compute per-row via reduction over the tgt mask.
     has_any_enemy_per_src = jnp.any(enemy_mask_2d, axis=-1)
@@ -366,9 +352,7 @@ def _build_template_ctx(
     per_p = jnp.transpose(per_t_feats, (1, 0, 2)).reshape(P, 7 * 5)
     any_candidate = jnp.any(write_mask, axis=0)  # (P,)
     noop = jnp.zeros((P, 5), dtype=jnp.float32)
-    noop = noop.at[:, 0].set(
-        jnp.where(any_candidate, 0.0, 1.0).astype(jnp.float32)
-    )
+    noop = noop.at[:, 0].set(jnp.where(any_candidate, 0.0, 1.0).astype(jnp.float32))
     full = jnp.concatenate([per_p, noop], axis=1)  # (P, 40)
 
     # Only own planets get template_ctx (PyTorch only writes for is_mine).
@@ -483,20 +467,29 @@ def _build_candidate_block(
     # Phase 1: enemies (2 slots).
     for s in range(2):
         final_idx, final_valid, write_pos = _append(
-            final_idx, final_valid, write_pos,
-            enemy_top[:, s], enemy_valid[:, s],
+            final_idx,
+            final_valid,
+            write_pos,
+            enemy_top[:, s],
+            enemy_valid[:, s],
         )
     # Phase 2: neutrals (2 slots).
     for s in range(2):
         final_idx, final_valid, write_pos = _append(
-            final_idx, final_valid, write_pos,
-            neutral_top[:, s], neutral_valid[:, s],
+            final_idx,
+            final_valid,
+            write_pos,
+            neutral_top[:, s],
+            neutral_valid[:, s],
         )
     # Phase 3: friendlies (3 slots).
     for s in range(3):
         final_idx, final_valid, write_pos = _append(
-            final_idx, final_valid, write_pos,
-            friendly_top[:, s], friendly_valid[:, s],
+            final_idx,
+            final_valid,
+            write_pos,
+            friendly_top[:, s],
+            friendly_valid[:, s],
         )
 
     # Phase 4: fallback. Build the "remaining" pool by excluding everything
@@ -515,8 +508,11 @@ def _build_candidate_block(
     fallback_top_valid = picked_valid(fallback_top, fallback_pool)
     for s in range(7):
         final_idx, final_valid, write_pos = _append(
-            final_idx, final_valid, write_pos,
-            fallback_top[:, s], fallback_top_valid[:, s],
+            final_idx,
+            final_valid,
+            write_pos,
+            fallback_top[:, s],
+            fallback_top_valid[:, s],
         )
 
     # Gather per-(src, slot) target attributes.
@@ -555,9 +551,7 @@ def _build_candidate_block(
     sy_dy = tgt_y - start_y
     seg_len_sq = sx_dx * sx_dx + sy_dy * sy_dy
     seg_safe = jnp.maximum(seg_len_sq, 1e-9)
-    t_param = (
-        (SUN_X - start_x) * sx_dx + (SUN_Y - start_y) * sy_dy
-    ) / seg_safe
+    t_param = ((SUN_X - start_x) * sx_dx + (SUN_Y - start_y) * sy_dy) / seg_safe
     t_param = jnp.maximum(0.0, jnp.minimum(1.0, t_param))
     cx = start_x + t_param * sx_dx
     cy = start_y + t_param * sy_dy
@@ -583,9 +577,7 @@ def _build_candidate_block(
         jnp.minimum(tgt_ships_f, MAX_SHIPS) / MAX_SHIPS
     )
     feats_block = feats_block.at[:, :, 10].set(tgt_prod / MAX_PRODUCTION)
-    feats_block = feats_block.at[:, :, 11].set(
-        is_rotating_t.astype(jnp.float32)
-    )
+    feats_block = feats_block.at[:, :, 11].set(is_rotating_t.astype(jnp.float32))
     feats_block = feats_block.at[:, :, 12].set(crosses.astype(jnp.float32))
     feats_block = feats_block.at[:, :, 13].set(
         jnp.minimum(src_ships_f, MAX_SHIPS) / MAX_SHIPS
@@ -665,9 +657,7 @@ def _resolve_arrival_step(
     # ownership change). When no attackers, the carry is untouched. We
     # use OWNER_NEUTRAL (2) as the tie sentinel; the consumer below
     # ignores survivor when survivor_ships <= 0.
-    survivor_owner = jnp.where(
-        tie, jnp.int32(OWNER_NEUTRAL), top_idx
-    )
+    survivor_owner = jnp.where(tie, jnp.int32(OWNER_NEUTRAL), top_idx)
 
     # Apply to current (owner_cls, garrison).
     no_change = (~nonzero_any) | (survivor_ships <= 0)
@@ -742,9 +732,7 @@ def _simulate_one_timeline(
         )
 
         prev_owner = owner_cls
-        new_owner, new_garrison = _resolve_arrival_step(
-            owner_cls, garrison, arrivals_3
-        )
+        new_owner, new_garrison = _resolve_arrival_step(owner_cls, garrison, arrivals_3)
 
         # Track fall: was ally, now not ally.
         was_ally = prev_owner == OWNER_ALLY
@@ -753,9 +741,7 @@ def _simulate_one_timeline(
         new_fall_seen = fall_seen | new_fall_this_turn
         # First fall turn: keep first occurrence (only update if we haven't
         # seen one yet).
-        new_fall_turn = jnp.where(
-            new_fall_seen & ~fall_seen, turn_idx, fall_turn
-        )
+        new_fall_turn = jnp.where(new_fall_seen & ~fall_seen, turn_idx, fall_turn)
 
         # min_owned: min garrison while owner is ALLY.
         new_min_owned = jnp.where(
@@ -784,14 +770,15 @@ def _simulate_one_timeline(
         jnp.int32(horizon + 1),
     )
     (
-        final_owner,
-        final_garrison,
-        final_min_owned,
-        final_fall_seen,
-        final_fall_turn,
-    ), (ships_seq, owner_seq) = jax.lax.scan(
-        step, init_carry, (arrivals_per_turn[1:], turns)
-    )
+        (
+            final_owner,
+            final_garrison,
+            final_min_owned,
+            final_fall_seen,
+            final_fall_turn,
+        ),
+        (ships_seq, owner_seq),
+    ) = jax.lax.scan(step, init_carry, (arrivals_per_turn[1:], turns))
 
     # Prepend t=0 frame.
     ships_at = jnp.concatenate([initial_garrison[None], ships_seq], axis=0)
@@ -838,9 +825,7 @@ def _build_timeline_cols(
     fl_cls = jnp.where(
         fl_is_ally,
         jnp.int32(OWNER_ALLY),
-        jnp.where(
-            fl_is_neutral_only, jnp.int32(OWNER_NEUTRAL), jnp.int32(OWNER_ENEMY)
-        ),
+        jnp.where(fl_is_neutral_only, jnp.int32(OWNER_NEUTRAL), jnp.int32(OWNER_ENEMY)),
     )  # (F, 1)
     fl_cls_b = jnp.broadcast_to(fl_cls, (eta_mat.shape[0], P))
 
@@ -850,11 +835,11 @@ def _build_timeline_cols(
     # The (F, P) eta_int can be encoded as a one-hot turn mask, multiplied
     # by ships and class mask, then reduced over fleets.
     # Memory: F * P * (H+1) = 512 * 36 * 31 = ~570k entries; acceptable.
-    turn_onehot = (
-        eta_int[..., None] == jnp.arange(0, H + 1, dtype=jnp.int32)
+    turn_onehot = eta_int[..., None] == jnp.arange(
+        0, H + 1, dtype=jnp.int32
     )  # (F, P, H+1) bool
-    cls_onehot = (
-        fl_cls_b[..., None] == jnp.arange(0, 3, dtype=jnp.int32)
+    cls_onehot = fl_cls_b[..., None] == jnp.arange(
+        0, 3, dtype=jnp.int32
     )  # (F, P, 3) bool
 
     # We want arrivals[p, t, c] = sum_f ships_f[f] * valid_arr[f, p] *
@@ -864,9 +849,7 @@ def _build_timeline_cols(
     ships_fp = (
         fships_f[:, None, None, None] * valid_arr[..., None, None]
     )  # (F, P, 1, 1)
-    selectors = (
-        turn_onehot[..., None] & cls_onehot[..., None, :]
-    )  # (F, P, H+1, 3)
+    selectors = turn_onehot[..., None] & cls_onehot[..., None, :]  # (F, P, H+1, 3)
     arrivals_ptc = jnp.sum(
         ships_fp * selectors.astype(jnp.float32), axis=0
     )  # (P, H+1, 3)
@@ -897,8 +880,7 @@ def _build_timeline_cols(
             0.0,
             jnp.minimum(
                 1.0,
-                fall_turn.astype(jnp.float32)
-                / jnp.float32(jnp.maximum(1, H)),
+                fall_turn.astype(jnp.float32) / jnp.float32(jnp.maximum(1, H)),
             ),
         ),
         jnp.float32(1.0),
@@ -910,9 +892,7 @@ def _build_timeline_cols(
     fall_predicted = fall_seen.astype(jnp.float32)
 
     # min_owned: floor & clamp (vendor: max(0, int(floor(min_owned))))
-    min_owned_clamped = jnp.maximum(
-        jnp.float32(0.0), jnp.floor(min_owned)
-    )
+    min_owned_clamped = jnp.maximum(jnp.float32(0.0), jnp.floor(min_owned))
     # Vendor returns 0 if planet.owner != player (init_owner_cls != ALLY).
     min_owned_clamped = jnp.where(
         init_owner_cls == OWNER_ALLY, min_owned_clamped, jnp.float32(0.0)
@@ -920,9 +900,7 @@ def _build_timeline_cols(
 
     # keep_needed binary search: only for ally planets. Run KEEP_BSEARCH_ITERS
     # iterations of bsearch; track whether full ships works.
-    def _survives_with_keep(
-        owner_cls, keep, prod, arrivals
-    ) -> jax.Array:
+    def _survives_with_keep(owner_cls, keep, prod, arrivals) -> jax.Array:
         # Replicate vendor `survives_with_keep`: simulate with garrison=keep
         # and check if owner stays ALLY across the full horizon AND ends
         # ALLY. Vendor's `survives_with_keep` returns True iff owner remains
@@ -943,6 +921,7 @@ def _build_timeline_cols(
         is_ally = owner_cls == OWNER_ALLY
         full_ships = jnp.float32(ships)
         survives_full = _survives_with_keep(owner_cls, full_ships, prod, arrivals)
+
         # Binary search [0, ships]; result is min keep that survives.
         # We use fixed-iter binary search.
         def cond(_state):
@@ -958,12 +937,8 @@ def _build_timeline_cols(
 
         lo_init = jnp.int32(0)
         hi_init = jnp.maximum(jnp.int32(0), ships.astype(jnp.int32))
-        lo_f, _hi_f = jax.lax.fori_loop(
-            0, KEEP_BSEARCH_ITERS, body, (lo_init, hi_init)
-        )
-        keep_needed = jnp.where(
-            survives_full, lo_f.astype(jnp.float32), full_ships
-        )
+        lo_f, _hi_f = jax.lax.fori_loop(0, KEEP_BSEARCH_ITERS, body, (lo_init, hi_init))
+        keep_needed = jnp.where(survives_full, lo_f.astype(jnp.float32), full_ships)
         return jnp.where(is_ally, keep_needed, jnp.float32(0.0))
 
     keep_needed = jax.vmap(_keep_needed_one)(
@@ -1094,20 +1069,12 @@ def featurize_jax_w1(
     # matching j. Replicate by masking non-matching to +inf and taking min.
     large = jnp.float32(jnp.inf)
     diag_f = jnp.float32(DIAG)
-    nearest_ally = jnp.min(
-        jnp.where(j_is_ally, dist_mat, large), axis=1
-    )
+    nearest_ally = jnp.min(jnp.where(j_is_ally, dist_mat, large), axis=1)
     nearest_ally = jnp.where(jnp.isfinite(nearest_ally), nearest_ally, diag_f)
-    nearest_enemy = jnp.min(
-        jnp.where(j_is_enemy, dist_mat, large), axis=1
-    )
+    nearest_enemy = jnp.min(jnp.where(j_is_enemy, dist_mat, large), axis=1)
     nearest_enemy = jnp.where(jnp.isfinite(nearest_enemy), nearest_enemy, diag_f)
-    nearest_neutral = jnp.min(
-        jnp.where(j_is_neutral, dist_mat, large), axis=1
-    )
-    nearest_neutral = jnp.where(
-        jnp.isfinite(nearest_neutral), nearest_neutral, diag_f
-    )
+    nearest_neutral = jnp.min(jnp.where(j_is_neutral, dist_mat, large), axis=1)
+    nearest_neutral = jnp.where(jnp.isfinite(nearest_neutral), nearest_neutral, diag_f)
 
     j_ships = ships.astype(jnp.float32)[None, :]
     support_density = jnp.sum(
@@ -1115,9 +1082,7 @@ def featurize_jax_w1(
         axis=1,
     )
     threat_pressure_planet = jnp.sum(
-        jnp.where(
-            j_is_enemy & (dist_mat <= NEIGHBOR_RADIUS_SHORT), j_ships, 0.0
-        ),
+        jnp.where(j_is_enemy & (dist_mat <= NEIGHBOR_RADIUS_SHORT), j_ships, 0.0),
         axis=1,
     )
 
@@ -1127,9 +1092,7 @@ def featurize_jax_w1(
     # Leave as the planet half so subsequent W2-fleet only adds the fleet
     # term. The PyTorch reference includes fleet contributions which are
     # zero in the no-fleet parity fixture (W1 path).
-    feats = feats.at[:, 16].set(
-        jnp.log1p(threat_pressure_planet) / LOG_NORM_DENOM
-    )
+    feats = feats.at[:, 16].set(jnp.log1p(threat_pressure_planet) / LOG_NORM_DENOM)
     # idx 17: net_signed — W2-fleet (needs incoming_*_ships)
     feats = feats.at[:, 18].set(nearest_ally / diag_f)
     feats = feats.at[:, 19].set(nearest_neutral / diag_f)
@@ -1152,9 +1115,7 @@ def featurize_jax_w1(
     fy = fleet_xy_arr[:, 1].astype(jnp.float32)
     fang = fleet_angle.astype(jnp.float32)
     fships_f = fleet_ships_arr.astype(jnp.float32)
-    f_speed = jnp.maximum(
-        0.5, 2.0 - 0.05 * jnp.sqrt(jnp.maximum(1.0, fships_f))
-    )
+    f_speed = jnp.maximum(0.5, 2.0 - 0.05 * jnp.sqrt(jnp.maximum(1.0, fships_f)))
 
     dx_fp = px[None, :] - fx[:, None]  # (F, P)
     dy_fp = py[None, :] - fy[:, None]  # (F, P)
@@ -1164,9 +1125,7 @@ def featurize_jax_w1(
     perp_sq = dx_fp * dx_fp + dy_fp * dy_fp - proj * proj
     radius_sq = (radius_f * radius_f)[None, :]
     in_cone = (proj >= 0) & (perp_sq < radius_sq)
-    hit_d = jnp.maximum(
-        0.0, proj - jnp.sqrt(jnp.maximum(0.0, radius_sq - perp_sq))
-    )
+    hit_d = jnp.maximum(0.0, proj - jnp.sqrt(jnp.maximum(0.0, radius_sq - perp_sq)))
     eta_mat = hit_d / f_speed[:, None]  # (F, P)
     # vendor: skip if eta > HORIZON_TURNS or out of cone, also require
     # planet valid and fleet valid.
@@ -1193,15 +1152,11 @@ def featurize_jax_w1(
 
     horizon_default = jnp.float32(HORIZON_TURNS + 1.0)
     nearest_eta = jnp.min(eta_masked, axis=0)
-    nearest_eta = jnp.where(
-        jnp.isfinite(nearest_eta), nearest_eta, horizon_default
-    )
+    nearest_eta = jnp.where(jnp.isfinite(nearest_eta), nearest_eta, horizon_default)
     ally_eta_min = jnp.min(
         jnp.where(fl_is_ally, eta_masked, jnp.float32(jnp.inf)), axis=0
     )
-    ally_eta_min = jnp.where(
-        jnp.isfinite(ally_eta_min), ally_eta_min, horizon_default
-    )
+    ally_eta_min = jnp.where(jnp.isfinite(ally_eta_min), ally_eta_min, horizon_default)
     enemy_eta_min = jnp.min(
         jnp.where(fl_is_enemy, eta_masked, jnp.float32(jnp.inf)), axis=0
     )
@@ -1223,14 +1178,11 @@ def featurize_jax_w1(
     )
     # Replace idx 16 with planet half + fleet half summed *before* log1p.
     feats = feats.at[:, 16].set(
-        jnp.log1p(threat_pressure_planet + threat_pressure_fleet)
-        / LOG_NORM_DENOM
+        jnp.log1p(threat_pressure_planet + threat_pressure_fleet) / LOG_NORM_DENOM
     )
 
     # idx 9: log1p(incoming_enemy) - log1p(incoming_ally)
-    feats = feats.at[:, 9].set(
-        jnp.log1p(incoming_enemy) - jnp.log1p(incoming_ally)
-    )
+    feats = feats.at[:, 9].set(jnp.log1p(incoming_enemy) - jnp.log1p(incoming_ally))
     # idx 10: eta_norm = min(nearest_eta, HORIZON+1) / (HORIZON+1)
     feats = feats.at[:, 10].set(
         jnp.minimum(nearest_eta, horizon_default) / horizon_default
@@ -1239,9 +1191,7 @@ def featurize_jax_w1(
     # then clamp to [-3, 3] and divide by 3
     ships_safe = jnp.maximum(1.0, ships_f)
     net_signed = (incoming_enemy - incoming_ally) / ships_safe
-    feats = feats.at[:, 17].set(
-        jnp.maximum(-3.0, jnp.minimum(3.0, net_signed)) / 3.0
-    )
+    feats = feats.at[:, 17].set(jnp.maximum(-3.0, jnp.minimum(3.0, net_signed)) / 3.0)
     # idx 28: ally_eta_norm
     feats = feats.at[:, 28].set(
         jnp.minimum(ally_eta_min, horizon_default) / horizon_default
@@ -1310,9 +1260,7 @@ def featurize_jax_w1(
     # as in step.py:_compute_planet_new_xy.
     flat_slots = state.comet_planet_slot.reshape(-1)  # (C*4,)
     planet_idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
-    eq_mask = (planet_idx[:, None] == flat_slots[None, :]) & (
-        flat_slots[None, :] >= 0
-    )
+    eq_mask = (planet_idx[:, None] == flat_slots[None, :]) & (flat_slots[None, :] >= 0)
     has_comet_entry = jnp.any(eq_mask, axis=-1)  # (P,)
     pick_idx = jnp.argmax(eq_mask.astype(jnp.int32), axis=-1)  # (P,) into C*4
     c_of_p = pick_idx // 4
@@ -1321,9 +1269,7 @@ def featurize_jax_w1(
     path_index_p = jnp.where(
         has_comet_entry, state.comet_path_index[c_of_p], jnp.int32(0)
     )
-    path_len_p = jnp.where(
-        has_comet_entry, state.comet_path_len[c_of_p], jnp.int32(0)
-    )
+    path_len_p = jnp.where(has_comet_entry, state.comet_path_len[c_of_p], jnp.int32(0))
 
     # Compute predictions for each horizon and write to feats cols 20..27.
     for h_idx, turns in enumerate(ORBIT_HORIZONS):
@@ -1389,8 +1335,10 @@ def featurize_jax_w1(
     # eq_mat[i, j] = True iff current_pid[i] == snap_t1_pid[j] AND both
     # valid.
     eq_t1 = (
-        pid_arr[:, None] == snap_t1_pid[None, :]
-    ) & snap_t1_valid_mask[None, :] & valid_full[:, None]
+        (pid_arr[:, None] == snap_t1_pid[None, :])
+        & snap_t1_valid_mask[None, :]
+        & valid_full[:, None]
+    )
     has_match_t1 = jnp.any(eq_t1, axis=1) & snap_t1_available
     match_idx_t1 = jnp.argmax(eq_t1.astype(jnp.int32), axis=1)
     prev_ships_t1 = snap_t1_ships[match_idx_t1].astype(jnp.float32)
@@ -1404,8 +1352,10 @@ def featurize_jax_w1(
     )
 
     eq_t2 = (
-        pid_arr[:, None] == snap_t2_pid[None, :]
-    ) & snap_t2_valid_mask[None, :] & valid_full[:, None]
+        (pid_arr[:, None] == snap_t2_pid[None, :])
+        & snap_t2_valid_mask[None, :]
+        & valid_full[:, None]
+    )
     has_match_t2 = jnp.any(eq_t2, axis=1) & snap_t2_available
     match_idx_t2 = jnp.argmax(eq_t2.astype(jnp.int32), axis=1)
     prev_ships_t2 = snap_t2_ships[match_idx_t2].astype(jnp.float32)
@@ -1484,9 +1434,7 @@ def featurize_jax_w1(
     # PyTorch (featurizer.py:465-478) filters launches by
     # `ev.step >= step - HISTORY_TURNS` and bins by owner.
     launch_threshold = step - HISTORY_TURNS
-    launch_in_window = (
-        history.launch_valid & (history.launch_step >= launch_threshold)
-    )
+    launch_in_window = history.launch_valid & (history.launch_step >= launch_threshold)
     launch_is_ally = history.launch_owner == player
     launch_is_neutral = history.launch_owner == -1
     launch_is_enemy = ~launch_is_ally & ~launch_is_neutral
@@ -1511,22 +1459,14 @@ def featurize_jax_w1(
     g = g.at[4].set(jnp.log1p(neutral_ships_total))
     g = g.at[5].set(jnp.log1p(my_prod_total) - jnp.log1p(enemy_prod_total))
     g = g.at[6].set(my_count.astype(jnp.float32) / total_planets.astype(jnp.float32))
-    g = g.at[7].set(
-        enemy_count.astype(jnp.float32) / total_planets.astype(jnp.float32)
-    )
+    g = g.at[7].set(enemy_count.astype(jnp.float32) / total_planets.astype(jnp.float32))
     g = g.at[8].set(_comet_active(step).astype(jnp.float32))
     g = g.at[9].set(phase_mid)
     g = g.at[10].set(phase_late)
     g = g.at[11].set(jnp.minimum(1.0, next_eta))
-    g = g.at[12].set(
-        jnp.where(total_ships > 0, my_ships_total / total_ships, 0.0)
-    )
-    g = g.at[13].set(
-        jnp.where(total_ships > 0, enemy_ships_total / total_ships, 0.0)
-    )
-    g = g.at[14].set(
-        jnp.where(total_prod > 0, my_prod_total / total_prod, 0.0)
-    )
+    g = g.at[12].set(jnp.where(total_ships > 0, my_ships_total / total_ships, 0.0))
+    g = g.at[13].set(jnp.where(total_ships > 0, enemy_ships_total / total_ships, 0.0))
+    g = g.at[14].set(jnp.where(total_prod > 0, my_prod_total / total_prod, 0.0))
     g = g.at[15].set(jnp.maximum(-3.0, jnp.minimum(3.0, score_diff)) / 3.0)
     g = g.at[16].set(jnp.minimum(1.0, enemy_count_lh / LAUNCH_COUNT_NORM))
     g = g.at[17].set(jnp.log1p(enemy_ships_lh) / LOG_NORM_DENOM)
@@ -1587,21 +1527,11 @@ def update_history_jax(
     """
     # Push current state's planet snapshot into the ring at snap_head.
     pos = history.snap_head
-    new_snap_ships = history.snap_ships.at[pos].set(
-        state.planet_ships[:MAX_PLANETS]
-    )
-    new_snap_owner = history.snap_owner.at[pos].set(
-        state.planet_owner[:MAX_PLANETS]
-    )
-    new_snap_pid = history.snap_pid.at[pos].set(
-        state.planet_id[:MAX_PLANETS]
-    )
-    new_snap_valid = history.snap_valid.at[pos].set(
-        state.planet_valid[:MAX_PLANETS]
-    )
-    new_snap_count = jnp.minimum(
-        jnp.int32(N_PREV_SNAPSHOTS), history.snap_count + 1
-    )
+    new_snap_ships = history.snap_ships.at[pos].set(state.planet_ships[:MAX_PLANETS])
+    new_snap_owner = history.snap_owner.at[pos].set(state.planet_owner[:MAX_PLANETS])
+    new_snap_pid = history.snap_pid.at[pos].set(state.planet_id[:MAX_PLANETS])
+    new_snap_valid = history.snap_valid.at[pos].set(state.planet_valid[:MAX_PLANETS])
+    new_snap_count = jnp.minimum(jnp.int32(N_PREV_SNAPSHOTS), history.snap_count + 1)
     new_snap_head = (history.snap_head + 1) % N_PREV_SNAPSHOTS
 
     # Append launches to the ring buffer. The number of new launch slots
