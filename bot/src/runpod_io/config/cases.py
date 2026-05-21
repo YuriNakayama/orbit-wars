@@ -317,6 +317,66 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case1: PPO + BC warm-start on case9 per_planet weights.
+    # `family` differentiates the on-disk run dir (data/output/models/reinforce/...).
+    "reinforce_case1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/train.yaml",
+        # BC weights are pulled via DVC by the standard 50_dvc_pull stage; no
+        # per-pod preprocess needed (RL collects rollouts in-process).
+        "preprocess_cmd": "",
+        "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
+    },
+    # reinforce_case1_bench_workers: short 5-iter run to measure rollout
+    # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
+    # Same hyperparams, only iterations + rollout_workers differ.
+    "reinforce_case1_bench_workers": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_bench_workers",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/bench_workers.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # bench_jax_env_gpu: GPU benchmark for the JAX env. Not a training case.
+    # Installs jax[cuda12] inside the pod, runs vendor vs jax(cpu/gpu) timings,
+    # writes bench_results.json. Uses family=reinforce so the onstart pipeline
+    # builds the Rust simulator and pulls BC weights (~5 min overhead, harmless
+    # — we just need the JAX env imports to resolve, plus a default-shape run dir).
+    "bench_jax_env_gpu": {
+        "family": "reinforce",
+        "stage": "bench_jax_env_gpu",
+        "train_module": "pipeline._bench.jax_env_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # bench_featurizer_gpu: GPU benchmark for the JAX featurizer
+    # (W1+W2a-d, f, final). Measures wall-clock for PyTorch baseline vs
+    # JAX (cpu wheel) vs JAX (GPU, post jax[cuda12] install) at
+    # vmap=1/16/32/64. Same family/onstart shape as bench_jax_env_gpu so
+    # the artifacts uploader and `dev/runpod pull` work unchanged.
+    "bench_featurizer_gpu": {
+        "family": "reinforce",
+        "stage": "bench_featurizer_gpu",
+        "train_module": "pipeline._bench.featurizer_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # bench_rollout_gpu: GPU bench for the W4 JAX rollout (featurize +
+    # model forward + env step end-to-end). Same shape as
+    # bench_featurizer_gpu so artifacts upload + dev/runpod pull work.
+    "bench_rollout_gpu": {
+        "family": "reinforce",
+        "stage": "bench_rollout_gpu",
+        "train_module": "pipeline._bench.rollout_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
@@ -328,6 +388,9 @@ def case_subdir(case: str) -> str:
     case9_dual) but they all share the same
     `data/output/models/imitation/case9/` tree on disk (same training
     pipeline, different head_mode). Strip the `_<variant>` suffix.
+
+    Reinforce cases use a `reinforce_<caseN>` prefix that maps to
+    `data/output/models/reinforce/<caseN>/`.
     """
     if case.startswith("case9_"):
         return "case9"
@@ -335,11 +398,22 @@ def case_subdir(case: str) -> str:
         return "case10"
     if case.startswith("case11_"):
         return "case11"
+    if case.startswith("reinforce_"):
+        return case[len("reinforce_") :]
+    if case.startswith("bench_"):
+        return case[len("bench_") :]
     return case
 
 
+def case_family(case: str) -> str:
+    """Return the top-level family directory for a registry key."""
+    defaults = CASE_DEFAULTS.get(case, {})
+    family = defaults.get("family", "imitation")
+    return family
+
+
 def runs_root_for(case: str) -> Path:
-    return Path(f"data/output/models/imitation/{case_subdir(case)}/runs")
+    return Path(f"data/output/models/{case_family(case)}/{case_subdir(case)}/runs")
 
 
 def case_defaults(case: str) -> dict[str, str]:
@@ -350,4 +424,10 @@ def case_defaults(case: str) -> dict[str, str]:
     return CASE_DEFAULTS[case]
 
 
-__all__ = ["CASE_DEFAULTS", "case_defaults", "case_subdir", "runs_root_for"]
+__all__ = [
+    "CASE_DEFAULTS",
+    "case_defaults",
+    "case_family",
+    "case_subdir",
+    "runs_root_for",
+]

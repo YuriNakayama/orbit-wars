@@ -42,6 +42,9 @@ from runpod_io.config.cases import (
     case_defaults as _case_defaults,
 )
 from runpod_io.config.cases import (
+    case_family as _case_family,
+)
+from runpod_io.config.cases import (
     case_subdir as _case_subdir,
 )
 from runpod_io.config.cases import (
@@ -482,6 +485,8 @@ def train(
         branch=branch,
         repo_url=repo_url,
         case=case,
+        case_family=_case_family(case),
+        case_subdir=_case_subdir(case),
         train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
@@ -502,6 +507,11 @@ def train(
         "ORBIT_WARS_GIT_SHA": commit_sha,
         "ORBIT_WARS_GIT_BRANCH": branch,
         "ORBIT_WARS_CASE": case,
+        # case_family / case_subdir を onstart shell に渡す。imitation case は
+        # family=imitation, subdir=<case> となり既存挙動を維持。reinforce 系は
+        # family=reinforce, subdir=<caseN> で別ツリーに persist / DVC pull する。
+        "ORBIT_WARS_CASE_FAMILY": _case_family(case),
+        "ORBIT_WARS_CASE_SUBDIR": _case_subdir(case),
         "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
     }
     # GIT_PAT は onstart の git push (.dvc メタコミット) で必要。.env か shell env
@@ -1491,9 +1501,9 @@ def watch_cmd(
 # `dev/runpod logs --source onstart` (S3 fallback) を使う。
 TAIL_SOURCES: dict[str, str] = {
     "onstart": "tail -F /var/log/onstart.log",
-    "train": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/train.log"),
-    "gpu": "tail -F data/output/models/imitation/{case}/runs/{run_id}/gpu.log",
-    "system": ("tail -F data/output/models/imitation/{case}/runs/{run_id}/system.log"),
+    "train": "tail -F data/output/models/{family}/{case}/runs/{run_id}/train.log",
+    "gpu": "tail -F data/output/models/{family}/{case}/runs/{run_id}/gpu.log",
+    "system": "tail -F data/output/models/{family}/{case}/runs/{run_id}/system.log",
 }
 
 
@@ -1547,7 +1557,9 @@ def tail_cmd(
         console.print(f"[red]ssh unavailable:[/] {exc}")
         raise typer.Exit(code=1) from exc
 
-    remote_cmd = TAIL_SOURCES[source].format(case=_case_subdir(case), run_id=run_id)
+    remote_cmd = TAIL_SOURCES[source].format(
+        family=_case_family(case), case=_case_subdir(case), run_id=run_id
+    )
     if not follow:
         # `tail -F` を `tail -n 200` に置き換える
         remote_cmd = remote_cmd.replace("tail -F", "tail -n 200")

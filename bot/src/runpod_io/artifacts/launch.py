@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from runpod_io.config.cases import runs_root_for
+
 LAUNCH_FILENAME = "launch.json"
 
 
@@ -65,5 +67,10 @@ def read_launch_json(run_dir: Path) -> dict[str, Any]:
 
 
 def find_run_dir(repo_root: Path, run_id: str, case: str) -> Path:
-    """case ディレクトリ配下の run_dir パスを返す。存在チェックは呼び出し側。"""
-    return repo_root / f"data/output/models/imitation/{case}/runs/{run_id}"
+    """case ディレクトリ配下の run_dir パスを返す。存在チェックは呼び出し側。
+
+    `runs_root_for(case)` を介して family (imitation / reinforce / ...) を
+    解決する。reinforce_case1 のような新 family のキーも追加すれば自動的に
+    `data/output/models/<family>/<subdir>/runs/<run_id>` に解決される。
+    """
+    return repo_root / runs_root_for(case) / run_id

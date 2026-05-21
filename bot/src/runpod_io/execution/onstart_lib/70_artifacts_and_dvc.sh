@@ -27,30 +27,27 @@ echo "[onstart] step=dvc_add_run"
 # 落として相対 path にする (cwd=/workspace/orbit-wars 前提)。
 #
 # DVC は symlinked dir 内のファイルに `dvc add` できないため、persist_setup で
-# 張った data/output/models/imitation -> /persist/data-output-models-imitation
+# 張った data/output/models/<CASE_FAMILY> -> /persist/data-output-models-<CASE_FAMILY>
 # の symlink を一時的に解除し、中身を実 dir にコピーで戻してから dvc add する。
 # 完了後 (push 成否に関わらず) symlink を再構築する。観測: 2026-05-05 case7
 # Step B 試行 #2 で `dvc_add_run` が `Cannot add files inside symlinked
 # directories` で fatal exit。mart_dvc_persist と同じ pattern。
-# case11_smoke shares case11 on disk; strip _smoke suffix so dvc add path matches
-# the runs dir that 40_uv_and_dvc_pull.sh's RUN_DIR_ABS uses (also stripped).
-CASE_DIR_70=$(echo '<CASE>' | sed 's/_smoke$//')
-RUN_DIR_REL="data/output/models/imitation/${CASE_DIR_70}/runs/<RUN_ID>"
+RUN_DIR_REL="data/output/models/<CASE_FAMILY>/<CASE_SUBDIR>/runs/<RUN_ID>"
 OUTPUT_LINK_TARGET=""
-if [ -L data/output/models/imitation ]; then
-  OUTPUT_LINK_TARGET=$(readlink data/output/models/imitation)
-  echo "[onstart] dvc_add_run: unlinking data/output/models/imitation -> ${OUTPUT_LINK_TARGET}"
-  rm data/output/models/imitation
-  mkdir -p data/output/models/imitation
-  cp -a "${OUTPUT_LINK_TARGET}/." data/output/models/imitation/ 2>&1 | tail -3 || true
+if [ -L "data/output/models/<CASE_FAMILY>" ]; then
+  OUTPUT_LINK_TARGET=$(readlink "data/output/models/<CASE_FAMILY>")
+  echo "[onstart] dvc_add_run: unlinking data/output/models/<CASE_FAMILY> -> ${OUTPUT_LINK_TARGET}"
+  rm "data/output/models/<CASE_FAMILY>"
+  mkdir -p "data/output/models/<CASE_FAMILY>"
+  cp -a "${OUTPUT_LINK_TARGET}/." "data/output/models/<CASE_FAMILY>/" 2>&1 | tail -3 || true
 fi
 
 _relink_output() {
   if [ -n "${OUTPUT_LINK_TARGET}" ]; then
-    echo "[onstart] dvc_add_run: re-linking data/output/models/imitation -> ${OUTPUT_LINK_TARGET}"
-    rsync -a --delete data/output/models/imitation/ "${OUTPUT_LINK_TARGET}/" 2>&1 | tail -3 || true
-    rm -rf data/output/models/imitation
-    ln -sfn "${OUTPUT_LINK_TARGET}" data/output/models/imitation
+    echo "[onstart] dvc_add_run: re-linking data/output/models/<CASE_FAMILY> -> ${OUTPUT_LINK_TARGET}"
+    rsync -a --delete "data/output/models/<CASE_FAMILY>/" "${OUTPUT_LINK_TARGET}/" 2>&1 | tail -3 || true
+    rm -rf "data/output/models/<CASE_FAMILY>"
+    ln -sfn "${OUTPUT_LINK_TARGET}" "data/output/models/<CASE_FAMILY>"
   fi
 }
 

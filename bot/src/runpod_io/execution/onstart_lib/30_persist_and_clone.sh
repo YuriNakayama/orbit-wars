@@ -125,20 +125,20 @@ if [ -d /persist ]; then
     ln -sfn /persist/data-mart-imitation data/mart/imitation
   fi
 
-  # data/output/models/imitation も /persist に持続化。
+  # data/output/models/<CASE_FAMILY> も /persist に持続化。
   # train artifact の正本は DVC + S3 (`step=dvc_add_run` で push 済み) だが、
   # 学習中に pod が落ちた場合の checkpoint 救出や、複数 run の train.log /
   # gpu.log を残しておきたいケースに有用。サイズ管理は cost-report で観測。
-  mkdir -p data/output/models /persist/data-output-models-imitation
-  if [ -L data/output/models/imitation ]; then
+  mkdir -p data/output/models "/persist/data-output-models-<CASE_FAMILY>"
+  if [ -L "data/output/models/<CASE_FAMILY>" ]; then
     : # already linked
-  elif [ -d data/output/models/imitation ]; then
-    cp -an data/output/models/imitation/. /persist/data-output-models-imitation/ \
+  elif [ -d "data/output/models/<CASE_FAMILY>" ]; then
+    cp -an "data/output/models/<CASE_FAMILY>/." "/persist/data-output-models-<CASE_FAMILY>/" \
       2>/dev/null || true
-    rm -rf data/output/models/imitation
-    ln -sfn /persist/data-output-models-imitation data/output/models/imitation
+    rm -rf "data/output/models/<CASE_FAMILY>"
+    ln -sfn "/persist/data-output-models-<CASE_FAMILY>" "data/output/models/<CASE_FAMILY>"
   else
-    ln -sfn /persist/data-output-models-imitation data/output/models/imitation
+    ln -sfn "/persist/data-output-models-<CASE_FAMILY>" "data/output/models/<CASE_FAMILY>"
   fi
 fi
 

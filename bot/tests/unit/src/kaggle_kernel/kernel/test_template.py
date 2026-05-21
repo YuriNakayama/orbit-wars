@@ -32,8 +32,7 @@ def _ctx(**overrides: object) -> RenderContext:
 def test_render_returns_valid_notebook() -> None:
     nb = render_notebook(_ctx())
     # nbformat の validate を pass
-    parsed = nbformat.from_dict(nb)
-    nbformat.validate(parsed)
+    nbformat.validate(nb)
     assert nb["nbformat"] == 4
 
 

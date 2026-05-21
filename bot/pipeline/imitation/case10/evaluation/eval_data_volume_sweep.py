@@ -101,8 +101,8 @@ def _run_one_side(
     challenger_idx = 0 if challenger_first else 1
     out: list[dict[str, Any]] = []
     for rec in records:
-        winner = rec.get("winner")
-        if winner is None or winner < 0:
+        winner = rec.winner
+        if winner < 0 or rec.draw:
             outcome = "draw"
         elif int(winner) == challenger_idx:
             outcome = "win"
@@ -111,9 +111,9 @@ def _run_one_side(
         out.append(
             {
                 "outcome": outcome,
-                "turns": int(rec.get("turns", 0) or 0),
+                "turns": int(rec.turns or 0),
                 "challenger_first": challenger_first,
-                "seed": rec.get("seed"),
+                "seed": rec.seed,
             }
         )
     return out
@@ -126,7 +126,7 @@ def _summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     losses = sum(1 for r in rs if r["outcome"] == "loss")
     draws = sum(1 for r in rs if r["outcome"] == "draw")
     turns = [r["turns"] for r in rs if r["turns"] > 0]
-    side = {"p1": [], "p2": []}
+    side: dict[str, list[dict[str, Any]]] = {"p1": [], "p2": []}
     for r in rs:
         bucket = "p1" if r["challenger_first"] else "p2"
         side[bucket].append(r)

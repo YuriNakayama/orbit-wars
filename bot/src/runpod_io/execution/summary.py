@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from runpod_io.artifacts.launch import read_launch_json
+from runpod_io.config.cases import runs_root_for
 from runpod_io.execution import progress as progress_mod
 
 
@@ -83,7 +84,7 @@ def build_summary(
     progress_module: Any = progress_mod,
 ) -> RunSummary:
     """主要な source を merge して RunSummary を返す。"""
-    relative = Path(f"data/output/models/imitation/{case}/runs/{run_id}")
+    relative = runs_root_for(case) / run_id
     run_dir = repo_root / relative
 
     # 1) launch.json
