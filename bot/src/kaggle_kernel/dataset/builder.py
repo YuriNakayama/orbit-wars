@@ -106,10 +106,13 @@ def build_snapshot(
             shutil.copy2(wheel, wheels_dir / wheel.name)
 
     if include_mart_files:
-        # Kaggle は top-level に `data/` というディレクトリ名を予約しており
-        # upload 時に sub directory が drop される (実測: data.zip upload 成功
-        # 表示でも file list に出現しない)。`mart/` に rewrite して回避する。
-        # kernel 側は cell B で mirror 時に mart/ -> data/ にリネームする。
+        # Kaggle dataset の zip mode は top-level dir を <name>.zip にして
+        # アップロードする。`data.zip` / `mart_payload.zip` のような top-level
+        # zip は Upload Successful と表示されても処理後の dataset には
+        # 含まれないという挙動を観測 (data/mart_payload の双方で再現)。
+        # 回避策: parquet を flat な top-level ファイルとして配置する
+        # (case + split を encode した名前)。Kernel 側は cell B で
+        # data/mart/imitation/<case>/<split>.parquet にリネームする。
         for src in include_mart_files:
             src_norm = Path(os.path.normpath(str(src.absolute())))
             src_real = src.resolve()
@@ -130,13 +133,23 @@ def build_snapshot(
                     rel_path = Path(*parts[idx:])
                 else:
                     raise
-            # rel_path は "data/mart/imitation/case11/train.parquet"。
-            # 先頭の "data" を "mart_payload" に rewrite (Kaggle 予約名回避)。
+            # rel_path は "data/mart/imitation/<case>/<split>.parquet"。
+            # case と split を抽出して "kmart__<case>__<split>.parquet" に
+            # flatten する。
             parts = rel_path.parts
-            if parts and parts[0] == "data":
-                rel_path = Path("mart_payload", *parts[1:])
-            target = dest_dir / rel_path
-            target.parent.mkdir(parents=True, exist_ok=True)
+            if (
+                len(parts) >= 5
+                and parts[0] == "data"
+                and parts[1] == "mart"
+                and parts[2] == "imitation"
+            ):
+                case = parts[3]
+                split = parts[4]  # train.parquet / val.parquet
+                flat_name = f"kmart__{case}__{split}"
+                target = dest_dir / flat_name
+            else:
+                target = dest_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_for_copy, target)
 
     git_dir = dest_dir / ".git"
