@@ -30,7 +30,7 @@ dependencies = [
 orbit-wars-vendor = { path = "../simulator/python", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/submit", "src/dataset", "src/vast", "src/runpod_io", "src/evaluation", "src/utils", "pipeline"]
+packages = ["src/submit", "src/dataset", "src/vast", "src/runpod_io", "src/kaggle_kernel", "src/evaluation", "src/utils", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]
@@ -161,6 +161,9 @@ max-complexity = 5
 "src/dataset/cli.py" = ["B008"]  # typer の慣習
 "src/vast/cli.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
 "src/runpod_io/cli/app.py" = ["B008", "E501"]  # typer の慣習 + 日本語 docstring
+"src/kaggle_kernel/cli/app.py" = ["B008", "B005", "E501"]  # typer の慣習 + 日本語 docstring
+"src/kaggle_kernel/__init__.py" = ["E501"]  # 日本語 docstring の見出し
+"src/kaggle_kernel/interactive/template.py" = ["E501"]  # notebook cell の埋め込みコード
 "pipeline/rulebase/case1/eda/**/*.py" = ["B018"]  # # %% セルで式だけの行が出力確認用
 
 [tool.ruff.lint.isort]

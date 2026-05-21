@@ -485,6 +485,7 @@ def train(
         train_module="" if preprocess_only else defaults["train_module"],
         config_arg=defaults["config_arg"],
         preprocess_cmd=defaults["preprocess_cmd"],
+        mode="oneshot",
     )
     # snapshot は JSON 文字列 (引用符を含む) なので、RunPod の GraphQL env エンコード
     # (`f'value: "{v}"'`) で壊れる。base64 化して安全な ASCII のみにする。
@@ -576,6 +577,7 @@ def train(
         gpu_type_id=chosen.gpu_type_id,
         dph_total=chosen.dph_total,
         data_center_id=data_center_id,
+        mode="oneshot",
     )
     console.print(
         f"\n[green]Pod launched![/] id=[bold]{pod_id}[/] run_id={run_id} case={case}"
@@ -641,6 +643,239 @@ def train(
             elif cleanup_result.error:
                 console.print(f"[yellow]cleanup warning:[/] {cleanup_result.error}")
             raise typer.Exit(code=1)
+
+
+@app.command("dev")
+def dev_cmd(
+    commit_sha: str = typer.Argument(..., help="must be pushed to origin"),
+    case: str = typer.Option(
+        DEFAULT_CASE,
+        "--case",
+        help=f"imitation case to base the dev pod on (one of: {sorted(CASE_DEFAULTS)})",
+    ),
+    cloud_type: str = typer.Option(
+        DEFAULT_CLOUD_TYPE,
+        "--cloud-type",
+        help="SECURE / COMMUNITY / ALL",
+    ),
+    gpu_names: list[str] = typer.Option(
+        list(DEFAULT_GPU_NAMES),
+        "--gpu-name",
+        help="GPU type ids to consider (repeatable)",
+    ),
+    max_dph: float = typer.Option(2.0, "--max-dph"),
+    label: str | None = typer.Option(None, "--label"),
+    cost_limit_usd: float = typer.Option(
+        DEFAULT_COST_LIMIT_USD,
+        "--cost-limit",
+        help="confirm before launching if estimated cost exceeds this",
+    ),
+    aws_profile: str = typer.Option(DEFAULT_AWS_PROFILE, "--aws-profile"),
+    image: str = typer.Option(DEFAULT_IMAGE, "--image"),
+    disk_gb: int = typer.Option(DEFAULT_DISK_GB, "--disk-gb"),
+    volume_id: str | None = typer.Option(
+        None,
+        "--volume-id",
+        help="既存 network volume id (Secure Cloud のみ attach 可)",
+    ),
+    volume_name: str = typer.Option(DEFAULT_VOLUME_NAME, "--volume-name"),
+    mount_path: str = typer.Option(DEFAULT_MOUNT_PATH, "--mount-path"),
+    data_center_id: str | None = typer.Option(None, "--data-center-id"),
+    skip_smoke: bool = typer.Option(
+        False,
+        "--skip-smoke",
+        help="ローカル smoke test をスキップ。interactive 用途は import 検査だけで十分なことが多い",
+    ),
+) -> None:
+    """Launch an interactive RunPod pod for development / debugging.
+
+    train モードと異なり:
+      * onstart は preprocess + uv sync + DVC pull まで実行して sleep infinity で待機
+      * 自動 terminate / 8h timeout guard / EXIT trap を全てスキップ
+      * 終了は `dev/runpod destroy <run_id>` で明示的に行う
+      * SSH 接続コマンドを launch 直後に表示する (`dev/runpod ssh <run_id>` も使える)
+    """
+    defaults = _case_defaults(case)
+
+    if not skip_smoke:
+        _run_preflight_smoke(case)
+
+    try:
+        repo_url = _git_remote_url()
+    except subprocess.CalledProcessError as exc:
+        raise typer.BadParameter(
+            "could not resolve `git remote get-url origin`"
+        ) from exc
+    _verify_commit_pushed(commit_sha)
+    branch = _git_current_branch()
+
+    try:
+        aws_creds = load_aws_creds(profile=aws_profile)
+        runpod_api_key = load_runpod_api_key()
+    except CredentialsError as exc:
+        console.print(f"[red]credentials error:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    sdk = _build_sdk(runpod_api_key)
+
+    # Volume 解決: train とほぼ同じだが auto-create は対話運用にそぐわないので未対応。
+    volume_id_resolved: str | None = None
+    if cloud_type == "COMMUNITY" and volume_id:
+        console.print(
+            "[yellow]volume:[/] Community Cloud は network volume 不可。設定は無視されます。"
+        )
+    elif volume_id is not None:
+        volume_id_resolved = volume_id
+        console.print(
+            f"[cyan]volume:[/] linking id={volume_id_resolved} at {mount_path}"
+        )
+    else:
+        existing = find_volume_by_name(list_volumes(_volume_sdk()), volume_name)
+        if existing is not None:
+            volume_id_resolved = existing.id
+            console.print(
+                f"[cyan]volume:[/] reusing {existing.name!r} id={existing.id}"
+                f" size={existing.size_gb}GB at {mount_path}"
+            )
+            if data_center_id is None:
+                data_center_id = existing.data_center_id
+
+    offers = search_offers(
+        sdk,
+        gpu_names=gpu_names,
+        cloud_type=cloud_type,
+        max_dph=max_dph,
+    )
+    if not offers:
+        console.print("[red]No offers matched.[/]")
+        raise typer.Exit(code=1)
+    chosen = pick_offer(offers, console=console)
+    # interactive は長時間保持しがちなので 1h ベースで見積もり警告。
+    estimated_1h = chosen.dph_total
+    console.print(
+        f"\nSelected {chosen.gpu_type_id} ({chosen.cloud_type}) "
+        f"@ ${chosen.dph_total:.3f}/h (est. ${estimated_1h:.3f} per hour held)"
+    )
+    if estimated_1h > cost_limit_usd:
+        if not typer.confirm(
+            f"Per-hour cost ${estimated_1h:.3f} exceeds limit ${cost_limit_usd:.2f}. "
+            "Proceed anyway? (interactive pods are billed until destroy)",
+            default=False,
+        ):
+            raise typer.Exit(code=1)
+
+    run_id = generate_run_id(branch, commit_sha, seed=0)
+    onstart_cmd = render_onstart(
+        DEFAULT_TEMPLATE_PATH,
+        commit_sha=commit_sha,
+        run_id=run_id,
+        stage=defaults["stage"],
+        branch=branch,
+        repo_url=repo_url,
+        case=case,
+        train_module=defaults["train_module"],
+        config_arg=defaults["config_arg"],
+        preprocess_cmd=defaults["preprocess_cmd"],
+        mode="interactive",
+    )
+    snapshot_json = json.dumps(chosen.to_snapshot())
+    snapshot_b64 = base64.b64encode(snapshot_json.encode("utf-8")).decode("ascii")
+    env_dict: dict[str, str] = {
+        "AWS_ACCESS_KEY_ID": aws_creds.access_key_id,
+        "AWS_SECRET_ACCESS_KEY": aws_creds.secret_access_key,
+        "AWS_DEFAULT_REGION": aws_creds.region,
+        "RUNPOD_API_KEY": runpod_api_key,
+        "ORBIT_WARS_RUN_ID": run_id,
+        "ORBIT_WARS_GIT_SHA": commit_sha,
+        "ORBIT_WARS_GIT_BRANCH": branch,
+        "ORBIT_WARS_CASE": case,
+        "ORBIT_WARS_RUNPOD_OFFER_SNAPSHOT_B64": snapshot_b64,
+        "ORBIT_WARS_RUNPOD_MODE": "interactive",
+    }
+    git_pat = load_git_pat()
+    if git_pat:
+        env_dict["GIT_PAT"] = git_pat
+    env = build_env_dict(env_dict)
+
+    # train_cmd と同じ fallback chain: 在庫切れ (QueryError "no longer any
+    # instances available") に当たったら cheapest-first 順で次の offer を試す。
+    from runpod.error import QueryError as _RunPodQueryError
+
+    fallback_chain: list[Any] = [chosen]
+    for o in offers:
+        if o is not chosen:
+            fallback_chain.append(o)
+    pod_id: str | None = None
+    last_err: Exception | None = None
+    used_offer = chosen
+    for attempt_idx, offer_try in enumerate(fallback_chain, start=1):
+        try:
+            pod_id = create_pod(
+                sdk,
+                name=label or f"dev-{run_id}",
+                gpu_type_id=offer_try.gpu_type_id,
+                cloud_type=offer_try.cloud_type,
+                onstart_script=onstart_cmd,
+                env=env,
+                image=image,
+                container_disk_gb=disk_gb,
+                network_volume_id=volume_id_resolved,
+                volume_mount_path=mount_path,
+                data_center_id=data_center_id,
+            )
+            used_offer = offer_try
+            if attempt_idx > 1:
+                console.print(
+                    f"[green]launched on fallback #{attempt_idx}:[/] "
+                    f"{offer_try.gpu_type_id} ({offer_try.cloud_type})"
+                )
+            break
+        except _RunPodQueryError as exc:
+            last_err = exc
+            console.print(
+                f"[yellow]offer {offer_try.gpu_type_id} unavailable "
+                f"(attempt {attempt_idx}/{len(fallback_chain)}):[/] {exc}"
+            )
+            continue
+    if pod_id is None:
+        console.print(
+            "[red]all offers exhausted; no pod was created.[/] "
+            "Try later, broaden --gpu-name, or switch --cloud-type=ALL."
+        )
+        if last_err is not None:
+            raise last_err
+        raise typer.Exit(code=1)
+    chosen = used_offer
+    run_dir_local = find_run_dir(_repo_root(), run_id, case)
+    write_launch_json(
+        run_dir_local,
+        run_id=run_id,
+        pod_id=pod_id,
+        commit_sha=commit_sha,
+        branch=branch,
+        case=case,
+        cloud_type=chosen.cloud_type,
+        gpu_type_id=chosen.gpu_type_id,
+        dph_total=chosen.dph_total,
+        data_center_id=data_center_id,
+        mode="interactive",
+    )
+    console.print(
+        f"\n[green]Interactive pod launched![/] id=[bold]{pod_id}[/] "
+        f"run_id={run_id} case={case}"
+    )
+    console.print(
+        "[yellow]Billed continuously until destroyed.[/]"
+        " Pod は明示的に止めるまで課金され続けます。"
+    )
+    console.print(
+        "\n[bold]Next steps[/]:\n"
+        f"  Wait for setup:  [cyan]dev/runpod status {run_id} --case {case}[/]"
+        f" (look for 50_interactive_ready)\n"
+        f"  Open SSH:        [cyan]dev/runpod ssh {run_id} --case {case}[/]\n"
+        f"  Sync code:       [cyan]dev/runpod sync {run_id} --case {case} --push[/]\n"
+        f"  Destroy when done: [cyan]dev/runpod destroy {run_id} --case {case}[/]"
+    )
 
 
 @app.command()
@@ -932,6 +1167,7 @@ def ps_cmd(
         pods = [p for p in pods if p.is_active]
 
     pod_id_to_run: dict[str, str] = {}
+    pod_id_to_mode: dict[str, str] = {}
     if case is not None:
         runs_root = _repo_root() / _runs_root_for(case)
         if runs_root.is_dir():
@@ -946,6 +1182,7 @@ def ps_cmd(
                 rid = payload.get("run_id")
                 if pid and rid:
                     pod_id_to_run[str(pid)] = str(rid)
+                    pod_id_to_mode[str(pid)] = str(payload.get("mode", "oneshot"))
 
     if not pods:
         msg = "[yellow]No active pods.[/]" if not show_all else "[yellow]No pods.[/]"
@@ -955,6 +1192,7 @@ def ps_cmd(
     table = Table(title="RunPod pods")
     table.add_column("pod_id")
     table.add_column("name / run_id")
+    table.add_column("mode")
     table.add_column("status")
     table.add_column("gpu")
     table.add_column("uptime", justify="right")
@@ -962,9 +1200,16 @@ def ps_cmd(
     table.add_column("est. $", justify="right")
     for p in pods:
         run_id_label = pod_id_to_run.get(p.pod_id, p.name)
+        mode_label = pod_id_to_mode.get(p.pod_id, "?")
+        # interactive は課金停止し忘れリスクが高いので黄色強調。
+        if mode_label == "interactive":
+            mode_display = f"[yellow]{mode_label}[/]"
+        else:
+            mode_display = mode_label
         table.add_row(
             p.pod_id,
             run_id_label,
+            mode_display,
             p.desired_status,
             p.gpu_display_name,
             pod_state_mod.format_uptime(p.uptime_seconds),
@@ -972,6 +1217,20 @@ def ps_cmd(
             f"{p.estimated_cost_usd:.3f}",
         )
     console.print(table)
+    # interactive pod が混じっている場合、destroy リマインダを表示。
+    interactive_runs = [
+        pod_id_to_run.get(p.pod_id)
+        for p in pods
+        if pod_id_to_mode.get(p.pod_id) == "interactive"
+    ]
+    interactive_runs = [r for r in interactive_runs if r]
+    if interactive_runs:
+        console.print(
+            "\n[yellow]Reminder:[/] interactive pods are billed until destroyed."
+            " Stop them with: [cyan]dev/runpod destroy <run_id>[/]"
+        )
+        for r in interactive_runs:
+            console.print(f"  - dev/runpod destroy {r}")
 
 
 @app.command("status")
@@ -1301,6 +1560,222 @@ def tail_cmd(
     # フォアグラウンド実行: ユーザの Ctrl-C で止める想定
     proc = subprocess.run(cmd, check=False)
     if proc.returncode != 0 and proc.returncode != 130:  # 130 = SIGINT
+        raise typer.Exit(code=proc.returncode)
+
+
+@app.command("ssh")
+def ssh_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod dev / train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    via: str = typer.Option(
+        "proxy",
+        "--via",
+        help="proxy (ssh.runpod.io 経由、既定) / direct (TCP/22 public port)",
+    ),
+    key: Path | None = typer.Option(
+        None,
+        "--key",
+        help="SSH private key path。既定: proxy→~/.ssh/id_ed25519, direct→~/.runpod/ssh/RunPod-Key-Go",
+    ),
+    exec_cmd: str | None = typer.Option(
+        None,
+        "--exec",
+        help="1 回だけ実行するコマンド。省略時は対話 shell を開く。",
+    ),
+) -> None:
+    """Open an interactive SSH session to the pod for the given run_id.
+
+    proxy 経路: `ssh <pod_id>@ssh.runpod.io -i ~/.ssh/id_ed25519` 相当。
+    direct 経路: `ssh root@<ip> -p <port> -i ~/.runpod/ssh/RunPod-Key-Go` 相当。
+    """
+    if via not in ("proxy", "direct"):
+        raise typer.BadParameter(f"--via must be proxy/direct, got {via!r}")
+
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]launch.json not found:[/] {run_dir}. "
+            "ssh はローカルから launch した run のみ対象です。"
+        )
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+
+    from runpod_io.runpod.ssh import (
+        SshUnavailable,
+        get_pod_ssh_endpoint,
+    )
+
+    if via == "direct":
+        # direct は pod が RUNNING + sshd up でないと port 解決できないので SDK を引く。
+        _ensure_runpod_key()
+        try:
+            endpoint = get_pod_ssh_endpoint(
+                runpod_sdk, pod_id, via="direct", key_path=key
+            )
+        except SshUnavailable as exc:
+            console.print(f"[red]ssh unavailable:[/] {exc}")
+            console.print(
+                "[yellow]hint:[/] pod がまだ RUNNING/SSHD up に達していない可能性。"
+                f" `dev/runpod status {run_id} --case {case}` で進捗確認してください。"
+            )
+            raise typer.Exit(code=1) from exc
+    else:
+        # proxy は SDK 呼び出し不要。pod_id だけで endpoint を組める。
+        endpoint = get_pod_ssh_endpoint(None, pod_id, via="proxy", key_path=key)
+
+    cmd = endpoint.to_command(exec_cmd)
+    console.print(f"[dim]$ {' '.join(cmd)}[/]")
+    proc = subprocess.run(cmd, check=False)
+    # 130 = SIGINT (Ctrl-C で終了), 255 = ssh connection lost も exit 0 扱いにはしない
+    if proc.returncode not in (0, 130):
+        raise typer.Exit(code=proc.returncode)
+
+
+@app.command("destroy")
+def destroy_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod dev / train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="確認 prompt を省略する"),
+) -> None:
+    """Terminate the pod backing a run_id (interactive モードでは必須)。
+
+    interactive mode の pod は auto-cleanup が無いので、ユーザーが明示的に
+    terminate する必要がある。oneshot mode の pod に対しても呼べる (no-op
+    or idempotent terminate)。
+    """
+    from runpod_io.runpod.cleanup import terminate_pod
+
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(f"[red]launch.json not found:[/] {run_dir}")
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+    mode = str(launch.get("mode", "oneshot"))
+    gpu = launch.get("gpu_type_id")
+    dph = launch.get("dph_total")
+
+    console.print(
+        f"[bold]target:[/] run_id={run_id} pod_id={pod_id} mode={mode} "
+        f"gpu={gpu!r} ${dph}/h"
+    )
+    if not yes:
+        if not typer.confirm("Terminate this pod?", default=False):
+            console.print("[yellow]aborted[/]")
+            raise typer.Exit(code=1)
+
+    _ensure_runpod_key()
+    result = terminate_pod(runpod_sdk, pod_id)
+    if result.terminated:
+        console.print(f"[green]terminated[/] pod={pod_id}")
+        # interactive mode では train を実行しないため run.json はローカルに
+        # 存在しないことが多い。oneshot mode でも DVC pull 前に terminate した
+        # 場合は同様。書き込めなければ status 記録は諦め、terminate は成功扱い。
+        run_json_path = run_dir / "run.json"
+        if run_json_path.is_file():
+            update_run_json(run_dir, status="destroyed_manual")
+            console.print("[dim]run.json status -> destroyed_manual[/]")
+        else:
+            console.print(
+                "[dim]run.json not present (interactive mode); skipping status update[/]"
+            )
+    else:
+        console.print(
+            f"[red]failed to terminate[/] pod={pod_id} error={result.error!r}"
+        )
+        raise typer.Exit(code=1)
+
+
+@app.command("sync")
+def sync_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod dev / train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    direction: str = typer.Option(
+        "push",
+        "--direction",
+        help="push (local → pod, 既定) / pull (pod → local)",
+    ),
+    via: str = typer.Option(
+        "proxy",
+        "--via",
+        help="proxy (ssh.runpod.io) / direct (TCP/22 public port)",
+    ),
+    key: Path | None = typer.Option(None, "--key"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="rsync --dry-run で差分のみ表示する"
+    ),
+    delete: bool = typer.Option(
+        False, "--delete", help="rsync --delete で送信先の余分なファイルを消す (危険)"
+    ),
+    push: bool = typer.Option(False, "--push", help="--direction push のエイリアス"),
+    pull: bool = typer.Option(False, "--pull", help="--direction pull のエイリアス"),
+) -> None:
+    """Sync the bot/ directory between local and pod via rsync.
+
+    `dev/runpod dev` で起動した interactive pod 上でコード試行錯誤するための補助。
+    ローカルで編集 → `dev/runpod sync <run_id> --push` → 再実行、を 1 サイクルとする。
+    """
+    if push and pull:
+        raise typer.BadParameter("--push and --pull are mutually exclusive")
+    if push:
+        direction = "push"
+    if pull:
+        direction = "pull"
+    if direction not in ("push", "pull"):
+        raise typer.BadParameter(f"--direction must be push/pull, got {direction!r}")
+    if via not in ("proxy", "direct"):
+        raise typer.BadParameter(f"--via must be proxy/direct, got {via!r}")
+
+    repo_root = _repo_root()
+    run_dir = find_run_dir(repo_root, run_id, case)
+    try:
+        launch = read_launch_json(run_dir)
+    except FileNotFoundError as exc:
+        console.print(f"[red]launch.json not found:[/] {run_dir}")
+        raise typer.Exit(code=1) from exc
+    pod_id = str(launch["pod_id"])
+
+    from runpod_io.runpod.ssh import (
+        SshUnavailable,
+        get_pod_ssh_endpoint,
+    )
+    from runpod_io.runpod.sync import build_sync_plan
+
+    if via == "direct":
+        _ensure_runpod_key()
+        try:
+            endpoint = get_pod_ssh_endpoint(
+                runpod_sdk, pod_id, via="direct", key_path=key
+            )
+        except SshUnavailable as exc:
+            console.print(f"[red]ssh unavailable:[/] {exc}")
+            raise typer.Exit(code=1) from exc
+    else:
+        endpoint = get_pod_ssh_endpoint(None, pod_id, via="proxy", key_path=key)
+
+    local_bot_dir = repo_root / "bot"
+    plan = build_sync_plan(
+        endpoint=endpoint,
+        local_bot_dir=local_bot_dir,
+        direction=direction,
+        dry_run=dry_run,
+        delete=delete,
+    )
+    console.print(f"[cyan]{plan.describe()}[/]")
+    console.print(f"[dim]$ {' '.join(plan.cmd)}[/]")
+    if delete and not dry_run:
+        if not typer.confirm(
+            "--delete will remove files at the destination not present at source. Proceed?",
+            default=False,
+        ):
+            raise typer.Exit(code=1)
+    proc = subprocess.run(plan.cmd, check=False)
+    if proc.returncode != 0:
         raise typer.Exit(code=proc.returncode)
 
 

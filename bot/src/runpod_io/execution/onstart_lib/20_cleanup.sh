@@ -23,6 +23,13 @@ mark() {
 }
 mark "00_container_started"
 
+# RunPod mode: "oneshot" (default, train→DVC push→自動 remove) or "interactive"
+# (sleep infinity で pod を維持、auto remove なし、明示的 `dev/runpod destroy`
+# で削除する運用)。<RUNPOD_MODE> は render_onstart で展開される。
+RUNPOD_MODE="<RUNPOD_MODE>"
+echo "[onstart] runpod_mode=${RUNPOD_MODE}"
+mark "01_mode_${RUNPOD_MODE}"
+
 # Periodic log flush: 30 秒間隔で /var/log/onstart.log を S3 に push する。
 # stall 検出 → 外部から runpodctl remove pod / SDK terminate された場合に
 # bash trap (cleanup_destroy) が動かず onstart.log が失われる問題への対策。
@@ -51,19 +58,27 @@ fi
 # remove 前に log を S3 へ最終 snapshot として書き出す (cleanup_destroy が
 # 呼ばれない経路の救済 — 例えば `runpodctl remove pod` を外部から叩かれて
 # bash に SIGKILL が届いた場合や、kernel panic 等)。
-(
-  sleep 28800
-  if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
-    aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
-  fi
-  runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true
-) &
-TIMEOUT_GUARD_PID=$!
+# interactive モードでは timeout guard を張らない (ユーザーが destroy するまで保持)。
+TIMEOUT_GUARD_PID=""
+if [ "${RUNPOD_MODE}" = "oneshot" ]; then
+  (
+    sleep 28800
+    if [ -f /var/log/onstart.log ] && command -v aws >/dev/null 2>&1; then
+      aws s3 cp /var/log/onstart.log "${S3_MARKER_PREFIX}/onstart.log" 2>/dev/null || true
+    fi
+    runpodctl remove pod "$INSTANCE_ID" 2>/dev/null || true
+  ) &
+  TIMEOUT_GUARD_PID=$!
+else
+  echo "[onstart] interactive mode: skipping 8h timeout guard"
+fi
 
 cleanup_destroy() {
   local exit_code=$?
   # Stop the timeout guard so it doesn't fire later in the success path.
-  kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
+  if [ -n "${TIMEOUT_GUARD_PID}" ]; then
+    kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
+  fi
   # Stop the periodic log flusher: final snapshot is taken below at the
   # canonical `onstart.log` path, so the `onstart.live.log` daemon is no
   # longer needed and would otherwise race with the final upload.
@@ -114,5 +129,11 @@ cleanup_destroy() {
   # trap 連鎖や set -e による即 exit を抑止する。
   exec sleep infinity
 }
-trap cleanup_destroy EXIT
+# interactive モードでは EXIT trap を張らない。pod は sleep infinity で保持され、
+# ユーザーが `dev/runpod destroy <run_id>` で明示的に terminate するまで残る。
+if [ "${RUNPOD_MODE}" = "oneshot" ]; then
+  trap cleanup_destroy EXIT
+else
+  echo "[onstart] interactive mode: skipping cleanup_destroy EXIT trap"
+fi
 

@@ -37,7 +37,15 @@ _TEMPLATE_PLACEHOLDERS = (
     "<TRAIN_MODULE>",
     "<CONFIG_ARG>",
     "<PREPROCESS_CMD>",
+    "<RUNPOD_MODE>",
 )
+
+# pod の運用モード:
+#   - "oneshot":     train → DVC push → 自動 remove (従来動作、CI / 学習ジョブ向け)
+#   - "interactive": preprocess + uv sync 後に sleep infinity で待機。
+#                    ユーザーが `dev/runpod ssh` で接続して対話的に作業し、
+#                    `dev/runpod destroy` で明示的に削除する。
+SUPPORTED_RUNPOD_MODES = ("oneshot", "interactive")
 
 _ONSTART_LIBS: dict[str, str] = {
     "__ONSTART_LIB_00_PRELUDE__": "00_prelude.sh",
@@ -126,10 +134,15 @@ def render_onstart(
     train_module: str = "pipeline.imitation.case1.training.train",
     config_arg: str = "",
     preprocess_cmd: str = "",
+    mode: str = "oneshot",
 ) -> str:
     """テンプレを読み placeholder を置換した script 文字列を返す。
 
     値は事前に regex でバリデーション。違反したら TemplateError。
+
+    Args:
+        mode: "oneshot" (既定) で train → 自動 remove。"interactive" で sleep
+            infinity 保持し SSH 接続で対話操作する。詳細は SUPPORTED_RUNPOD_MODES。
     """
     _validate("commit_sha", commit_sha)
     _validate("run_id", run_id)
@@ -145,6 +158,10 @@ def render_onstart(
         )
     _validate_config_arg(config_arg)
     _validate_preprocess_cmd(preprocess_cmd)
+    if mode not in SUPPORTED_RUNPOD_MODES:
+        raise TemplateError(
+            f"invalid mode={mode!r}; must be one of {SUPPORTED_RUNPOD_MODES}"
+        )
     if not template_path.is_file() and template_path.name == "onstart.sh.tmpl":
         template_path = (
             Path(__file__).resolve().parent.parent / "execution" / "onstart.sh.tmpl"
@@ -161,6 +178,7 @@ def render_onstart(
         "<TRAIN_MODULE>": train_module,
         "<CONFIG_ARG>": config_arg,
         "<PREPROCESS_CMD>": preprocess_cmd,
+        "<RUNPOD_MODE>": mode,
     }
     for placeholder, value in substitutions.items():
         text = text.replace(placeholder, value)
