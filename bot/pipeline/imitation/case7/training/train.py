@@ -162,15 +162,19 @@ def _resolve_run_dir() -> Path | None:
     run_dir_env = os.environ.get("ORBIT_WARS_RUN_DIR")
     vast_id = os.environ.get("ORBIT_WARS_VAST_INSTANCE_ID")
     runpod_id = os.environ.get("ORBIT_WARS_RUNPOD_POD_ID")
-    if vast_id and runpod_id:
+    kk_slug = os.environ.get("ORBIT_WARS_KAGGLE_KERNEL_SLUG")
+    active = [bool(vast_id), bool(runpod_id), bool(kk_slug)]
+    if sum(active) > 1:
         raise RuntimeError(
-            "Both ORBIT_WARS_VAST_INSTANCE_ID and ORBIT_WARS_RUNPOD_POD_ID are set. "
-            "Only one provider should be active per run."
+            "Multiple provider env vars are set simultaneously. "
+            "Set only one of ORBIT_WARS_VAST_INSTANCE_ID / "
+            "ORBIT_WARS_RUNPOD_POD_ID / ORBIT_WARS_KAGGLE_KERNEL_SLUG per run."
         )
-    if (vast_id or runpod_id) and not run_dir_env:
+    if any(active) and not run_dir_env:
         raise RuntimeError(
             "ORBIT_WARS_RUN_DIR is required when a provider id "
-            "(ORBIT_WARS_VAST_INSTANCE_ID / ORBIT_WARS_RUNPOD_POD_ID) is set. "
+            "(ORBIT_WARS_VAST_INSTANCE_ID / ORBIT_WARS_RUNPOD_POD_ID / "
+            "ORBIT_WARS_KAGGLE_KERNEL_SLUG) is set. "
             "Refusing to overwrite canonical weights.pt from a cloud instance."
         )
     if not run_dir_env:
@@ -435,6 +439,17 @@ def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
             parsed = None
         if isinstance(parsed, dict):
             runpod_offer_snapshot = parsed
+    kaggle_kernel_meta: dict[str, Any] | None = None
+    kk_meta_raw = os.environ.get("ORBIT_WARS_KAGGLE_KERNEL_META")
+    if kk_meta_raw:
+        try:
+            kk_parsed = json.loads(kk_meta_raw)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"ORBIT_WARS_KAGGLE_KERNEL_META is set but not valid JSON: {e}"
+            ) from e
+        if isinstance(kk_parsed, dict):
+            kaggle_kernel_meta = kk_parsed
     gpu_name: str | None = None
     if torch.cuda.is_available():
         try:
@@ -457,6 +472,7 @@ def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
         gpu_name=gpu_name,
         vast_offer_snapshot=None,
         runpod_offer_snapshot=runpod_offer_snapshot,
+        kaggle_kernel_meta=kaggle_kernel_meta,
         command=command,
         weights_path=weights_path_rel,
         train_metrics=metrics,

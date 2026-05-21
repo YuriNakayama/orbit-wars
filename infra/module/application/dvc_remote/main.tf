@@ -28,6 +28,29 @@ resource "aws_s3_bucket_public_access_block" "dvc_remote" {
   restrict_public_buckets = true
 }
 
+# Kaggle Kernel interactive session の S3 channel オブジェクトは ephemeral。
+# 取り残されたまま課金されないよう、7 日経過で expire させる。
+resource "aws_s3_bucket_lifecycle_configuration" "dvc_remote" {
+  bucket = aws_s3_bucket.dvc_remote.id
+
+  rule {
+    id     = "kaggle_interactive_expiration"
+    status = "Enabled"
+
+    filter {
+      prefix = "kaggle_interactive/"
+    }
+
+    expiration {
+      days = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+}
+
 resource "aws_iam_user" "dvc_user" {
   name = "${var.prefix}-dvc-user"
 }
@@ -52,6 +75,20 @@ data "aws_iam_policy_document" "dvc_remote_rw" {
       "s3:PutObject",
     ]
     resources = ["${aws_s3_bucket.dvc_remote.arn}/remote/*"]
+  }
+
+  # Kaggle Kernel interactive mode: S3 を双方向 command channel として使うため、
+  # inbox を取り出し後に削除して再利用する必要がある。DVC append-only な
+  # ``remote/*`` 領域とは独立の prefix で、Delete を含めた完全な CRUD を許可する。
+  statement {
+    sid    = "KaggleInteractiveChannel"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = ["${aws_s3_bucket.dvc_remote.arn}/kaggle_interactive/*"]
   }
 }
 

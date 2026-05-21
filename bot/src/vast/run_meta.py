@@ -41,6 +41,7 @@ class RunMetadata:
     gpu_name: str | None = None
     vast_offer_snapshot: dict[str, Any] | None = None
     runpod_offer_snapshot: dict[str, Any] | None = None
+    kaggle_kernel_meta: dict[str, Any] | None = None
     command: str = ""
     weights_path: str = ""
     train_metrics: dict[str, Any] = field(default_factory=dict)
