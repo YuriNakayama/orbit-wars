@@ -14,6 +14,12 @@
 #   gamma        0.99  → 0.995 (terminal reward の reach を 12×: 0.007 → 0.082)
 # Iter1 結果 (commit 4950827): win_rate avg 0.21 / local eval 0.30。learn-but-not-improve
 # (entropy 18.3 → 8.9 で policy 決定的化、advantage signal がノイズ未満)。
+# A1+A2+A4 結果 (commit 5f254ed): win_rate avg 0.20 / last-10 0.19。効果なし。
+#
+# Iteration B2 (2026-05-22) — opponent curriculum:
+#   opponent: curriculum (iter 0-9 noop で確実な勝ち体験、iter 10-49 baseline_jax_lite)
+# noop 相手なら policy が「発射すれば勝てる」を学習しやすく、その後 baseline 相手の
+# 学習でも初期 advantage signal の正例 (勝ち体験) が残ることを期待。
 
 model:
   hidden: 192
@@ -46,7 +52,11 @@ training:
   minibatch_size: 256
   max_grad_norm: 0.5
   target_kl: null
-  opponent: baseline_jax_lite
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 10
+    early: noop
+    late: baseline_jax_lite
 
 output:
   run_dir: data/output/models/reinforce/case1_train_jax/runs

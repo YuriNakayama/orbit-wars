@@ -243,7 +243,7 @@ def _run_iter(
     gae_lambda: float,
     base_seed: int,
     opponent: str = "noop",
-) -> tuple[ActorCriticJax, Any, dict[str, float]]:
+) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
     t0 = time.perf_counter()
@@ -331,6 +331,19 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     seed = int(t_cfg.get("seed", 0))
     opponent = str(t_cfg.get("opponent", "noop"))
 
+    # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
+    # `late` opponent afterwards. When `opponent` is not "curriculum" the
+    # curriculum block is ignored and a single opponent runs for all iters.
+    curriculum_cfg = t_cfg.get("opponent_curriculum", {}) or {}
+    curriculum_switch_iter = int(curriculum_cfg.get("switch_iter", 0))
+    curriculum_early = str(curriculum_cfg.get("early", "noop"))
+    curriculum_late = str(curriculum_cfg.get("late", "baseline_jax_lite"))
+
+    def _opponent_for_iter(it: int) -> str:
+        if opponent != "curriculum":
+            return opponent
+        return curriculum_early if it < curriculum_switch_iter else curriculum_late
+
     ppo_cfg = _build_ppo_cfg(cfg_dict)
     model = _build_model(cfg_dict)
     model = _maybe_load_bc(model, cfg_dict)
@@ -345,18 +358,32 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
 
     optimizer, opt_state = _build_optimizer_state(model, ppo_cfg)
 
-    logger.info(
-        "starting JAX PPO loop: iters=%d episodes_per_iter=%d horizon=%d opponent=%s",
-        iterations,
-        episodes_per_iter,
-        horizon,
-        opponent,
-    )
-    history: list[dict[str, float]] = []
+    if opponent == "curriculum":
+        logger.info(
+            "starting JAX PPO loop: iters=%d episodes_per_iter=%d horizon=%d "
+            "opponent=curriculum (early=%s, late=%s, switch_iter=%d)",
+            iterations,
+            episodes_per_iter,
+            horizon,
+            curriculum_early,
+            curriculum_late,
+            curriculum_switch_iter,
+        )
+    else:
+        logger.info(
+            "starting JAX PPO loop: iters=%d episodes_per_iter=%d horizon=%d "
+            "opponent=%s",
+            iterations,
+            episodes_per_iter,
+            horizon,
+            opponent,
+        )
+    history: list[dict[str, Any]] = []
     started = time.perf_counter()
     key = jax.random.PRNGKey(seed)
     best_win = 0.0
     for it in range(iterations):
+        iter_opponent = _opponent_for_iter(it)
         key, k_iter = jax.random.split(key)
         model, opt_state, row = _run_iter(
             model,
@@ -372,8 +399,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             gamma,
             gae_lambda,
             seed,
-            opponent=opponent,
+            opponent=iter_opponent,
         )
+        row["opponent"] = iter_opponent
         history.append(row)
         logger.info(
             (
