@@ -1,0 +1,6 @@
+outs:
+- md5: d696ef4ac0d2a48881d9342843b459db.dir
+  size: 2866403
+  nfiles: 92
+  hash: md5
+  path: index.parquet
