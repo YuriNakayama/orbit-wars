@@ -34,6 +34,13 @@
 #   F: shaping を ships diff → planet count diff に変更 (territorial 信号、production 不依存)
 #      shaping_coef 0.01 → 0.05 (planet 単位の +1/-1 を ships 規模に揃える)
 #   G: target_kl 0.02 で trust region 強制 + entropy_coef 0.01 → 0.02
+# F+G v2 結果 (commit 6d4c082, kernel v2): planets shaping 真適用、baseline 期 trend +0.066、
+# value_loss 0.018 → 0.010 (territorial 信号がクリア)。改善はあるが last-10 0.234 で plateau。
+#
+# Iteration H+J (2026-05-23) — plateau 脱出狙い:
+#   H: lr 1e-4 → 3e-5 (per-update Δ 縮小、policy が局所最適から動きやすく)
+#   J: horizon 500 → 1000 (terminal reward の reach 確保、勝敗が報酬に強く反映)
+# wall-clock 見積: rollout が ~2× で 100 min on T4x2。
 
 model:
   hidden: 192
@@ -52,11 +59,11 @@ training:
   seed: 0
   iterations: 50
   episodes_per_iter: 32  # C: 16 → 32 で sample variance √2 圧縮
-  horizon: 500
-  lr: 1.0e-4
-  # D: lr 1e-4 → 1e-5 を 50 iter × 2 epoch × ceil(32×500/256) ≈ 6400 updates で線形 decay
-  lr_end: 1.0e-5
-  lr_schedule_steps: 6400
+  horizon: 1000          # J: 500 → 1000 で terminal reward の reach 確保
+  lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
+  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(32×1000/256) = 50 × 2 × 125 = 12500 updates で線形 decay
+  lr_end: 3.0e-6
+  lr_schedule_steps: 12500
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95
