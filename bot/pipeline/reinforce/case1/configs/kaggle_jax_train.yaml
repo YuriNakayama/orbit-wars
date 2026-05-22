@@ -7,6 +7,13 @@
 # Wall-clock estimate on Kaggle T4x2:
 #   warm iter ~31 s → 50 iter × ~31 s + cold-start ~60 s ≈ 27 min
 #   (well within Kaggle's 9 h kernel limit).
+#
+# Iteration A1+A2+A4 (2026-05-22) — `tail-sparse reward` 対策:
+#   shaping_coef 0.001 → 0.01 (10× で中間 advantage 信号を強化)
+#   entropy_coef 0.001 → 0.01 (10× で policy の早期固化を抑制)
+#   gamma        0.99  → 0.995 (terminal reward の reach を 12×: 0.007 → 0.082)
+# Iter1 結果 (commit 4950827): win_rate avg 0.21 / local eval 0.30。learn-but-not-improve
+# (entropy 18.3 → 8.9 で policy 決定的化、advantage signal がノイズ未満)。
 
 model:
   hidden: 192
@@ -28,12 +35,12 @@ training:
   horizon: 500
   lr: 1.0e-4
   weight_decay: 1.0e-5
-  gamma: 0.99
+  gamma: 0.995
   gae_lambda: 0.95
-  shaping_coef: 0.001
+  shaping_coef: 0.01
   clip_eps: 0.2
   value_coef: 0.5
-  entropy_coef: 0.001
+  entropy_coef: 0.01
   kl_beta: 0.0  # no BC reference => no KL anchor
   ppo_epochs: 2
   minibatch_size: 256
