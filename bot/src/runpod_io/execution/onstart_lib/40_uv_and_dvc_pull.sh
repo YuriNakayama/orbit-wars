@@ -42,6 +42,57 @@ if ! bot/.venv/bin/python -c "import pyarrow, torch, numpy, sklearn" 2>&1; then
   exit 1
 fi
 
+# 2026-05-22 retry #17 fix: uv sync で installed される torch wheel が
+# cu13 (CUDA 13.x driver 要求) になるケースを A100-SXM4-80GB pod で観測。
+# RunPod の pytorch image (cu1241=CUDA 12.4.1) は driver 12.4 のため
+# torch が "driver too old" で CPU fallback して 6.5h/epoch 化した
+# (retry #17 epoch 0 完走後 pod gone)。
+# 解決: GPU 認識を smoke で確認、失敗時は cu118 wheel で torch を
+# 強制 reinstall する (kaggle-kernel template と同じパターン)。
+CUDA_SMOKE_OUT=$(bot/.venv/bin/python -c "
+import json, torch
+out = {
+    'version': torch.__version__,
+    'cuda_build': torch.version.cuda,
+    'available': torch.cuda.is_available(),
+    'smoke_ok': False,
+    'err': None,
+}
+if torch.cuda.is_available():
+    try:
+        (torch.zeros(2, 2).cuda() + 1).sum().item()
+        out['smoke_ok'] = True
+    except Exception as e:
+        out['err'] = repr(e)
+print(json.dumps(out))
+" 2>&1 | tail -1)
+echo "[onstart] cuda probe: ${CUDA_SMOKE_OUT}"
+if ! echo "${CUDA_SMOKE_OUT}" | grep -q '"smoke_ok": true'; then
+  echo "[onstart] CUDA smoke failed; force-reinstalling torch with cu118 wheel"
+  bot/.venv/bin/pip install --quiet --force-reinstall \
+    --index-url https://download.pytorch.org/whl/cu118 \
+    torch || {
+      echo "[onstart] FATAL: torch cu118 reinstall failed" >&2
+      exit 1
+  }
+  CUDA_RECHECK=$(bot/.venv/bin/python -c "
+import json, torch
+out = {'available': torch.cuda.is_available(), 'smoke_ok': False, 'err': None}
+if torch.cuda.is_available():
+    try:
+        (torch.zeros(2, 2).cuda() + 1).sum().item()
+        out['smoke_ok'] = True
+    except Exception as e:
+        out['err'] = repr(e)
+print(json.dumps(out))
+" 2>&1 | tail -1)
+  echo "[onstart] cuda recheck: ${CUDA_RECHECK}"
+  if ! echo "${CUDA_RECHECK}" | grep -q '"smoke_ok": true'; then
+    echo "[onstart] FATAL: GPU unusable after cu118 reinstall" >&2
+    exit 1
+  fi
+fi
+
 mark "40_uv_sync_done"
 
 # iter11 fix: `uv run --project bot` / `uv run --directory bot` を以後の
