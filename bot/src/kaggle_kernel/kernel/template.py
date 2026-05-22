@@ -48,6 +48,8 @@ def render_notebook(ctx: RenderContext) -> dict[str, Any]:
         _code_cell(_cell_install_wheels(dataset_mount)),
         _code_cell(_cell_install_bot(dataset_mount)),
     ]
+    if _needs_jax_cuda(ctx):
+        cells.append(_code_cell(_cell_install_jax_cuda()))
     if _needs_parquet_to_npy(ctx.case):
         cells.append(_code_cell(_cell_parquet_to_npy(ctx)))
     cells.extend(
@@ -286,6 +288,72 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"
         "subprocess.run([sys.executable, '-c', _IMPORT_PROBE], check=False)\n"
+    )
+
+
+def _needs_jax_cuda(ctx: RenderContext) -> bool:
+    """JAX を使う case (case 名や train_module に jax を含む) のときだけ
+    cuda12 plugin + cudnn 9.8 を install する cell を差し込む。
+    """
+    return "jax" in ctx.case or "jax" in ctx.train_module
+
+
+def _cell_install_jax_cuda() -> str:
+    """Install jax-cuda12 plugin + matching cuDNN so JAX picks up the T4 GPU.
+
+    Kaggle base image ships CPU JAX only; without the plugin XLA never sees
+    the GPU and train_jax falls back to CPU (defeating the 17× speedup).
+
+    重要な制約:
+    - `pip install --reinstall jax[cuda12]` は **避ける** (既ロード jax の
+      共有ライブラリハンドルが invalid 化して SIGABRT、orbit-wars README
+      で観測済)。plugin + pjrt + cudnn を素直に追加 install する。
+    - jax-cuda12-plugin 0.10 は compile-time CuDNN 9.8 を期待する。Kaggle
+      の base image は CuDNN 9.x 系だが version が plugin と合わないと
+      `RET_CHECK failure dnn_support != nullptr` で GPU 演算が abort する。
+      `nvidia-cudnn-cu12>=9.8,<9.9` を pin して plugin に合わせる。
+    """
+    return (
+        "# cell C2: install jax-cuda12 plugin + matching cuDNN\n"
+        "import subprocess, sys, json\n"
+        "pkgs = [\n"
+        "    'jax-cuda12-plugin',\n"
+        "    'jax-cuda12-pjrt',\n"
+        "    'nvidia-cudnn-cu12>=9.8,<9.9',\n"
+        "]\n"
+        "print('installing JAX CUDA12 plugin:', pkgs)\n"
+        "r = subprocess.run(\n"
+        "    ['pip', 'install', '-q'] + pkgs,\n"
+        "    capture_output=True, text=True, check=False,\n"
+        ")\n"
+        "if r.returncode != 0:\n"
+        "    print('pip install failed:', r.stderr[-2000:])\n"
+        "    raise RuntimeError('jax cuda plugin install failed')\n"
+        "print('pip install OK')\n"
+        "# Probe JAX devices in a subprocess so the live kernel doesn't\n"
+        "# import jax (would lock in the CPU backend before plugin is wired).\n"
+        "_PROBE = (\n"
+        "    'import json, jax\\n'\n"
+        "    'devs = jax.devices()\\n'\n"
+        "    'print(json.dumps({\"backend\": jax.default_backend(),'\n"
+        "    ' \"devices\": [str(d) for d in devs]}))\\n'\n"
+        ")\n"
+        "r = subprocess.run(\n"
+        "    [sys.executable, '-c', _PROBE],\n"
+        "    capture_output=True, text=True, check=False,\n"
+        ")\n"
+        "out = r.stdout.strip().splitlines()[-1] if r.stdout else '{}'\n"
+        "try:\n"
+        "    info = json.loads(out)\n"
+        "except Exception:\n"
+        "    info = {'raw': out, 'err': r.stderr[-500:]}\n"
+        "print('jax device probe:', info)\n"
+        "if info.get('backend') != 'gpu':\n"
+        "    # Fail loudly — train_jax on CPU defeats the purpose of using\n"
+        "    # Kaggle's GPU quota.\n"
+        "    raise RuntimeError(\n"
+        "        f'JAX did not bind to GPU; backend={info.get(\"backend\")!r}'\n"
+        "    )\n"
     )
 
 

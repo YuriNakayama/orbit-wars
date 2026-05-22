@@ -342,6 +342,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case1_kaggle_jax_smoke: JAX-accelerated smoke variant of the
+    # above. Uses train_jax.py end-to-end (rollout + PPO update inside a
+    # single jit) so we can measure the README claim (17-18x speedup on RTX
+    # 4090) on Kaggle T4x2. BC warm-start stays OFF for the same dataset
+    # transport reason. Kaggle template auto-installs jax-cuda12 plugin +
+    # cuDNN 9.8 wheels for reinforce_*_jax_* cases.
+    "reinforce_case1_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
