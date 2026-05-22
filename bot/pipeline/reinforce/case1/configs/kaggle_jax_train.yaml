@@ -27,6 +27,13 @@
 #   C: episodes_per_iter 16 → 32 (sample variance √2 圧縮、trend が見やすくなる)
 #   D: lr 線形 decay (lr 1e-4 → 1e-5 を 50 iter で線形)、後半 trust region 自動縮小
 #   E: switch_iter 10 → 20 (noop 期延長で正例 backbone を二重に固める)
+# C+D+E 結果 (commit 8a814ef): baseline 期 trend +0.025、極めて緩い改善。
+# (kernel が古い dataset を読み switch_iter=10 で動作した形跡。dataset bump で次回検証)
+#
+# Iteration F+G (2026-05-23) — 構造的改善:
+#   F: shaping を ships diff → planet count diff に変更 (territorial 信号、production 不依存)
+#      shaping_coef 0.01 → 0.05 (planet 単位の +1/-1 を ships 規模に揃える)
+#   G: target_kl 0.02 で trust region 強制 + entropy_coef 0.01 → 0.02
 
 model:
   hidden: 192
@@ -53,15 +60,16 @@ training:
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95
-  shaping_coef: 0.01
+  shaping_coef: 0.05      # F: shaping_mode=planets で +1 / -1 単位なので係数 5× 引き上げ
+  shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
   value_coef: 0.5
-  entropy_coef: 0.01
+  entropy_coef: 0.02      # G: 0.01 → 0.02 で policy 固化をさらに抑制
   kl_beta: 0.0  # no BC reference => no KL anchor
   ppo_epochs: 2
   minibatch_size: 256
   max_grad_norm: 0.5
-  target_kl: null
+  target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
     switch_iter: 20  # E: 10 → 20 で noop 期延長
