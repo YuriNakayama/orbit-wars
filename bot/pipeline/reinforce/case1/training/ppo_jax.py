@@ -41,6 +41,11 @@ class PPOConfigJax(NamedTuple):
     target_kl: float | None = None
     lr: float = 1.0e-4
     weight_decay: float = 1.0e-5
+    # Optional linear lr schedule: lr starts at `lr` and decays linearly to
+    # `lr_end` over `lr_schedule_steps` optimizer updates. lr_end <= 0 means
+    # constant lr (no schedule).
+    lr_end: float = 0.0
+    lr_schedule_steps: int = 0
 
 
 class PPOStatsJax(NamedTuple):
@@ -80,10 +85,24 @@ class FlatRollout(NamedTuple):
 
 def make_optimizer(cfg: PPOConfigJax) -> optax.GradientTransformation:
     """Adam(W) + global gradient clipping, mirroring PyTorch
-    `optim.AdamW + clip_grad_norm_`."""
+    `optim.AdamW + clip_grad_norm_`.
+
+    If `cfg.lr_end > 0` and `cfg.lr_schedule_steps > 0`, lr decays linearly
+    from `cfg.lr` to `cfg.lr_end` over that many optimizer updates (then
+    stays at `lr_end`). Otherwise lr is constant.
+    """
+    if cfg.lr_end > 0.0 and cfg.lr_schedule_steps > 0:
+        schedule = optax.linear_schedule(
+            init_value=cfg.lr,
+            end_value=cfg.lr_end,
+            transition_steps=cfg.lr_schedule_steps,
+        )
+        lr: float | optax.Schedule = schedule
+    else:
+        lr = cfg.lr
     return optax.chain(
         optax.clip_by_global_norm(cfg.max_grad_norm),
-        optax.adamw(learning_rate=cfg.lr, weight_decay=cfg.weight_decay),
+        optax.adamw(learning_rate=lr, weight_decay=cfg.weight_decay),
     )
 
 

@@ -225,6 +225,8 @@ def _build_ppo_cfg(cfg_dict: dict[str, Any]) -> PPOConfigJax:
         target_kl=t.get("target_kl"),
         lr=float(t.get("lr", 1.0e-4)),
         weight_decay=float(t.get("weight_decay", 1.0e-5)),
+        lr_end=float(t.get("lr_end", 0.0)),
+        lr_schedule_steps=int(t.get("lr_schedule_steps", 0)),
     )
 
 

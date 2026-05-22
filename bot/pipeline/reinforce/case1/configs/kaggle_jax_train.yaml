@@ -20,6 +20,13 @@
 #   opponent: curriculum (iter 0-9 noop で確実な勝ち体験、iter 10-49 baseline_jax_lite)
 # noop 相手なら policy が「発射すれば勝てる」を学習しやすく、その後 baseline 相手の
 # 学習でも初期 advantage signal の正例 (勝ち体験) が残ることを期待。
+# B2 結果 (commit 0719c83): noop 期 win 0.79, baseline 期 first-5 0.275, last-10 0.269 (横ばい)。
+# noop で advantage 正例は獲得したが baseline 期で plateau。
+#
+# Iteration C+D+E (2026-05-23) — 右肩上がり化:
+#   C: episodes_per_iter 16 → 32 (sample variance √2 圧縮、trend が見やすくなる)
+#   D: lr 線形 decay (lr 1e-4 → 1e-5 を 50 iter で線形)、後半 trust region 自動縮小
+#   E: switch_iter 10 → 20 (noop 期延長で正例 backbone を二重に固める)
 
 model:
   hidden: 192
@@ -37,9 +44,12 @@ bc_warmstart:
 training:
   seed: 0
   iterations: 50
-  episodes_per_iter: 16
+  episodes_per_iter: 32  # C: 16 → 32 で sample variance √2 圧縮
   horizon: 500
   lr: 1.0e-4
+  # D: lr 1e-4 → 1e-5 を 50 iter × 2 epoch × ceil(32×500/256) ≈ 6400 updates で線形 decay
+  lr_end: 1.0e-5
+  lr_schedule_steps: 6400
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95
@@ -54,7 +64,7 @@ training:
   target_kl: null
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 10
+    switch_iter: 20  # E: 10 → 20 で noop 期延長
     early: noop
     late: baseline_jax_lite
 
