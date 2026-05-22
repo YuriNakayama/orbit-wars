@@ -119,6 +119,13 @@ def _cell_env_setup(ctx: RenderContext, run_dir: str, meta_json: str) -> str:
         "ORBIT_WARS_KAGGLE_KERNEL_META": meta_json,
         "ORBIT_WARS_RUN_DIR": run_dir,
     }
+    # reinforce_* cases run RL rollouts via kaggle_environments. The Kaggle
+    # Kernel dataset does not ship the manylinux Rust wheel by default, so
+    # force the vendored Python simulator backend to avoid ImportError on
+    # `orbit_wars_rust`. Imitation cases don't touch the simulator at train
+    # time so their default (Rust) backend is left alone.
+    if ctx.case.startswith("reinforce_"):
+        payload["ORBIT_WARS_BACKEND"] = "python"
     return (
         "# cell A: env setup\n"
         "import os\n"
