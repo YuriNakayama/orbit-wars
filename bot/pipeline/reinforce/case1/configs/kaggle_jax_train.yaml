@@ -1,0 +1,48 @@
+# Kaggle Kernel JAX *training* config (50 iter) for reinforce/case1.
+#
+# Same shape as kaggle_jax_smoke.yaml (16 ep × 500 step, BC OFF,
+# opponent=baseline_jax_lite) but with iterations=50 so the policy has
+# enough updates to surpass the rule-based opponent.
+#
+# Wall-clock estimate on Kaggle T4x2:
+#   warm iter ~31 s → 50 iter × ~31 s + cold-start ~60 s ≈ 27 min
+#   (well within Kaggle's 9 h kernel limit).
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 50
+  episodes_per_iter: 16
+  horizon: 500
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.0  # no BC reference => no KL anchor
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: null
+  opponent: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case1_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

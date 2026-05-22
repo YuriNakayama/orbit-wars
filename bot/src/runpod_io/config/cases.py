@@ -356,6 +356,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # 50-iter Kaggle Kernel training variant (~27 min on T4x2).
+    "reinforce_case1_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
