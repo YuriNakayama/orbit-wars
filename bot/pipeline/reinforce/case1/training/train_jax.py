@@ -245,6 +245,7 @@ def _run_iter(
     gae_lambda: float,
     base_seed: int,
     opponent: str = "noop",
+    shaping_mode: str = "ships",
 ) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -258,6 +259,7 @@ def _run_iter(
         seat=0,
         seed=base_seed + iter_idx * 10_000,
         opponent=opponent,
+        shaping_mode=shaping_mode,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -332,6 +334,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     gae_lambda = float(t_cfg.get("gae_lambda", 0.95))
     seed = int(t_cfg.get("seed", 0))
     opponent = str(t_cfg.get("opponent", "noop"))
+    shaping_mode = str(t_cfg.get("shaping_mode", "ships"))
 
     # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
     # `late` opponent afterwards. When `opponent` is not "curriculum" the
@@ -402,8 +405,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             gae_lambda,
             seed,
             opponent=iter_opponent,
+            shaping_mode=shaping_mode,
         )
         row["opponent"] = iter_opponent
+        row["shaping_mode"] = shaping_mode
         history.append(row)
         logger.info(
             (

@@ -105,6 +105,42 @@ def _ship_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
     )
 
 
+def _planet_count_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
+    """Count (own, enemy) planets in the current planet table.
+
+    Alternative shaping signal: ship totals grow with production so the
+    diff is dominated by "who has more rotation" rather than territorial
+    control. Planet count diff is a cleaner proxy of strategic state —
+    flips only when a planet changes hands.
+    """
+    owner = state.planet_owner
+    valid = state.planet_valid
+    is_mine = valid & (owner == player)
+    is_enemy = valid & (owner != player) & (owner != -1)
+    return jnp.sum(is_mine.astype(jnp.float32)), jnp.sum(is_enemy.astype(jnp.float32))
+
+
+SHAPING_MODE_SHIPS: int = 0
+SHAPING_MODE_PLANETS: int = 1
+SHAPING_MODE_NAME_TO_INT: dict[str, int] = {
+    "ships": SHAPING_MODE_SHIPS,
+    "planets": SHAPING_MODE_PLANETS,
+}
+
+
+def _shaping_diff(state: EnvState, seat: int, shaping_mode: int) -> jax.Array:
+    """Return Δ(mine - enemy) for the configured shaping signal."""
+    ship_my, ship_en = _ship_totals(state, seat)
+    plt_my, plt_en = _planet_count_totals(state, seat)
+    # jax.lax.cond keeps the trace single.
+    out: jax.Array = jax.lax.cond(
+        shaping_mode == SHAPING_MODE_PLANETS,
+        lambda: plt_my - plt_en,
+        lambda: ship_my - ship_en,
+    )
+    return out
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -113,6 +149,7 @@ def _rollout_one_env(
     shaping_coef: float,
     seat: int,
     opponent_mode: int,
+    shaping_mode: int,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -126,9 +163,8 @@ def _rollout_one_env(
     """
     init_history = init_history_jax()
 
-    # Initial ship diff for shaping reward.
-    init_my, init_en = _ship_totals(init_state, seat)
-    init_diff = init_my - init_en
+    # Initial shaping diff (ship-based or planet-count-based per shaping_mode).
+    init_diff = _shaping_diff(init_state, seat, shaping_mode)
 
     def step_fn(
         carry: tuple[
@@ -212,9 +248,9 @@ def _rollout_one_env(
             state,
         )
 
-        # Shaping reward: shaping_coef * Δ(my − enemy).
-        my, en = _ship_totals(state_for_next, seat)
-        diff = my - en
+        # Shaping reward: shaping_coef * Δ(my − enemy) using either ship
+        # totals (legacy) or planet count (F: cleaner territorial signal).
+        diff = _shaping_diff(state_for_next, seat, shaping_mode)
         shaping = shaping_coef * (diff - prev_diff)
 
         # Terminal reward: env emits rewards on termination; turn into
@@ -338,6 +374,7 @@ def collect_rollout_jax(
     seat: int = 0,
     seed: int = 0,
     opponent: str = "noop",
+    shaping_mode: str = "ships",
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -354,7 +391,13 @@ def collect_rollout_jax(
         raise ValueError(
             f"unknown opponent={opponent!r}; supported: {sorted(OPPONENT_NAME_TO_MODE)}"
         )
+    if shaping_mode not in SHAPING_MODE_NAME_TO_INT:
+        raise ValueError(
+            f"unknown shaping_mode={shaping_mode!r}; "
+            f"supported: {sorted(SHAPING_MODE_NAME_TO_INT)}"
+        )
     opponent_mode = jnp.int32(OPPONENT_NAME_TO_MODE[opponent])
+    shaping_mode_int = jnp.int32(SHAPING_MODE_NAME_TO_INT[shaping_mode])
 
     keys = jax.random.split(key, episodes_per_iter)
     # Build all N initial states on host (reset is Python-side), then
@@ -364,10 +407,19 @@ def collect_rollout_jax(
     init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
     batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
-    # vmap over (key, init_state); model + opponent_mode broadcast.
-    vmapped = jax.vmap(_rollout_one_env, in_axes=(None, 0, 0, None, None, None, None))
+    # vmap over (key, init_state); model + scalar args broadcast.
+    vmapped = jax.vmap(
+        _rollout_one_env, in_axes=(None, 0, 0, None, None, None, None, None)
+    )
     return vmapped(
-        model, keys, batched_state, horizon, shaping_coef, seat, opponent_mode
+        model,
+        keys,
+        batched_state,
+        horizon,
+        shaping_coef,
+        seat,
+        opponent_mode,
+        shaping_mode_int,
     )
 
 
