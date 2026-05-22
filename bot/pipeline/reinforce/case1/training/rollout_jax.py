@@ -32,6 +32,9 @@ from jax_env.reset import reset
 from jax_env.state import EnvState
 from jax_env.step import MAX_LAUNCHES_PER_AGENT
 from jax_env.step import step as jax_env_step
+from pipeline.rulebase.case1.baseline_jax import (
+    compute_actions_jax as _baseline_jax_actions,
+)
 
 from ..policy.featurizer_jax import (
     HistoryStateJax,
@@ -46,6 +49,15 @@ from ..policy.sampling_jax import (
 )
 
 NUM_AGENTS_MAX = 4  # jax_env's NUM_AGENTS_MAX
+
+# opponent_mode constants — kept int to stay scan/vmap friendly.
+OPPONENT_NOOP: int = 0
+OPPONENT_BASELINE_JAX_LITE: int = 1
+
+OPPONENT_NAME_TO_MODE: dict[str, int] = {
+    "noop": OPPONENT_NOOP,
+    "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
+}
 
 
 class JaxRolloutBatch(NamedTuple):
@@ -100,6 +112,7 @@ def _rollout_one_env(
     horizon: int,
     shaping_coef: float,
     seat: int,
+    opponent_mode: int,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -175,6 +188,18 @@ def _rollout_one_env(
             my_planet_mask_2d,
             seat,
             NUM_AGENTS_MAX,
+        )
+
+        # Opponent row (seat 1-seat). For noop we leave the -1 sentinels
+        # already written by sampled_action_to_env_actions. For
+        # baseline_jax_lite we compute its (L, 3) row and splice it in.
+        opp_seat = jnp.int32(1) - jnp.int32(seat)
+        opp_baseline_actions = _baseline_jax_actions(state, 1 - seat)  # (L, 3)
+        env_actions = jax.lax.cond(
+            opponent_mode == OPPONENT_BASELINE_JAX_LITE,
+            lambda ea: ea.at[opp_seat].set(opp_baseline_actions),
+            lambda ea: ea,
+            env_actions,
         )
 
         # Step env. Either advance, or hold if already done (so shapes
@@ -312,14 +337,25 @@ def collect_rollout_jax(
     shaping_coef: float = 0.001,
     seat: int = 0,
     seed: int = 0,
+    opponent: str = "noop",
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
     Per-episode keys are derived from `key` via `jax.random.split`; per-
-    episode env seeds are `seed, seed + 1, ..., seed + N - 1`. The
-    opponent is the no-op agent (no actions in the other seat); proper
-    baseline_v1 / random opponent support is a follow-up.
+    episode env seeds are `seed, seed + 1, ..., seed + N - 1`. `opponent`
+    selects the rule used for the other seat:
+      - "noop": always emit empty actions (default, fastest)
+      - "baseline_jax_lite": JAX rule-based agent under
+        `pipeline/rulebase/case1/baseline_jax/` (intended PPO curriculum
+        target — roughly mirrors the Python `baseline_v1` strategy with
+        a single-pass priority score).
     """
+    if opponent not in OPPONENT_NAME_TO_MODE:
+        raise ValueError(
+            f"unknown opponent={opponent!r}; supported: {sorted(OPPONENT_NAME_TO_MODE)}"
+        )
+    opponent_mode = jnp.int32(OPPONENT_NAME_TO_MODE[opponent])
+
     keys = jax.random.split(key, episodes_per_iter)
     # Build all N initial states on host (reset is Python-side), then
     # stack into a single batched EnvState so vmap can broadcast model
@@ -328,9 +364,11 @@ def collect_rollout_jax(
     init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
     batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
-    # vmap over (key, init_state); model is broadcast (in_axes=None).
-    vmapped = jax.vmap(_rollout_one_env, in_axes=(None, 0, 0, None, None, None))
-    return vmapped(model, keys, batched_state, horizon, shaping_coef, seat)
+    # vmap over (key, init_state); model + opponent_mode broadcast.
+    vmapped = jax.vmap(_rollout_one_env, in_axes=(None, 0, 0, None, None, None, None))
+    return vmapped(
+        model, keys, batched_state, horizon, shaping_coef, seat, opponent_mode
+    )
 
 
 __all__ = [

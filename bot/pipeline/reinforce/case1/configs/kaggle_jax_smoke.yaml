@@ -39,7 +39,7 @@ training:
   minibatch_size: 256
   max_grad_norm: 0.5
   target_kl: null
-  opponent: noop
+  opponent: baseline_jax_lite
 
 output:
   run_dir: data/output/models/reinforce/case1_train_jax/runs

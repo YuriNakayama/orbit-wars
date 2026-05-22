@@ -242,6 +242,7 @@ def _run_iter(
     gamma: float,
     gae_lambda: float,
     base_seed: int,
+    opponent: str = "noop",
 ) -> tuple[ActorCriticJax, Any, dict[str, float]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -254,6 +255,7 @@ def _run_iter(
         shaping_coef=shaping_coef,
         seat=0,
         seed=base_seed + iter_idx * 10_000,
+        opponent=opponent,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -327,6 +329,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     gamma = float(t_cfg.get("gamma", 0.99))
     gae_lambda = float(t_cfg.get("gae_lambda", 0.95))
     seed = int(t_cfg.get("seed", 0))
+    opponent = str(t_cfg.get("opponent", "noop"))
 
     ppo_cfg = _build_ppo_cfg(cfg_dict)
     model = _build_model(cfg_dict)
@@ -343,10 +346,11 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     optimizer, opt_state = _build_optimizer_state(model, ppo_cfg)
 
     logger.info(
-        "starting JAX PPO loop: iters=%d episodes_per_iter=%d horizon=%d",
+        "starting JAX PPO loop: iters=%d episodes_per_iter=%d horizon=%d opponent=%s",
         iterations,
         episodes_per_iter,
         horizon,
+        opponent,
     )
     history: list[dict[str, float]] = []
     started = time.perf_counter()
@@ -368,6 +372,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             gamma,
             gae_lambda,
             seed,
+            opponent=opponent,
         )
         history.append(row)
         logger.info(
