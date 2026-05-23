@@ -104,6 +104,18 @@
 # case2 では PerPlanetHeadJax に新規 from_head (per-source 発射推奨スコア) を追加。
 # NO_OP slot に -from_logit を bias 加算することで発射判断を明示的に学習する。
 # case1 V' と同条件 (50 iter / 128 ep / shaping 0.50) で head 変更の純粋効果を測定。
+#
+# case2 H0 結果 (commit 8990544, switch_iter=20):
+#   trend +0.134 / last-10 0.267 / best 0.367 / value_loss 0.457 / entropy 29.5
+#   vs case1 V' (a022445 local): trend +0.098 / last-10 0.227 / best 0.297 / value_loss 2.0+
+#   → head 変更で trend +0.036pp / last-10 +0.040pp / value_loss 1/4 と全指標で勝ち。
+#     ただし iter20 で 0.987 → 0.18 と急落し、last-10 が 0.267 で頭打ち。
+#
+# case2 H1 (2026-05-23) — curriculum 延長で baseline 期の collapse を緩和:
+#   switch_iter 20 → 30。noop win 0.987 を 10 iter 余分に固めてから baseline 投入。
+#   value_loss=0.457 (<0.10 でない) ので shaping push せず。entropy=29.5 で固化兆候も無い。
+#   from_head は明らかに機能 (value_loss 1/4) なので残す。
+#   期待: baseline 期 trend を +0.134 から +0.18 級へ、last-10 を 0.30 級へ。
 
 model:
   hidden: 192
@@ -142,7 +154,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 20  # E: 10 → 20 で noop 期延長
+    switch_iter: 30  # H1: 20 → 30 で noop 期延長 (iter20 急落 0.987→0.18 緩和狙い)
     early: noop
     late: baseline_jax_lite
 
