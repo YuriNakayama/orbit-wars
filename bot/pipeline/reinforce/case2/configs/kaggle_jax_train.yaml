@@ -127,6 +127,18 @@
 #   H1' 結果 (iter<15 で win 平均 0.98 級) から十分 backbone は確立する。
 #   value_loss=0.535 (>0.10) のため shaping push せず。entropy 26 も健全。
 #   期待: baseline 期 N=35 で trend slope×N が +0.20 級、last-10 0.30 級へ。
+# H2-真 結果 (commit 11de385, switch_iter=15 真適用; H2 初回も dataset 反映遅延で switch=30):
+#   trend +0.181 (N=35) / last-10 0.288 / best 0.359 / vloss 0.461 / ent 31.7
+#   vs H0 (switch=20): trend +0.134 → +0.047pp / vs H1' (switch=30): trend +0.037 → +0.144pp
+#   → BREAKTHROUGH. baseline 期拡大が trend を直接押し上げる。switch 直後 dip
+#     (0.125) は深いが 35 iter の baseline 学習で回復・上昇 (iter49: 0.359)。
+#     over-shaping 兆候なし、curve はまだ上昇継続中。
+#
+# case2 H3 (2026-05-24) — 同方向さらに拡大:
+#   switch_iter 15 → 10 で baseline 期 40 iter 化。H2-真 curve が iter49 で 0.359
+#   と上昇継続中、まだ伸び代あり。noop 期 10 iter は短いが、iter<10 で win
+#   平均 0.98 (H2-真 iter<10 = 0.98) → backbone は短時間でも確立可能。
+#   期待: trend +0.20+ / last-10 0.30+ / best 0.40+。
 
 model:
   hidden: 192
@@ -165,7 +177,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 15  # H2: 30 → 15 で baseline 期 35 iter 化 (H1' で延長害を確認、逆方向)
+    switch_iter: 10  # H3: 15 → 10 で baseline 期 40 iter 化 (H2-真 trend +0.181 breakthrough 拡大)
     early: noop
     late: baseline_jax_lite
 
