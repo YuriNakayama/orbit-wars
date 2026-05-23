@@ -107,6 +107,15 @@
 #   Y v2 で iter 70-80 末尾 0.386、上昇傾向継続中。200 iter で伸びの上限を確認。
 #   lr_schedule_steps 50000 → 100000 (200 iter 全体カバー)。
 #   wall-clock 見積: ~360 min on T4x2 (Kaggle 9h 内)。
+# Z v2 結果 (commit 40e8a62, 2026-05-24 完了): trend +0.280 / last-10 0.491 / best 0.562 (iter 199).
+# baseline 期 9 chunks 全て単調増加 (20-39: 0.195 → 180-199: 0.475)。runtime 345.6 min (5.76h)。
+# value_loss 0.404 / entropy 45.97 で over-shaping / 固化 なし。iter 199 で plateau 未到達。
+#
+# Iteration AA (2026-05-24) — 300 iter 拡大:
+#   Z v2 で iter 180-199 が 0.475 / 199 0.562 と plateau 未到達、さらに伸びる余地あり。
+#   iterations 200 → 300 (50% 増)。lr_schedule_steps 100000 → 150000。
+#   wall-clock 見積: 5.76h × 1.5 = ~8.7h on T4x2 (Kaggle 9h cap 内、ぎりぎり)。
+#   risk: 9h cap 超過 → kernel 強制停止で final iter 損失 (best.pt は途中保存されているはず)。
 
 model:
   hidden: 192
@@ -123,13 +132,13 @@ bc_warmstart:
 
 training:
   seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
-  iterations: 200        # Z: Y で trend +0.206 (iter 70-80 で 0.386 ピーク)、まだ伸び余地あり
+  iterations: 300        # AA: Z v2 (200 iter, trend +0.280, iter 199 0.562) で plateau 未到達、さらに伸ばす
   episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
   horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
-  # D: lr 3e-5 → 3e-6 を 200 iter × 2 epoch × ceil(128×500/256) = 200 × 2 × 250 = 100000 updates で線形 decay
+  # AA: lr 3e-5 → 3e-6 を 300 iter × 2 epoch × ceil(128×500/256) = 300 × 2 × 250 = 150000 updates で線形 decay
   lr_end: 3.0e-6
-  lr_schedule_steps: 100000
+  lr_schedule_steps: 150000
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
