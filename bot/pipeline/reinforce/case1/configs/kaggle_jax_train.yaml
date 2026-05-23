@@ -99,6 +99,14 @@
 #   shaping_coef 0.50 (V' 維持) + iterations 50 → 100 で長期 trend を観測。
 #   V' (50 iter で +0.145) が 100 iter でさらに伸びるか確認。
 #   wall-clock 見積: V' 90min × 2 = ~180 min。lr_schedule_steps 25000 → 50000。
+# Y v2 結果 (commit a022445, kernel v2): trend +0.206 / last-10 0.386 / best 0.453.
+# 過去最高更新。iter 20-40 で plateau (0.31-0.33) → iter 50+ で再加速 0.33→0.39。
+# 100 iter では plateau に達しておらず、200 iter でさらに伸びる可能性大。
+#
+# Iteration Z (2026-05-23) — 200 iter 拡大:
+#   Y v2 で iter 70-80 末尾 0.386、上昇傾向継続中。200 iter で伸びの上限を確認。
+#   lr_schedule_steps 50000 → 100000 (200 iter 全体カバー)。
+#   wall-clock 見積: ~360 min on T4x2 (Kaggle 9h 内)。
 
 model:
   hidden: 192
@@ -115,13 +123,13 @@ bc_warmstart:
 
 training:
   seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
-  iterations: 100        # Y: 50 → 100 で V' (trend +0.145) が長期維持されるか確認
+  iterations: 200        # Z: Y で trend +0.206 (iter 70-80 で 0.386 ピーク)、まだ伸び余地あり
   episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
   horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
-  # D: lr 3e-5 → 3e-6 を 100 iter × 2 epoch × ceil(128×500/256) = 100 × 2 × 250 = 50000 updates で線形 decay
+  # D: lr 3e-5 → 3e-6 を 200 iter × 2 epoch × ceil(128×500/256) = 200 × 2 × 250 = 100000 updates で線形 decay
   lr_end: 3.0e-6
-  lr_schedule_steps: 50000
+  lr_schedule_steps: 100000
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
