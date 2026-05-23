@@ -30,7 +30,7 @@ model:
 train:
   case: case11
   batch_size: 1024
-  epochs: 1
+  epochs: 30
   lr: 6.0e-4
   weight_decay: 1.0e-4
   num_workers: 2
@@ -42,15 +42,15 @@ train:
     label_smoothing: 0.0
   scheduler:
     type: cosine_warmup
-    t_max: 1
+    t_max: 30
     eta_min: 1.0e-5
-    warmup_epochs: 0
+    warmup_epochs: 2
     warmup_start_factor: 1.0
   best_metric: val_target_fire_acc
   best_metric_mode: max
   early_stop:
     metric: val_target_fire_acc
-    patience: 3
+    patience: 5
     mode: max
   grad_clip_max_norm: 1.0
   ema:
