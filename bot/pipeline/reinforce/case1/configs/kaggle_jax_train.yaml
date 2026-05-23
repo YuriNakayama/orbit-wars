@@ -72,6 +72,13 @@
 #   episodes_per_iter 32 → 128 (4×) で sample variance 1/2、trend ±0.05 まで検出可能。
 #   lr_schedule_steps 6300 → 25000 (update 数も 4×)。
 #   wall-clock 見積: rollout 4× で ~140 min on T4x2 (Kaggle 9h 内)。
+# S 結果 (commit a50f6ff): trend +0.009 / last-10 0.197。真の plateau 確定、
+# 過去 11 run の trend 0.10 級は全て sample noise。head 構造内で打てる手は
+# あと数発のみ。
+#
+# Iteration V (2026-05-23) — shaping_coef 4×:
+#   shaping_coef 0.05 → 0.20 で value head 感度↑、planet 取得/喪失イベント
+#   の中間 advantage 信号をさらに強化。
 
 model:
   hidden: 192
@@ -98,7 +105,7 @@ training:
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
-  shaping_coef: 0.05      # F: shaping_mode=planets で +1 / -1 単位なので係数 5× 引き上げ
+  shaping_coef: 0.20      # V: 0.05 → 0.20 (4×) で value head 感度↑、planateau 脱出狙い
   shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
   value_coef: 0.5
