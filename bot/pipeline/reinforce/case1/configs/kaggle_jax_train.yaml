@@ -79,6 +79,12 @@
 # Iteration V (2026-05-23) — shaping_coef 4×:
 #   shaping_coef 0.05 → 0.20 で value head 感度↑、planet 取得/喪失イベント
 #   の中間 advantage 信号をさらに強化。
+# V 結果 (commit c58550f): trend +0.112 / last-10 0.307 / best_win 0.992 / noop 0.97 /
+# entropy 36.61。過去最高、ブレイクスルー。shaping_coef がボトルネックだった。
+#
+# Iteration V' (2026-05-23) — shaping_coef さらに 2.5×:
+#   shaping_coef 0.20 → 0.50。V でブレイクスルーしたので、さらに value head 感度を上げる。
+#   risk: 過剰 shaping で terminal reward 軽視 (over-shaping)
 
 model:
   hidden: 192
@@ -105,7 +111,7 @@ training:
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
-  shaping_coef: 0.20      # V: 0.05 → 0.20 (4×) で value head 感度↑、planateau 脱出狙い
+  shaping_coef: 0.50      # V': V (0.20, trend +0.112) でブレイクスルー、さらに 2.5× 試行
   shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
   value_coef: 0.5
