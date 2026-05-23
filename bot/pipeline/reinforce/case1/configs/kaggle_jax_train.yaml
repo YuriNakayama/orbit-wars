@@ -40,7 +40,16 @@
 # Iteration H+J (2026-05-23) — plateau 脱出狙い:
 #   H: lr 1e-4 → 3e-5 (per-update Δ 縮小、policy が局所最適から動きやすく)
 #   J: horizon 500 → 1000 (terminal reward の reach 確保、勝敗が報酬に強く反映)
-# wall-clock 見積: rollout が ~2× で 100 min on T4x2。
+# H (only) 結果 (commit 9ebc105 kernel v1, horizon=500 が dataset 反映遅延で残存):
+#   trend +0.106 / last-10 0.294 / best_win 0.938 ← これまで最高
+# H+J v2 結果 (commit 9ebc105 kernel v2, horizon=1000 真適用):
+#   trend +0.062 / last-10 0.203 / best_win 0.844 ← horizon 1000 で後退
+# → J 撤回。H (lr 3e-5) 単独が最強。
+#
+# Iteration H+N (2026-05-23) — H ベース + minibatch 半減:
+#   horizon を 500 に戻す
+#   N: minibatch_size 256 → 128 (per-update gradient ノイズ↑、local optimum 脱出)
+#   lr_schedule_steps は update 数が 2× になるので 12500 維持 (元の 6400 から見て同じ)
 
 model:
   hidden: 192
@@ -59,9 +68,10 @@ training:
   seed: 0
   iterations: 50
   episodes_per_iter: 32  # C: 16 → 32 で sample variance √2 圧縮
-  horizon: 1000          # J: 500 → 1000 で terminal reward の reach 確保
+  horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
-  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(32×1000/256) = 50 × 2 × 125 = 12500 updates で線形 decay
+  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(32×500/128) = 50 × 2 × 125 = 12500 updates で線形 decay
+  # N (minibatch 128) で update 数が 2× になるので schedule_steps を 12500 に維持
   lr_end: 3.0e-6
   lr_schedule_steps: 12500
   weight_decay: 1.0e-5
@@ -74,7 +84,7 @@ training:
   entropy_coef: 0.02      # G: 0.01 → 0.02 で policy 固化をさらに抑制
   kl_beta: 0.0  # no BC reference => no KL anchor
   ppo_epochs: 2
-  minibatch_size: 256
+  minibatch_size: 128     # N: 256 → 128 で per-update gradient ノイズ↑、plateau 脱出
   max_grad_norm: 0.5
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
