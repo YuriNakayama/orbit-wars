@@ -22,6 +22,16 @@ on:
         required: false
         type: number
         default: 0
+      workers:
+        description: "Parallel fetch workers (anti-abuse adjust)"
+        required: false
+        type: number
+        default: 6
+      rate_capacity:
+        description: "TokenBucket capacity (requests per minute)"
+        required: false
+        type: number
+        default: 45
 
 permissions:
   contents: write
@@ -49,6 +59,8 @@ jobs:
       SCRAPE_TOP: ${{ inputs.top || 80 }}
       SCRAPE_MODES: ${{ inputs.modes || '1v1,ffa4' }}
       SCRAPE_LIMIT_PER_TEAM: ${{ inputs.limit_per_team || 0 }}
+      SCRAPE_WORKERS: ${{ inputs.workers || 6 }}
+      SCRAPE_RATE_CAPACITY: ${{ inputs.rate_capacity || 45 }}
 
     steps:
       - uses: actions/checkout@v5
