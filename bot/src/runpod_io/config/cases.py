@@ -365,6 +365,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case2: head 構造変更実験用 case (case1 ベース + from_head 追加)。
+    # per_planet head の NO_OP slot に per-source 発射推奨スコア (from_logit) を
+    # bias として加算し、発射判断を明示的に学習する。最初の head 変更実験。
+    "reinforce_case2_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case2_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case2.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case2/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.

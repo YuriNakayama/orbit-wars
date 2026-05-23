@@ -1,0 +1,153 @@
+# Kaggle Kernel JAX *training* config (50 iter) for reinforce/case2.
+#
+# Same shape as kaggle_jax_smoke.yaml (16 ep × 500 step, BC OFF,
+# opponent=baseline_jax_lite) but with iterations=50 so the policy has
+# enough updates to surpass the rule-based opponent.
+#
+# Wall-clock estimate on Kaggle T4x2:
+#   warm iter ~31 s → 50 iter × ~31 s + cold-start ~60 s ≈ 27 min
+#   (well within Kaggle's 9 h kernel limit).
+#
+# Iteration A1+A2+A4 (2026-05-22) — `tail-sparse reward` 対策:
+#   shaping_coef 0.001 → 0.01 (10× で中間 advantage 信号を強化)
+#   entropy_coef 0.001 → 0.01 (10× で policy の早期固化を抑制)
+#   gamma        0.99  → 0.995 (terminal reward の reach を 12×: 0.007 → 0.082)
+# Iter1 結果 (commit 4950827): win_rate avg 0.21 / local eval 0.30。learn-but-not-improve
+# (entropy 18.3 → 8.9 で policy 決定的化、advantage signal がノイズ未満)。
+# A1+A2+A4 結果 (commit 5f254ed): win_rate avg 0.20 / last-10 0.19。効果なし。
+#
+# Iteration B2 (2026-05-22) — opponent curriculum:
+#   opponent: curriculum (iter 0-9 noop で確実な勝ち体験、iter 10-49 baseline_jax_lite)
+# noop 相手なら policy が「発射すれば勝てる」を学習しやすく、その後 baseline 相手の
+# 学習でも初期 advantage signal の正例 (勝ち体験) が残ることを期待。
+# B2 結果 (commit 0719c83): noop 期 win 0.79, baseline 期 first-5 0.275, last-10 0.269 (横ばい)。
+# noop で advantage 正例は獲得したが baseline 期で plateau。
+#
+# Iteration C+D+E (2026-05-23) — 右肩上がり化:
+#   C: episodes_per_iter 16 → 32 (sample variance √2 圧縮、trend が見やすくなる)
+#   D: lr 線形 decay (lr 1e-4 → 1e-5 を 50 iter で線形)、後半 trust region 自動縮小
+#   E: switch_iter 10 → 20 (noop 期延長で正例 backbone を二重に固める)
+# C+D+E 結果 (commit 8a814ef): baseline 期 trend +0.025、極めて緩い改善。
+# (kernel が古い dataset を読み switch_iter=10 で動作した形跡。dataset bump で次回検証)
+#
+# Iteration F+G (2026-05-23) — 構造的改善:
+#   F: shaping を ships diff → planet count diff に変更 (territorial 信号、production 不依存)
+#      shaping_coef 0.01 → 0.05 (planet 単位の +1/-1 を ships 規模に揃える)
+#   G: target_kl 0.02 で trust region 強制 + entropy_coef 0.01 → 0.02
+# F+G v2 結果 (commit 6d4c082, kernel v2): planets shaping 真適用、baseline 期 trend +0.066、
+# value_loss 0.018 → 0.010 (territorial 信号がクリア)。改善はあるが last-10 0.234 で plateau。
+#
+# Iteration H+J (2026-05-23) — plateau 脱出狙い:
+#   H: lr 1e-4 → 3e-5 (per-update Δ 縮小、policy が局所最適から動きやすく)
+#   J: horizon 500 → 1000 (terminal reward の reach 確保、勝敗が報酬に強く反映)
+# H (only) 結果 (commit 9ebc105 kernel v1, horizon=500 が dataset 反映遅延で残存):
+#   trend +0.106 / last-10 0.294 / best_win 0.938 ← これまで最高
+# H+J v2 結果 (commit 9ebc105 kernel v2, horizon=1000 真適用):
+#   trend +0.062 / last-10 0.203 / best_win 0.844 ← horizon 1000 で後退
+# → J 撤回。H (lr 3e-5) 単独が最強。
+#
+# Iteration H+N (2026-05-23) — H ベース + minibatch 半減:
+#   horizon を 500 に戻す
+#   N: minibatch_size 256 → 128 (per-update gradient ノイズ↑、local optimum 脱出)
+#   lr_schedule_steps は update 数が 2× になるので 12500 維持 (元の 6400 から見て同じ)
+# H+N 結果 (commit 954824c): trend +0.103 / last-10 0.250 / entropy 20.86。
+# H (only) trend +0.106 とほぼ同等、entropy は高めで policy 固化はさらに抑制された。
+# N 単独の win_rate 改善効果は薄い (H が主要因)。
+#
+# Iteration H+N+M (2026-05-23) — advantage 推定 variance 圧縮:
+#   M: gae_lambda 0.95 → 0.90 (n-step return が長期予測を信用しなくなる、
+#      variance↓ で advantage 推定の安定化)
+# H+N+M 結果 (commit 97b3480): trend +0.075 / last-10 0.237。M で後退、撤回。
+#
+# Iteration H_only_seed1 (2026-05-23) — 再現性検証:
+#   H (only) [horizon=500, minibatch=256, gae_lambda=0.95, lr=3e-5] を seed=1 で再走。
+#   H (only) trend +0.106 は dataset 反映遅延でたまたま horizon=500 が残った特殊条件
+#   だったため、純粋な H 構成として再現するか確認。N と M はそれぞれ単独では win_rate
+#   絶対値を伸ばさないため撤回。
+# H_only_seed1 結果 (commit 9e21dbb): trend -0.006 / last-10 0.172 ← 大幅劣化。
+# H (only) +0.106 は n=16 sample variance に起因するノイズと判定。10 run の全て trend
+# が ±0.10 範囲内に collapse、構造的 plateau 確定。
+#
+# Iteration S (2026-05-23) — ノイズフロア半減 + 真の trend 検出:
+#   episodes_per_iter 32 → 128 (4×) で sample variance 1/2、trend ±0.05 まで検出可能。
+#   lr_schedule_steps 6300 → 25000 (update 数も 4×)。
+#   wall-clock 見積: rollout 4× で ~140 min on T4x2 (Kaggle 9h 内)。
+# S 結果 (commit a50f6ff): trend +0.009 / last-10 0.197。真の plateau 確定、
+# 過去 11 run の trend 0.10 級は全て sample noise。head 構造内で打てる手は
+# あと数発のみ。
+#
+# Iteration V (2026-05-23) — shaping_coef 4×:
+#   shaping_coef 0.05 → 0.20 で value head 感度↑、planet 取得/喪失イベント
+#   の中間 advantage 信号をさらに強化。
+# V 結果 (commit c58550f): trend +0.112 / last-10 0.307 / best_win 0.992 / noop 0.97 /
+# entropy 36.61。過去最高、ブレイクスルー。shaping_coef がボトルネックだった。
+#
+# Iteration V' (2026-05-23) — shaping_coef さらに 2.5×:
+#   shaping_coef 0.20 → 0.50。V でブレイクスルーしたので、さらに value head 感度を上げる。
+#   risk: 過剰 shaping で terminal reward 軽視 (over-shaping)
+# V' 結果 (commit 31e2c1b): trend +0.145 / last-10 0.334 / best_win 0.984 / noop 0.969
+# 過去最高更新。over-shaping は起きていない。
+#
+# Iteration V" (2026-05-23) — shaping_coef さらに 2×:
+#   shaping_coef 0.50 → 1.00。V' で trend +0.145 と更新、さらに sweep。
+#   1.0 で plateau なら optimal 付近確定。
+# V" 結果 (commit 64e0b1a): trend +0.075 / last-10 0.259 / value_loss 0.470
+# (V' 0.084 の 5×)。over-shaping 発現、value head が荒れた。
+# → V' (shaping=0.50) が optimal 確定。
+#
+# Iteration Y (2026-05-23) — V' 構成で 100 iter 長期学習:
+#   shaping_coef 0.50 (V' 維持) + iterations 50 → 100 で長期 trend を観測。
+#   V' (50 iter で +0.145) が 100 iter でさらに伸びるか確認。
+#   wall-clock 見積: V' 90min × 2 = ~180 min。lr_schedule_steps 25000 → 50000。
+#
+# === case2 (head 変更実験) ===
+# case2 では PerPlanetHeadJax に新規 from_head (per-source 発射推奨スコア) を追加。
+# NO_OP slot に -from_logit を bias 加算することで発射判断を明示的に学習する。
+# case1 V' と同条件 (50 iter / 128 ep / shaping 0.50) で head 変更の純粋効果を測定。
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
+  iterations: 50         # case2 start: head 変更の効果を 50 iter で確認 (case1 V' 同条件)
+  episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
+  horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
+  lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
+  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(128×500/256) = 50 × 2 × 250 = 25000 updates で線形 decay
+  lr_end: 3.0e-6
+  lr_schedule_steps: 25000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
+  shaping_coef: 0.50      # Y: V' (0.50, trend +0.145) を best として 100 iter 化。V" 1.0 は over-shaping (value_loss 0.47)
+  shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02      # G: 0.01 → 0.02 で policy 固化をさらに抑制
+  kl_beta: 0.0  # no BC reference => no KL anchor
+  ppo_epochs: 2
+  minibatch_size: 256     # N 撤回: 128 で trend +0.103 (H only +0.106 と同等)、256 戻し
+  max_grad_norm: 0.5
+  target_kl: 0.02         # G: trust region 強制、暴走防止
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 20  # E: 10 → 20 で noop 期延長
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case2_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
