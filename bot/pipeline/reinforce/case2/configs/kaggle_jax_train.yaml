@@ -116,6 +116,17 @@
 #   value_loss=0.457 (<0.10 でない) ので shaping push せず。entropy=29.5 で固化兆候も無い。
 #   from_head は明らかに機能 (value_loss 1/4) なので残す。
 #   期待: baseline 期 trend を +0.134 から +0.18 級へ、last-10 を 0.30 級へ。
+# H1' 結果 (commit 40e8a62, switch_iter=30 真適用; H1 初回は dataset 反映遅延で switch=20 だった):
+#   trend +0.037 / last-10 0.220 / best 0.289 / vloss 0.535 / ent 26.3 / noop 0.989
+#   vs H0 (switch=20): trend +0.134 / last-10 0.267 / best 0.367 / vloss 0.457
+#   → H1 仮説否定。switch_iter 延長は baseline 期 (20 iter) を圧縮し、学習機会と
+#     trend 検出力を共に低下させた。collapse 緩和効果より学習量喪失の害が大きい。
+#
+# case2 H2 (2026-05-23) — curriculum 逆方向: baseline 期を増やす:
+#   switch_iter 30 → 15 で baseline 期を 35 iter に拡張。noop 期 15 iter でも
+#   H1' 結果 (iter<15 で win 平均 0.98 級) から十分 backbone は確立する。
+#   value_loss=0.535 (>0.10) のため shaping push せず。entropy 26 も健全。
+#   期待: baseline 期 N=35 で trend slope×N が +0.20 級、last-10 0.30 級へ。
 
 model:
   hidden: 192
@@ -154,7 +165,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 30  # H1: 20 → 30 で noop 期延長 (iter20 急落 0.987→0.18 緩和狙い)
+    switch_iter: 15  # H2: 30 → 15 で baseline 期 35 iter 化 (H1' で延長害を確認、逆方向)
     early: noop
     late: baseline_jax_lite
 
