@@ -85,6 +85,12 @@
 # Iteration V' (2026-05-23) — shaping_coef さらに 2.5×:
 #   shaping_coef 0.20 → 0.50。V でブレイクスルーしたので、さらに value head 感度を上げる。
 #   risk: 過剰 shaping で terminal reward 軽視 (over-shaping)
+# V' 結果 (commit 31e2c1b): trend +0.145 / last-10 0.334 / best_win 0.984 / noop 0.969
+# 過去最高更新。over-shaping は起きていない。
+#
+# Iteration V" (2026-05-23) — shaping_coef さらに 2×:
+#   shaping_coef 0.50 → 1.00。V' で trend +0.145 と更新、さらに sweep。
+#   1.0 で plateau なら optimal 付近確定。
 
 model:
   hidden: 192
@@ -111,7 +117,7 @@ training:
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
-  shaping_coef: 0.50      # V': V (0.20, trend +0.112) でブレイクスルー、さらに 2.5× 試行
+  shaping_coef: 1.00      # V": V' (0.50, trend +0.145) でさらに改善、2× で sweep 継続
   shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
   value_coef: 0.5
