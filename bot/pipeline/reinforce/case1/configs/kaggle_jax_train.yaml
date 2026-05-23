@@ -91,6 +91,14 @@
 # Iteration V" (2026-05-23) — shaping_coef さらに 2×:
 #   shaping_coef 0.50 → 1.00。V' で trend +0.145 と更新、さらに sweep。
 #   1.0 で plateau なら optimal 付近確定。
+# V" 結果 (commit 64e0b1a): trend +0.075 / last-10 0.259 / value_loss 0.470
+# (V' 0.084 の 5×)。over-shaping 発現、value head が荒れた。
+# → V' (shaping=0.50) が optimal 確定。
+#
+# Iteration Y (2026-05-23) — V' 構成で 100 iter 長期学習:
+#   shaping_coef 0.50 (V' 維持) + iterations 50 → 100 で長期 trend を観測。
+#   V' (50 iter で +0.145) が 100 iter でさらに伸びるか確認。
+#   wall-clock 見積: V' 90min × 2 = ~180 min。lr_schedule_steps 25000 → 50000。
 
 model:
   hidden: 192
@@ -107,17 +115,17 @@ bc_warmstart:
 
 training:
   seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
-  iterations: 50
+  iterations: 100        # Y: 50 → 100 で V' (trend +0.145) が長期維持されるか確認
   episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
   horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
-  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(128×500/256) = 50 × 2 × 250 = 25000 updates で線形 decay
+  # D: lr 3e-5 → 3e-6 を 100 iter × 2 epoch × ceil(128×500/256) = 100 × 2 × 250 = 50000 updates で線形 decay
   lr_end: 3.0e-6
-  lr_schedule_steps: 25000
+  lr_schedule_steps: 50000
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
-  shaping_coef: 1.00      # V": V' (0.50, trend +0.145) でさらに改善、2× で sweep 継続
+  shaping_coef: 0.50      # Y: V' (0.50, trend +0.145) を best として 100 iter 化。V" 1.0 は over-shaping (value_loss 0.47)
   shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
   value_coef: 0.5
