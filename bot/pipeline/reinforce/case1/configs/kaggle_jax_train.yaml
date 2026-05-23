@@ -50,6 +50,13 @@
 #   horizon を 500 に戻す
 #   N: minibatch_size 256 → 128 (per-update gradient ノイズ↑、local optimum 脱出)
 #   lr_schedule_steps は update 数が 2× になるので 12500 維持 (元の 6400 から見て同じ)
+# H+N 結果 (commit 954824c): trend +0.103 / last-10 0.250 / entropy 20.86。
+# H (only) trend +0.106 とほぼ同等、entropy は高めで policy 固化はさらに抑制された。
+# N 単独の win_rate 改善効果は薄い (H が主要因)。
+#
+# Iteration H+N+M (2026-05-23) — advantage 推定 variance 圧縮:
+#   M: gae_lambda 0.95 → 0.90 (n-step return が長期予測を信用しなくなる、
+#      variance↓ で advantage 推定の安定化)
 
 model:
   hidden: 192
@@ -76,7 +83,7 @@ training:
   lr_schedule_steps: 12500
   weight_decay: 1.0e-5
   gamma: 0.995
-  gae_lambda: 0.95
+  gae_lambda: 0.90       # M: 0.95 → 0.90 で advantage 推定 variance 圧縮
   shaping_coef: 0.05      # F: shaping_mode=planets で +1 / -1 単位なので係数 5× 引き上げ
   shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
   clip_eps: 0.2
