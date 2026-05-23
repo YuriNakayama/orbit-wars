@@ -64,6 +64,14 @@
 #   H (only) trend +0.106 は dataset 反映遅延でたまたま horizon=500 が残った特殊条件
 #   だったため、純粋な H 構成として再現するか確認。N と M はそれぞれ単独では win_rate
 #   絶対値を伸ばさないため撤回。
+# H_only_seed1 結果 (commit 9e21dbb): trend -0.006 / last-10 0.172 ← 大幅劣化。
+# H (only) +0.106 は n=16 sample variance に起因するノイズと判定。10 run の全て trend
+# が ±0.10 範囲内に collapse、構造的 plateau 確定。
+#
+# Iteration S (2026-05-23) — ノイズフロア半減 + 真の trend 検出:
+#   episodes_per_iter 32 → 128 (4×) で sample variance 1/2、trend ±0.05 まで検出可能。
+#   lr_schedule_steps 6300 → 25000 (update 数も 4×)。
+#   wall-clock 見積: rollout 4× で ~140 min on T4x2 (Kaggle 9h 内)。
 
 model:
   hidden: 192
@@ -79,14 +87,14 @@ bc_warmstart:
   weights_path: ""
 
 training:
-  seed: 1                # seed 0 で H (only) trend +0.106 を観測。再現性検証で 1 へ
+  seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
   iterations: 50
-  episodes_per_iter: 32  # C: 16 → 32 で sample variance √2 圧縮
+  episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
   horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
-  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(32×500/256) = 50 × 2 × 63 = 6300 updates で線形 decay
+  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(128×500/256) = 50 × 2 × 250 = 25000 updates で線形 decay
   lr_end: 3.0e-6
-  lr_schedule_steps: 6300
+  lr_schedule_steps: 25000
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
