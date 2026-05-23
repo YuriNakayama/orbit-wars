@@ -139,6 +139,20 @@
 #   と上昇継続中、まだ伸び代あり。noop 期 10 iter は短いが、iter<10 で win
 #   平均 0.98 (H2-真 iter<10 = 0.98) → backbone は短時間でも確立可能。
 #   期待: trend +0.20+ / last-10 0.30+ / best 0.40+。
+# H3 結果 (commit 2907af7, switch_iter=10 真適用):
+#   trend +0.177 (N=40) / last-10 0.300 / best 0.383 / vloss 0.441 / ent 31.9
+#   vs H2-真 (sw=15): trend +0.181 / last-10 0.288 / best 0.359 / vloss 0.461
+#   → trend は tie (+0.177 vs +0.181)、絶対値 (last-10 +0.012 / best +0.024 /
+#     vloss -0.020) は H2-真 全敗。switch=10 が新 BEST。
+#     iter49 (0.383) で上昇継続中、curve まだ伸び代あり。
+#
+# case2 H4 (2026-05-24) — 同方向さらに拡大の限界探索:
+#   switch_iter 10 → 5 で baseline 期 45 iter 化。H3 iter<5 win 平均 0.98 →
+#   5 iter noop でも backbone は確立可能と判断。
+#   value_loss 0.441 (>0.10) のため shaping push せず。entropy 31.9 健全。
+#   期待: trend +0.20+ / last-10 0.32+ / best 0.40+。
+#   リスク: noop 5 iter は短すぎて backbone 学習不足 → 早期 collapse 深化。
+#   その場合は H3 (switch=10) が optimum 確定。
 
 model:
   hidden: 192
@@ -177,7 +191,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 10  # H3: 15 → 10 で baseline 期 40 iter 化 (H2-真 trend +0.181 breakthrough 拡大)
+    switch_iter: 5  # H4: 10 → 5 で baseline 期 45 iter 化 (H3 で新 BEST、限界探索)
     early: noop
     late: baseline_jax_lite
 
