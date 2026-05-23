@@ -153,6 +153,19 @@
 #   期待: trend +0.20+ / last-10 0.32+ / best 0.40+。
 #   リスク: noop 5 iter は短すぎて backbone 学習不足 → 早期 collapse 深化。
 #   その場合は H3 (switch=10) が optimum 確定。
+# H4 結果 (commit 3752acb, switch_iter=5 真適用):
+#   trend +0.204 (N=45) / last-10 0.320 / best 0.398 / vloss 0.428 / ent 32.1
+#   vs H3 (sw=10): trend +0.177 / last-10 0.300 / best 0.383 / vloss 0.441
+#   → 全指標で H3 超え、trend ついに +0.20 突破。新 BEST。
+#     iter46 で best 0.398、curve は iter49 (0.352) でも上昇継続中。
+#
+# case2 H5 (2026-05-24) — 同方向さらに拡大:
+#   switch_iter 5 → 3 で baseline 期 47 iter 化。H4 iter 0,1,2 = 1.00/0.977/1.00 →
+#   3 iter noop でも backbone 確立 OK。
+#   value_loss 0.428 (>0.10) のため shaping push せず。entropy 32.1 健全。
+#   期待: trend +0.21+ / last-10 0.33+ / best 0.40+。
+#   リスク: switch=3 は実質ほぼ baseline-only。noop の事前学習効果が消える可能性。
+#   もし H5 が H4 より明確に悪ければ H4 が optimum 確定。
 
 model:
   hidden: 192
@@ -191,7 +204,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 5  # H4: 10 → 5 で baseline 期 45 iter 化 (H3 で新 BEST、限界探索)
+    switch_iter: 3  # H5: 5 → 3 で baseline 期 47 iter 化 (H4 +0.204 BEST、curriculum 限界探索)
     early: noop
     late: baseline_jax_lite
 
