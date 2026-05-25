@@ -166,6 +166,20 @@
 #   期待: trend +0.21+ / last-10 0.33+ / best 0.40+。
 #   リスク: switch=3 は実質ほぼ baseline-only。noop の事前学習効果が消える可能性。
 #   もし H5 が H4 より明確に悪ければ H4 が optimum 確定。
+# H5 結果 (4a140ad): Kaggle dataset reflection bug + RunPod A100 cuda13 fallback で
+#   未完。8 iter までの推移は switch 直後 dip が H4 (sw=5) より深く (iter3=0.078 vs
+#   H4 iter5=0.172)、noop pretraining 不足の兆候。H4 が curriculum 系の optimum と判定。
+#
+# case2 H6 (2026-05-25) — 目標 last-10 ≥ 0.50: H4 構成で 200 iter 長期学習:
+#   switch_iter は H4 best の 5 に戻す (sweep 探索終了、H4 で sweet spot 確定)。
+#   iterations 50 → 200 で baseline 期を 45 → 195 iter に大幅拡張。
+#   case1 Z v2 (head 変更なし 200 iter) は同じ手法で trend +0.280 / last-10 0.491 /
+#   best 0.562 を達成、9 chunks 全て単調増加 → 200 iter で 0.5 突破実証済。
+#   case2 は H4 で trend +0.204 / last-10 0.320 を 50 iter で達成、線形外挿でも
+#   200 iter で last-10 ~0.50 級、plateau 上限 0.55-0.65 期待。
+#   lr_schedule_steps 25000 → 100000 (update 数 4x に合わせて scale)。
+#   wall-clock 見積: Kaggle T4x2 = 90min x 4 = ~6h、RunPod RTX4090 cu12 = ~3h。
+#   実験は RunPod (Kaggle 30h quota 消費済) で実施、availability + 単価で GPU 選択。
 
 model:
   hidden: 192
@@ -182,13 +196,13 @@ bc_warmstart:
 
 training:
   seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
-  iterations: 50         # case2 start: head 変更の効果を 50 iter で確認 (case1 V' 同条件)
+  iterations: 200        # H6: 50 → 200 で長期学習。case1 Z v2 (200 iter, last-10 0.491) と同手法で 0.5 突破狙い
   episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
   horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
   lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
   # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(128×500/256) = 50 × 2 × 250 = 25000 updates で線形 decay
   lr_end: 3.0e-6
-  lr_schedule_steps: 25000
+  lr_schedule_steps: 100000  # H6: 25000 → 100000 (update 数 4x、200 iter 全体で線形 decay 完走)
   weight_decay: 1.0e-5
   gamma: 0.995
   gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
@@ -204,7 +218,7 @@ training:
   target_kl: 0.02         # G: trust region 強制、暴走防止
   opponent: curriculum
   opponent_curriculum:
-    switch_iter: 3  # H5: 5 → 3 で baseline 期 47 iter 化 (H4 +0.204 BEST、curriculum 限界探索)
+    switch_iter: 5  # H6: H5 否定で H4 best (sw=5) に戻し、200 iter 長期学習に集中
     early: noop
     late: baseline_jax_lite
 
