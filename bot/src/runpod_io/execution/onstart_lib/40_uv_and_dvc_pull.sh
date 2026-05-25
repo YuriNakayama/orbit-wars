@@ -359,7 +359,11 @@ fi
 # requires these missing dependencies: ['s3fs']` when cuda sync
 # ran before dvc.
 case "<CASE>" in
-  bench_*_gpu)
+  bench_*_gpu | reinforce_*)
+    # reinforce family: JAX-on-GPU. cuda group install しないと jaxlib が CPU
+    # fallback して iter ごと 13-15 min (期待 70s) になり、watch が GONE
+    # 判定で pod を終了させてしまう (run 20260525-1[34]xxxx__44a057e で観測)。
+    # case2_kaggle_jax_train や case1_jax_train もここで cuda group を入れる。
     echo "[onstart] step=install_cuda_jax (case=<CASE>): uv sync --group env --group cuda"
     if ! check_and_reset_broken_venv; then
       mark "47_install_cuda_jax_failed"
