@@ -365,6 +365,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case1_jax_train: RunPod 用の JAX 学習 case。Kaggle 30h quota
+    # を回避するため、kaggle_jax_train.yaml と同じ AA 構成 (300 iter, shaping=0.50)
+    # を RunPod GPU で走らせる。RTX 3090 (Medium stock, $0.22/h) を想定。
+    "reinforce_case1_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_jax_train",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case2: head 構造変更実験用 case (case1 ベース + from_head 追加)。
     # per_planet head の NO_OP slot に per-source 発射推奨スコア (from_logit) を
     # bias として加算し、発射判断を明示的に学習する。最初の head 変更実験。
