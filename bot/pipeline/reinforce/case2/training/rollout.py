@@ -217,7 +217,7 @@ def _worker_run(
         obj = _resolve_agent(opponent_name)
         if not callable(obj):
             raise ValueError(f"opponent {opponent_name!r} is not callable")
-        opp = obj  # type: ignore[assignment]
+        opp = obj
     assert _WORKER_MODEL is not None, "worker not initialized"
     return _run_one_episode(
         _WORKER_MODEL,

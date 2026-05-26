@@ -93,7 +93,10 @@ class OrbitWarsEpisode:
         self._prev_ships_diff = diff
 
         reward = shaping
-        if self.done:
+        # bool() で property を local 化し、line 79 の type narrowing を断ち切る
+        # (mypy が self.done を False に固定推論することで unreachable と誤判定)
+        episode_done = bool(self.done)
+        if episode_done:
             rewards = [s.get("reward", 0) or 0 for s in self.env.steps[-1]]
             r_self = float(rewards[self.seat])
             r_opp = float(rewards[1 - self.seat])

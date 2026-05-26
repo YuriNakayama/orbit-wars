@@ -65,7 +65,6 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     seat_i32 = jnp.int32(seat)
     is_mine = valid & (owner == seat_i32)
     is_target = valid & (owner != seat_i32)
-    is_enemy = is_target & (owner >= 0)  # excluding neutrals (owner=-1)
 
     # ---- reserve: lite-compatible flat 3-turn (Phase 4 ETA-based was
     # over-reserving, causing full to lose to lite in self-play. Keep
@@ -91,12 +90,16 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     # a scalar advance per target — keep cheap; per-pair predict would be
     # (P, P, 2) memory). Mean across src for each target column.
     mean_t0_per_target = jnp.mean(t0, axis=0)  # (P,)
+
     # predict_planet_xy expects scalar dt; we vmap over per-target dt.
     # To avoid that, just use per-target dt as a (P,) scalar broadcast.
     def _predict_per_target(dt_scalar: jax.Array) -> jax.Array:
         return predict_planet_xy(
-            init_xy, radius, state.angular_velocity,
-            game_step=cur_step, dt=dt_scalar,
+            init_xy,
+            radius,
+            state.angular_velocity,
+            game_step=cur_step,
+            dt=dt_scalar,
         )  # (P, 2)
 
     # Vmap over per-target dt to get (P_target, P_planet, 2). We only need
@@ -128,15 +131,15 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     # + planet_radius + margin.
     tgt_dx_sun = xy[:, 0] - jnp.float32(CENTER)
     tgt_dy_sun = xy[:, 1] - jnp.float32(CENTER)
-    tgt_sun_dist = jnp.sqrt(tgt_dx_sun ** 2 + tgt_dy_sun ** 2 + 1e-8)  # (P,)
+    tgt_sun_dist = jnp.sqrt(tgt_dx_sun**2 + tgt_dy_sun**2 + 1e-8)  # (P,)
     crash_threshold = (
-        jnp.float32(SUN_RADIUS)
-        + radius
-        + jnp.float32(CRASH_EXPLOIT_RADIUS_MARGIN)
+        jnp.float32(SUN_RADIUS) + radius + jnp.float32(CRASH_EXPLOIT_RADIUS_MARGIN)
     )  # (P,)
     is_crash_prone = (tgt_sun_dist < crash_threshold) & is_target  # (P,)
     crash_mask_b = is_crash_prone[None, :]  # (1, P)
-    need = jnp.where(crash_mask_b, need * jnp.float32(CRASH_EXPLOIT_NEED_DISCOUNT), need)
+    need = jnp.where(
+        crash_mask_b, need * jnp.float32(CRASH_EXPLOIT_NEED_DISCOUNT), need
+    )
     need = jnp.maximum(need, jnp.float32(1.0))  # min 1 ship
 
     # ---- pair score ----------------------------------------------------
@@ -179,8 +182,10 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     sorted_desc = -jnp.sort(-masked_surplus_for_tgt, axis=0)  # (P, P)
     top2_surplus = sorted_desc[1, :]  # (P,) — 2nd largest per target
     # pair viable only where top-2 surplus >= half_threshold for that target.
-    half_t = half_threshold[0, :] if half_threshold.ndim == 2 else jnp.broadcast_to(
-        half_threshold, (MAX_PLANETS,)
+    half_t = (
+        half_threshold[0, :]
+        if half_threshold.ndim == 2
+        else jnp.broadcast_to(half_threshold, (MAX_PLANETS,))
     )
     # Recompute half_t cleanly: need is (1, P); ratio scalar; thresh (1, P)→(P,)
     half_t = need[0, :] * jnp.float32(PAIR_SWARM_NEED_RATIO)
@@ -200,23 +205,28 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     angle = jnp.arctan2(chosen_dy, chosen_dx)
 
     # Determine if src is firing as solo or pair on its chosen target.
-    chosen_is_solo = jnp.take_along_axis(
-        solo_afford.astype(jnp.float32), tgt_idx[:, None], axis=1
-    ).squeeze(-1) > 0.5
-    chosen_is_pair = jnp.take_along_axis(
-        pair_afford.astype(jnp.float32), tgt_idx[:, None], axis=1
-    ).squeeze(-1) > 0.5
+    chosen_is_solo = (
+        jnp.take_along_axis(
+            solo_afford.astype(jnp.float32), tgt_idx[:, None], axis=1
+        ).squeeze(-1)
+        > 0.5
+    )
+    chosen_is_pair = (
+        jnp.take_along_axis(
+            pair_afford.astype(jnp.float32), tgt_idx[:, None], axis=1
+        ).squeeze(-1)
+        > 0.5
+    )
 
     # Solo: send need (clipped to surplus). Pair: send half_t (clipped).
     chosen_half = jnp.take_along_axis(
         jnp.broadcast_to(half_t[None, :], (MAX_PLANETS, MAX_PLANETS)),
-        tgt_idx[:, None], axis=1,
+        tgt_idx[:, None],
+        axis=1,
     ).squeeze(-1)
     ships_solo = jnp.clip(chosen_need, 1.0, surplus)
     ships_pair = jnp.clip(chosen_half, 1.0, surplus)
-    ships_to_send = jnp.where(
-        chosen_is_pair, ships_pair, ships_solo
-    ).astype(jnp.int32)
+    ships_to_send = jnp.where(chosen_is_pair, ships_pair, ships_solo).astype(jnp.int32)
     # Only fire if solo or pair was the valid branch.
     row_has_valid = row_has_valid & (chosen_is_solo | chosen_is_pair)
 

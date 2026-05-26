@@ -100,7 +100,7 @@ def _resolve_opponent(name: str) -> OpponentAgent:
 
     agent_obj = resolve(name)
     if callable(agent_obj):
-        return agent_obj  # type: ignore[return-value]
+        return agent_obj
     raise ValueError(f"opponent {name!r} is not a callable agent")
 
 

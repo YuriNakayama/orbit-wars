@@ -13,9 +13,10 @@ import jax
 import jax.numpy as jnp
 import typer
 
-from jax_env.constants import MAX_PLANETS, NUM_AGENTS_MAX
+from jax_env.constants import NUM_AGENTS_MAX
 from jax_env.reset import reset
-from jax_env.step import MAX_LAUNCHES_PER_AGENT, step as jax_env_step
+from jax_env.step import MAX_LAUNCHES_PER_AGENT
+from jax_env.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as lite_actions,
 )
@@ -25,7 +26,9 @@ from pipeline.rulebase.case1.baseline_jax_full import (
 
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(add_completion=False, help="baseline_jax_full vs baseline_jax_lite eval.")
+app = typer.Typer(
+    add_completion=False, help="baseline_jax_full vs baseline_jax_lite eval."
+)
 
 
 def _play_one(seed: int, swap: bool, horizon: int = 500) -> tuple[int, int]:
@@ -40,12 +43,13 @@ def _play_one(seed: int, swap: bool, horizon: int = 500) -> tuple[int, int]:
     lite_seat = 0 if swap else 1
 
     @jax.jit
-    def step_loop(state):
-        def body(carry, _):
+    def step_loop(state):  # type: ignore[no-untyped-def]
+        def body(carry, _):  # type: ignore[no-untyped-def]
             state, done = carry
             empty_actions = jnp.full(
                 (NUM_AGENTS_MAX, MAX_LAUNCHES_PER_AGENT, 3),
-                -1.0, dtype=jnp.float32,
+                -1.0,
+                dtype=jnp.float32,
             )
             full_row = full_actions(state, full_seat)
             lite_row = lite_actions(state, lite_seat)
@@ -67,12 +71,8 @@ def _play_one(seed: int, swap: bool, horizon: int = 500) -> tuple[int, int]:
     owner = final.planet_owner
     ships = final.planet_ships
     valid = final.planet_valid
-    full_score = int(
-        jnp.sum(jnp.where(valid & (owner == full_seat), ships, 0))
-    )
-    lite_score = int(
-        jnp.sum(jnp.where(valid & (owner == lite_seat), ships, 0))
-    )
+    full_score = int(jnp.sum(jnp.where(valid & (owner == full_seat), ships, 0)))
+    lite_score = int(jnp.sum(jnp.where(valid & (owner == lite_seat), ships, 0)))
     return full_score, lite_score
 
 
@@ -81,7 +81,7 @@ def main(
     episodes: int = typer.Option(20, "--episodes", "-n"),
     horizon: int = typer.Option(500, "--horizon"),
     base_seed: int = typer.Option(42, "--base-seed"),
-):
+) -> None:
     """Run N episodes, half with seat swap, return win rates."""
     full_wins = 0
     lite_wins = 0
@@ -90,26 +90,29 @@ def main(
     for i in range(episodes):
         swap = bool(i % 2)
         seed = base_seed + i
-        f, l = _play_one(seed, swap=swap, horizon=horizon)
-        if f > l:
+        f, lite_score = _play_one(seed, swap=swap, horizon=horizon)
+        if f > lite_score:
             full_wins += 1
             outcome = "FULL"
-        elif l > f:
+        elif lite_score > f:
             lite_wins += 1
             outcome = "LITE"
         else:
             draws += 1
             outcome = "DRAW"
-        score_diff_sum += f - l
+        score_diff_sum += f - lite_score
         print(
             f"  ep{i + 1:>3d} seed={seed} swap={int(swap)} "
-            f"full_score={f:>4d} lite_score={l:>4d} -> {outcome}"
+            f"full_score={f:>4d} lite_score={lite_score:>4d} -> {outcome}"
         )
 
     total = episodes - draws
     full_rate = full_wins / total if total > 0 else 0.0
     print()
-    print(f"=== baseline_jax_full vs baseline_jax_lite ({episodes} eps, horizon={horizon}) ===")
+    print(
+        f"=== baseline_jax_full vs baseline_jax_lite "
+        f"({episodes} eps, horizon={horizon}) ==="
+    )
     print(f"FULL wins: {full_wins}/{episodes} = {full_wins / episodes:.3f}")
     print(f"LITE wins: {lite_wins}/{episodes} = {lite_wins / episodes:.3f}")
     print(f"draws: {draws}/{episodes}")

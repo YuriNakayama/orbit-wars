@@ -1,19 +1,23 @@
 """Vendor parity for predict_planet_xy (orbit math)."""
+
 from __future__ import annotations
 
 import math
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from jax_env.constants import CENTER, ROTATION_RADIUS_LIMIT
 from pipeline.rulebase.case1.baseline_jax_full.geometry_jax import predict_planet_xy
 
 
 def _vendor_predict(
-    init_y: float, init_x: float, radius: float,
-    angular_velocity: float, game_step: int, dt: int,
+    init_y: float,
+    init_x: float,
+    radius: float,
+    angular_velocity: float,
+    game_step: int,
+    dt: int,
 ) -> tuple[float, float]:
     """Vendor formula reference (matches bot/src/jax_env/step.py)."""
     dx = init_y - CENTER
@@ -29,7 +33,7 @@ def _vendor_predict(
     return y, x
 
 
-def test_predict_matches_vendor_for_rotating_planets():
+def test_predict_matches_vendor_for_rotating_planets() -> None:
     # 5 rotating planets at various orbital radii / angles.
     planets = [
         (55.0, 50.0, 2.0),  # init_y=55, init_x=50, r=5  → rotates
@@ -45,19 +49,22 @@ def test_predict_matches_vendor_for_rotating_planets():
 
     for dt in (0, 1, 5, 10, 20):
         out = predict_planet_xy(
-            init_xy, radius, jnp.float32(av),
-            game_step=jnp.int32(game_step), dt=jnp.float32(dt),
+            init_xy,
+            radius,
+            jnp.float32(av),
+            game_step=jnp.int32(game_step),
+            dt=jnp.float32(dt),
         )
         out_np = np.asarray(out)
         for i, (iy, ix, r) in enumerate(planets):
             exp_y, exp_x = _vendor_predict(iy, ix, r, av, game_step, dt)
             assert abs(out_np[i, 0] - exp_y) < 1e-3, (
-                f"planet {i} dt={dt} y mismatch {out_np[i,0]} vs {exp_y}"
+                f"planet {i} dt={dt} y mismatch {out_np[i, 0]} vs {exp_y}"
             )
             assert abs(out_np[i, 1] - exp_x) < 1e-3
 
 
-def test_static_planet_does_not_rotate():
+def test_static_planet_does_not_rotate() -> None:
     # Large orbital radius → static.
     # init at (90, 50): dx=40, dy=0, r=40, +planet_radius 15 → 55 >= 50 → static.
     init_xy = jnp.array([[90.0, 50.0]], dtype=jnp.float32)
@@ -72,7 +79,7 @@ def test_static_planet_does_not_rotate():
         assert abs(out_np[0, 1] - 50.0) < 1e-5
 
 
-def test_comet_sentinel_static():
+def test_comet_sentinel_static() -> None:
     # Sentinel = (-99, -99) → treated static even if r < limit numerically.
     init_xy = jnp.array([[-99.0, -99.0]], dtype=jnp.float32)
     radius = jnp.array([3.0], dtype=jnp.float32)

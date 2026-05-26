@@ -22,7 +22,8 @@ class ValueHead(nn.Module):
         )
 
     def forward(self, ctx: torch.Tensor) -> torch.Tensor:
-        return self.net(ctx).squeeze(-1)
+        out: torch.Tensor = self.net(ctx).squeeze(-1)
+        return out
 
 
 class ShipLogStd(nn.Module):

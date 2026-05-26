@@ -191,7 +191,7 @@ def summarize_timeline(
     """featurizer 用 6 集約値を timeline から計算する。
 
     Returns:
-        loss_3turn: 自所有 planet なら turn=0 → turn=short_window で失う ships 量 (float)
+        loss_3turn: 自所有なら turn=0 → turn=short_window で失う ships 量 (float)
         ttf_norm: time-to-fall を horizon で割った値 (1.0 = 陥落なし、0.0 = 即陥落)
         min_owned: timeline['min_owned']
         surplus: turn=horizon で残る ships (自所有なら ships_at[horizon]、敵所有なら 0)
@@ -243,7 +243,7 @@ def summarize_timeline_multi_horizon(
     Returns 各 horizon h について:
       loss_{h}turn: 自所有期間中に turn=0 → turn=h で失う ships 量。owner が変わったら
                    現 ships を全損扱い (`summarize_timeline` の loss_3turn 同様)。
-      min_owned_{h}turn: turn=0..h で planet が自所有期間中の最小 ships。自所有でなければ 0。
+      min_owned_{h}turn: turn=0..h の自所有期間中の最小 ships。自所有でなければ 0。
     """
     ships_at = timeline.get("ships_at", {})
     owner_at = timeline.get("owner_at", {})
@@ -257,8 +257,8 @@ def summarize_timeline_multi_horizon(
         s_h = float(ships_at.get(h_eff, s0))
         own_h = owner_at.get(h_eff, base_owner)
         loss = max(0.0, s0 - s_h) if base_owner == own_h else max(0.0, s0)
-        # min_owned for this horizon: walk turns 0..h, only count when owner == base_owner
-        # (and base_owner is the player perspective owner at t=0; mirrors simulate's min_owned).
+        # min_owned for this horizon: walk turns 0..h, count when owner == base_owner
+        # (base_owner = player owner at t=0; mirrors simulate's min_owned).
         if base_owner == -1:
             mo = 0.0
         else:

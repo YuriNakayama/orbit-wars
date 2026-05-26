@@ -87,7 +87,7 @@ def _bc_kl(
     cat_kl = (p_new * (log_p_new - log_p_bc)).sum(dim=-1)  # (B, P)
     cat_kl = torch.where(my_mask, cat_kl, torch.zeros_like(cat_kl)).sum(dim=-1)
 
-    # Gaussian KL (state-independent σ): identical σ → reduces to (μ_new − μ_bc)^2 / (2σ^2)
+    # Gaussian KL (state-independent σ): identical σ → (μ_new − μ_bc)^2 / (2σ^2)
     std_new = new_out.ship_log_std.exp().clamp_min(1e-3)
     std_bc = bc_out.ship_log_std.exp().clamp_min(1e-3)
     var_new = std_new**2
@@ -182,7 +182,7 @@ def ppo_update(
                 + cfg.kl_beta * bc_kl
             )
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            loss.backward()  # type: ignore[no-untyped-call]
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
             optimizer.step()
 

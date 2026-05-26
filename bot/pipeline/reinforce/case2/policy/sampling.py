@@ -48,14 +48,14 @@ def sample_action(output: PolicyOutput, batch: BatchFeatures) -> SampledAction:
         torch.zeros_like(pp_logits),
     )
     target_dist = Categorical(logits=safe_logits)
-    target_sample = target_dist.sample()  # (P,)
-    t_lp = target_dist.log_prob(target_sample)
-    t_ent = target_dist.entropy()
+    target_sample = target_dist.sample()  # type: ignore[no-untyped-call]
+    t_lp = target_dist.log_prob(target_sample)  # type: ignore[no-untyped-call]
+    t_ent = target_dist.entropy()  # type: ignore[no-untyped-call]
 
     ship_dist = _ship_dist(output.ship_mean[0], output.ship_log_std)
-    ship_sample = ship_dist.sample()  # (P,)
-    s_lp = ship_dist.log_prob(ship_sample)
-    s_ent = ship_dist.entropy()
+    ship_sample = ship_dist.sample()  # type: ignore[no-untyped-call]
+    s_lp = ship_dist.log_prob(ship_sample)  # type: ignore[no-untyped-call]
+    s_ent = ship_dist.entropy()  # type: ignore[no-untyped-call]
 
     # Mask out non-source rows; non-fire rows still contribute Gaussian lp/ent
     # so the buffered sample is consistent with the policy's joint.
@@ -132,14 +132,14 @@ def evaluate_actions(
         torch.zeros_like(pp_logits),
     )
     target_dist = Categorical(logits=safe_logits)
-    t_lp = target_dist.log_prob(
+    t_lp = target_dist.log_prob(  # type: ignore[no-untyped-call]
         target_slot.clamp_min(0).clamp_max(pp_logits.shape[-1] - 1)
     )
-    t_ent = target_dist.entropy()
+    t_ent = target_dist.entropy()  # type: ignore[no-untyped-call]
 
     ship_dist = _ship_dist(output.ship_mean, output.ship_log_std)
-    s_lp = ship_dist.log_prob(log1p_ships)
-    s_ent = ship_dist.entropy()
+    s_lp = ship_dist.log_prob(log1p_ships)  # type: ignore[no-untyped-call]
+    s_ent = ship_dist.entropy()  # type: ignore[no-untyped-call]
 
     log_prob = _safe_sum_2d(t_lp, my_mask) + _safe_sum_2d(s_lp, my_mask)
     entropy = _safe_sum_2d(t_ent, my_mask) + _safe_sum_2d(s_ent, my_mask)

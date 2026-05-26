@@ -216,6 +216,7 @@ def convert_split(
     # (commit 2cb655d observed 5 files missing right after flush despite
     # os.sync). Failure after retries raises RuntimeError.
     import time
+
     for attempt in range(1, 4):
         logger.info("verifying outputs in %s (attempt %d/3)", out_dir, attempt)
         missing: list[str] = []
