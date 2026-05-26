@@ -24,7 +24,7 @@ simulator/                  ← bot 非依存の純粋シミュレータ層
   adapter/  orbit_wars_sim      ★backend 切替 adapter (旧 bot/src/env)
 
 bot/
-  src/        submit / dataset / evaluation / utils / gpu/{vast,runpod,kaggle}
+  src/        submit / dataset / evaluate / utils / gpu/{vast,runpod,kaggle}
   pipeline/   rulebase / imitation / reinforce ← 3 family のみ
     reinforce/_bench/   ★dev-only ベンチ (旧 bot/scripts + 旧 pipeline/_bench を吸収)
   tests/
@@ -58,7 +58,7 @@ channel`) など **リモート実行される文字列も全て追従**。`vast
 
 ## 採用しなかった案
 
-- **`bot/src/` 残り 4 パッケージ (submit/dataset/evaluation/utils) を `orbit_wars_bot`
+- **`bot/src/` 残り 4 パッケージ (submit/dataset/evaluate/utils) を `orbit_wars_bot`
   単一 namespace へ統合**: `python -m submit` 等の CLI エントリ規約と衝突し、
   silent breakage リスクが高いため**見送り** (ユーザー決定)。GPU 系のように明確な
   グルーピング理由がある場合のみ集約する方針。

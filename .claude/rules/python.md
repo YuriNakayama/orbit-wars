@@ -21,7 +21,7 @@ Each subdirectory is exposed as a top-level package via `[tool.hatch.build.targe
 bot/src/
   submit/          Kaggle submission packaging / validation / quota (python -m submit)
   dataset/         Selfplay & Kaggle-episode data pipeline (python -m dataset)
-  evaluation/      Cross-case eval (metrics, vs_baseline, snapshot_update)
+  evaluate/        Cross-case eval (metrics, vs_baseline, snapshot_update)
   utils/           Shared utilities (repo_root, fleet kinematics, trajectory safety, gpu_bench)
   gpu/             GPU provider CLIs (one subpackage per provider):
     vast/          Vast.ai GPU pod control CLI (python -m gpu.vast)

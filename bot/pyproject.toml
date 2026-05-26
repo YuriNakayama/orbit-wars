@@ -38,7 +38,7 @@ orbit-wars-jax = { path = "../simulator/jax", editable = true }
 orbit-wars-sim = { path = "../simulator/adapter", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/submit", "src/dataset", "src/gpu", "src/evaluation", "src/utils", "pipeline"]
+packages = ["src/submit", "src/dataset", "src/gpu", "src/evaluate", "src/utils", "pipeline"]
 
 [build-system]
 requires = ["hatchling"]

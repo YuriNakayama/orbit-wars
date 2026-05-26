@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataset.schema import MatchRecord
-from evaluation.vs_baseline import summarize_records, wilson_ci
+from evaluate.vs_baseline import summarize_records, wilson_ci
 
 
 def _record(winner: int, *, draw: bool = False) -> MatchRecord:

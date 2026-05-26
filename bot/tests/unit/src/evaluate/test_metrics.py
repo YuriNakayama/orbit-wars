@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from evaluation.metrics import (
+from evaluate.metrics import (
     FromArrays,
     ShipsArrays,
     TargetArrays,

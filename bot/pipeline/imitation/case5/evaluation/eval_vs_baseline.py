@@ -17,7 +17,7 @@ import typer
 import yaml
 
 from dataset.selfplay.runner import RunSpec, run_episodes
-from evaluation.vs_baseline import summarize_records
+from evaluate.vs_baseline import summarize_records
 from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)

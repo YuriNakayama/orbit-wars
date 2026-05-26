@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evaluation.snapshot_update import write_snapshot
+from evaluate.snapshot_update import write_snapshot
 
 
 def test_write_snapshot_creates_files(tmp_path: Path) -> None:
