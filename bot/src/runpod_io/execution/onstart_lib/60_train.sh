@@ -97,7 +97,11 @@ while kill -0 "${TRAIN_PIPE_PID}" 2>/dev/null; do
   echo "[onstart] train heartbeat ${HEARTBEAT}: pid=${TRAIN_PIPE_PID}"
   mark "62_train_heartbeat_${HEARTBEAT}"
   if command -v aws >/dev/null 2>&1; then
-    for f in train.log gpu.log system.log; do
+    # PR: best.pt / metrics.json も heartbeat ごとに stream upload する。
+    # 学習途中で pod が殺された / 70_artifacts_and_dvc.sh が走らない race
+    # でも 1 min 単位での最新スナップショットが S3 に残り、復旧可能になる。
+    # 過去 20260525-170449 では best.pt 喪失で 4.6h $1.0 の学習成果が消失。
+    for f in train.log gpu.log system.log best.pt metrics.json; do
       src="${RUN_DIR_ABS}/${f}"
       if [ -f "${src}" ]; then
         aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" 2>/dev/null || true
@@ -127,6 +131,27 @@ if [ "${TRAIN_EXIT}" -ne 0 ]; then
   mark "65_train_failed_exit_${TRAIN_EXIT}"
   exit "${TRAIN_EXIT}"
 fi
+
+# PR: train 完了直後 / 70_artifacts_and_dvc.sh source 前の race fix。
+# pod が train 終了直後に外部 terminate された場合、後続 step が走らず
+# best.pt / metrics.json が S3 にも DVC にも上がらない事象が発生した
+# (20260525-170449 で 4.6h $1.0 の成果消失)。heartbeat loop と同じ
+# 経路で最後の強制 upload を追加し、後続 step に依存せず最終スナップ
+# ショットを必ず確保する。
+if command -v aws >/dev/null 2>&1; then
+  for f in best.pt metrics.json train.log gpu.log system.log; do
+    src="${RUN_DIR_ABS}/${f}"
+    if [ -f "${src}" ]; then
+      aws s3 cp "${src}" "${S3_ARTIFACT_PREFIX}/${f}" \
+        && echo "[onstart] final upload ${f} OK" \
+        || echo "[onstart] final upload ${f} FAILED (non-fatal)" >&2
+    fi
+  done
+  if [ -f /var/log/onstart.log ]; then
+    aws s3 cp /var/log/onstart.log "${S3_ARTIFACT_PREFIX}/onstart.log" 2>/dev/null || true
+  fi
+fi
+mark "67_final_artifact_upload"
 
 mark "70_train_done"
 # onstart log 全体を run_dir に取り込んで DVC 永久化対象にする。dvc add 直前なので
