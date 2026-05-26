@@ -152,6 +152,51 @@ def get_pod_ssh_endpoint(
     return parse_ssh_endpoint(pod, key_path=key_path or DEFAULT_DIRECT_KEY)
 
 
+def grab_onstart_log(
+    endpoint: SshEndpoint,
+    *,
+    remote_path: str = "/var/log/onstart.log",
+    timeout_seconds: float = 30.0,
+    runner: Any = None,
+) -> str:
+    """SSH 経由で pod から `onstart.log` を取得する。
+
+    watcher が stalled を検出したとき、`terminate_pod` を呼ぶ前にこの関数で
+    ログを救出して S3 / ローカルに永久化する。`subprocess.run` を直接呼ぶと
+    test しづらいので `runner` で差し替え可能 (defaults to subprocess.run)。
+
+    `SshUnavailable` を投げる条件: SSH command が非ゼロ exit code を返した、
+    または stdout が空。timeout や ssh エラーも同じ例外で包む。
+    """
+    import subprocess
+
+    run = runner if runner is not None else subprocess.run
+    cmd = endpoint.to_command(f"cat {remote_path}")
+    try:
+        result = run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SshUnavailable(
+            f"ssh cat {remote_path} timed out after {timeout_seconds}s"
+        ) from exc
+    except OSError as exc:
+        raise SshUnavailable(f"ssh invocation failed: {exc}") from exc
+    if result.returncode != 0:
+        stderr_tail = (result.stderr or "").strip().splitlines()[-3:]
+        raise SshUnavailable(
+            f"ssh cat {remote_path} exited {result.returncode}: "
+            + " | ".join(stderr_tail)
+        )
+    if not result.stdout:
+        raise SshUnavailable(f"ssh cat {remote_path} returned empty output")
+    return result.stdout
+
+
 __all__ = [
     "DEFAULT_DIRECT_KEY",
     "DEFAULT_PROXY_KEY",
@@ -161,5 +206,6 @@ __all__ = [
     "SshUnavailable",
     "build_proxy_endpoint",
     "get_pod_ssh_endpoint",
+    "grab_onstart_log",
     "parse_ssh_endpoint",
 ]

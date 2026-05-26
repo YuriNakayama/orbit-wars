@@ -276,6 +276,38 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         ),
         "canonical_weights": "",
     },
+    # case11: per_planet-only successor of case9_per_planet, refreshed on
+    # the latest Kaggle episode lake. winners_only + top_team_rank=80 +
+    # max_episodes=null (1v1, ~30,160 matches, 5.94M frames, ~21GB parquet).
+    #
+    # mart は事前に local で preprocess + DVC push 済。pod 側で parquet ->
+    # per-column .npy 変換を onstart 内で実行 (preprocess_cmd で指定)。
+    # 変換は 1-2 分で完了し、Dataset は mmap_mode="r" で読み込むため
+    # OS page cache に委譲できる。174GB の npy は S3 push せず pod 内で
+    # 都度生成 (push 10-40h を回避)。
+    "case11": {
+        "stage": "train_imitation_case11",
+        "train_module": "pipeline.imitation.case11.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case11/configs/"
+            "il_case11_per_planet_recent10d_rank30.yaml"
+        ),
+        "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
+        "canonical_weights": "bot/pipeline/imitation/case11/policy/weights.pt",
+    },
+    # case11 smoke variant: 100 episodes (~25k train rows / ~3k val rows)
+    # × 1 epoch で kernel e2e パイプラインを 10-15 分で検証する用。
+    # mart は data/mart/imitation/case11_smoke/ に置かれている。
+    "case11_smoke": {
+        "stage": "train_imitation_case11",
+        "train_module": "pipeline.imitation.case11.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case11/configs/"
+            "il_case11_per_planet_recent10d_rank30_smoke.yaml"
+        ),
+        "preprocess_cmd": "pipeline.imitation.case11.training.parquet_to_npy",
+        "canonical_weights": "",
+    },
     # case0 = RunPod E2E smoke pipeline. NOT a real training case — the model
     # is a 200-param MLP on synthetic data, designed to finish in minutes so
     # the GPU basis itself can be verified end-to-end.
@@ -365,6 +397,8 @@ def case_subdir(case: str) -> str:
         return "case9"
     if case.startswith("case10_"):
         return "case10"
+    if case.startswith("case11_"):
+        return "case11"
     if case.startswith("reinforce_"):
         return case[len("reinforce_") :]
     if case.startswith("bench_"):

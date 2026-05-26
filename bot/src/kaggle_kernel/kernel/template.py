@@ -47,9 +47,15 @@ def render_notebook(ctx: RenderContext) -> dict[str, Any]:
         _code_cell(_cell_env_setup(ctx, run_dir, meta_json)),
         _code_cell(_cell_install_wheels(dataset_mount)),
         _code_cell(_cell_install_bot(dataset_mount)),
-        _code_cell(_cell_train(ctx, run_dir, dataset_mount)),
-        _code_cell(_cell_collect_artifacts(ctx, run_dir)),
     ]
+    if _needs_parquet_to_npy(ctx.case):
+        cells.append(_code_cell(_cell_parquet_to_npy(ctx)))
+    cells.extend(
+        [
+            _code_cell(_cell_train(ctx, run_dir, dataset_mount)),
+            _code_cell(_cell_collect_artifacts(ctx, run_dir)),
+        ]
+    )
 
     return {
         "cells": cells,
@@ -151,13 +157,23 @@ def _cell_install_wheels(dataset_mount: str) -> str:
         "        if target_marker in dirs and 'params.yaml' in files:\n"
         "            return root\n"
         "    return None\n"
-        "print('## /kaggle/input listing:')\n"
+        "print('## /kaggle/input listing (debug):')\n"
+        "_all_entries = []\n"
         "for root, dirs, files in os.walk('/kaggle/input'):\n"
         "    depth = root[len('/kaggle/input'):].count('/')\n"
-        "    if depth > 3:\n"
+        "    if depth > 6:\n"
         "        dirs[:] = []\n"
         "        continue\n"
-        "    print(' ', root, 'dirs=', dirs[:5], 'files=', files[:5])\n"
+        "    for f in files:\n"
+        "        _all_entries.append(os.path.join(root, f))\n"
+        "    if depth <= 4:\n"
+        "        print(' ', root, 'dirs=', dirs[:8], 'files=', files[:8])\n"
+        "print(f'## total files seen: {len(_all_entries)}')\n"
+        "_marts = [p for p in _all_entries if 'kmart' in p or 'mart_payload' in p\n"
+        "          or 'parquet' in p or 'data.zip' in p]\n"
+        "print(f'## mart-candidate files: {len(_marts)}')\n"
+        "for p in _marts[:15]:\n"
+        "    print('  ', p)\n"
         "DATASET_MOUNT = EXPECTED if os.path.isdir(EXPECTED) else _find_mount()\n"
         "if DATASET_MOUNT is None:\n"
         "    raise RuntimeError(f'dataset mount not found; expected {EXPECTED}')\n"
@@ -176,6 +192,25 @@ def _cell_install_wheels(dataset_mount: str) -> str:
         "os.makedirs(os.path.join(REPO_ROOT, '.git'), exist_ok=True)\n"
         "with open(os.path.join(REPO_ROOT, '.git', 'HEAD'), 'w') as f:\n"
         "    f.write('ref: refs/heads/kaggle-snapshot\\n')\n"
+        "# Builder flattens mart parquet to top-level kmart__<case>__<split>.parquet\n"
+        "# (Kaggle drops top-level data/ or mart_payload/ zips). Restore them to\n"
+        "# data/mart/imitation/<case>/<split>.parquet inside REPO_ROOT.\n"
+        "import re\n"
+        "_kmart_re = re.compile(r'^kmart__(?P<case>[^_]+(?:_[^_]+)*)__(?P<split>train|val)\\.parquet$')\n"  # noqa: E501
+        "for entry in os.listdir(REPO_ROOT):\n"
+        "    m = _kmart_re.match(entry)\n"
+        "    if not m:\n"
+        "        continue\n"
+        "    case = m.group('case')\n"
+        "    split = m.group('split')\n"
+        "    dst_dir = os.path.join(\n"
+        "        REPO_ROOT, 'data', 'mart', 'imitation', case\n"
+        "    )\n"
+        "    os.makedirs(dst_dir, exist_ok=True)\n"
+        "    src_path = os.path.join(REPO_ROOT, entry)\n"
+        "    dst_path = os.path.join(dst_dir, f'{split}.parquet')\n"
+        "    shutil.move(src_path, dst_path)\n"
+        "    print(f'mart restored: {entry} -> {dst_path}')\n"
         "# Install any pre-built wheels\n"
         "wheels = glob.glob(os.path.join(REPO_ROOT, 'wheels', '*.whl'))\n"
         "if wheels:\n"
@@ -273,6 +308,65 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"
         "subprocess.run([sys.executable, '-c', _IMPORT_PROBE], check=False)\n"
+    )
+
+
+def _needs_parquet_to_npy(case: str) -> bool:
+    """case11 / case11_smoke は per-column npy (mmap) を要求するため、
+    notebook 上で parquet -> npy 変換を 1 度だけ実行する。
+    """
+    return case == "case11" or case.startswith("case11_")
+
+
+def _cell_parquet_to_npy(ctx: RenderContext) -> str:
+    """case11 mart parquet を per-column .npy に変換 (cell D の直前で実行)。
+
+    case と同名の subdir を見る (smoke 用は data/mart/imitation/case11_smoke/、
+    本番は data/mart/imitation/case11/)。出力 npy は dataset.py の
+    _npy_dir_for() が見るパス (<stem>_npy/) に揃える。
+    """
+    case = ctx.case
+    mart_dir = f"/tmp/orbit-wars-repo/data/mart/imitation/{case}"
+    return (
+        "# cell C2: parquet -> per-column .npy (case11 only)\n"
+        "import os, sys, subprocess\n"
+        f"mart_dir = {mart_dir!r}\n"
+        "train_pq = os.path.join(mart_dir, 'train.parquet')\n"
+        "val_pq = os.path.join(mart_dir, 'val.parquet')\n"
+        "for p in [train_pq, val_pq]:\n"
+        "    if not os.path.isfile(p):\n"
+        "        raise RuntimeError(f'mart parquet missing: {p}')\n"
+        "    sz_gb = os.path.getsize(p) / (1024**3)\n"
+        "    print(f'  {p}: {sz_gb:.2f} GB')\n"
+        "cmd = [\n"
+        "    sys.executable, '-m',\n"
+        "    'pipeline.imitation.case11.training.parquet_to_npy',\n"
+        "    '--train-parquet', train_pq,\n"
+        "    '--val-parquet', val_pq,\n"
+        "    '--out-root', mart_dir,\n"
+        "]\n"
+        "env = os.environ.copy()\n"
+        "env['PYTHONPATH'] = (\n"
+        "    '/tmp/orbit-wars-repo/bot/src:/tmp/orbit-wars-repo/bot:'\n"
+        "    '/tmp/orbit-wars-repo'\n"
+        ")\n"
+        "print('running:', ' '.join(cmd))\n"
+        "proc = subprocess.run(\n"
+        "    cmd, cwd='/tmp/orbit-wars-repo/bot', env=env, check=False,\n"
+        ")\n"
+        "if proc.returncode != 0:\n"
+        "    raise SystemExit(\n"
+        "        f'parquet_to_npy failed with exit_code={proc.returncode}'\n"
+        "    )\n"
+        "# Report npy directory sizes for sanity.\n"
+        "for split in ('train_npy', 'val_npy'):\n"
+        "    d = os.path.join(mart_dir, split)\n"
+        "    if os.path.isdir(d):\n"
+        "        total = sum(\n"
+        "            os.path.getsize(os.path.join(d, f))\n"
+        "            for f in os.listdir(d)\n"
+        "        )\n"
+        "        print(f'  {d}: {total / (1024**3):.2f} GB')\n"
     )
 
 

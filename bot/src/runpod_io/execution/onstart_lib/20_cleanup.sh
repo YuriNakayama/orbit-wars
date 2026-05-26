@@ -30,6 +30,27 @@ RUNPOD_MODE="<RUNPOD_MODE>"
 echo "[onstart] runpod_mode=${RUNPOD_MODE}"
 mark "01_mode_${RUNPOD_MODE}"
 
+# Periodic log flush: 30 秒間隔で /var/log/onstart.log を S3 に push する。
+# stall 検出 → 外部から runpodctl remove pod / SDK terminate された場合に
+# bash trap (cleanup_destroy) が動かず onstart.log が失われる問題への対策。
+# `onstart.live.log` は本セッション中の暫定 path で、cleanup_destroy 成功時
+# は最終 `onstart.log` (同 prefix) で上書きされる。aws cli が無ければ noop。
+LOG_FLUSHER_PID=""
+if command -v aws >/dev/null 2>&1; then
+  (
+    while true; do
+      sleep 30
+      if [ -f /var/log/onstart.log ]; then
+        aws s3 cp /var/log/onstart.log \
+          "${S3_MARKER_PREFIX}/onstart.live.log" \
+          --no-progress --only-show-errors >/dev/null 2>&1 || true
+      fi
+    done
+  ) &
+  LOG_FLUSHER_PID=$!
+  echo "[onstart] log flusher started pid=${LOG_FLUSHER_PID} interval=30s"
+fi
+
 # Hard timeout safety net: trap が壊れても 8h で pod を強制 remove する。
 # 2026-05-12 観測: case10 base mart preprocess は host CPU 数や IO で
 # 大きくばらつき (1.04-3.31 ep/s)、worker=11 cap でも host 性能次第で
@@ -57,6 +78,12 @@ cleanup_destroy() {
   # Stop the timeout guard so it doesn't fire later in the success path.
   if [ -n "${TIMEOUT_GUARD_PID}" ]; then
     kill "$TIMEOUT_GUARD_PID" 2>/dev/null || true
+  fi
+  # Stop the periodic log flusher: final snapshot is taken below at the
+  # canonical `onstart.log` path, so the `onstart.live.log` daemon is no
+  # longer needed and would otherwise race with the final upload.
+  if [ -n "${LOG_FLUSHER_PID}" ]; then
+    kill "${LOG_FLUSHER_PID}" 2>/dev/null || true
   fi
   echo "[onstart] cleanup status=${exit_code}"
   mark "90_cleanup_exit_${exit_code}"

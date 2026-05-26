@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
@@ -105,19 +106,51 @@ def build_snapshot(
             shutil.copy2(wheel, wheels_dir / wheel.name)
 
     if include_mart_files:
+        # Kaggle dataset の zip mode は top-level dir を <name>.zip にして
+        # アップロードする。`data.zip` / `mart_payload.zip` のような top-level
+        # zip は Upload Successful と表示されても処理後の dataset には
+        # 含まれないという挙動を観測 (data/mart_payload の双方で再現)。
+        # 回避策: parquet を flat な top-level ファイルとして配置する
+        # (case + split を encode した名前)。Kernel 側は cell B で
+        # data/mart/imitation/<case>/<split>.parquet にリネームする。
         for src in include_mart_files:
-            src = src.resolve()
-            if not src.is_file():
-                raise FileNotFoundError(f"mart file not found: {src}")
+            src_norm = Path(os.path.normpath(str(src.absolute())))
+            src_real = src.resolve()
+            if src_norm.is_file():
+                src_for_copy = src_norm
+            elif src_real.is_file():
+                src_for_copy = src_real
+            else:
+                raise FileNotFoundError(
+                    f"mart file not found at {src_norm} (real: {src_real})"
+                )
             try:
-                rel_path = src.relative_to(repo_root)
-            except ValueError as e:
-                raise ValueError(
-                    f"mart file {src} is not under repo_root {repo_root}"
-                ) from e
-            target = dest_dir / rel_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+                rel_path = src_norm.relative_to(repo_root)
+            except ValueError:
+                parts = src_norm.parts
+                if "data" in parts:
+                    idx = parts.index("data")
+                    rel_path = Path(*parts[idx:])
+                else:
+                    raise
+            # rel_path は "data/mart/imitation/<case>/<split>.parquet"。
+            # case と split を抽出して "kmart__<case>__<split>.parquet" に
+            # flatten する。
+            parts = rel_path.parts
+            if (
+                len(parts) >= 5
+                and parts[0] == "data"
+                and parts[1] == "mart"
+                and parts[2] == "imitation"
+            ):
+                case = parts[3]
+                split = parts[4]  # train.parquet / val.parquet
+                flat_name = f"kmart__{case}__{split}"
+                target = dest_dir / flat_name
+            else:
+                target = dest_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_for_copy, target)
 
     git_dir = dest_dir / ".git"
     git_dir.mkdir(exist_ok=True)

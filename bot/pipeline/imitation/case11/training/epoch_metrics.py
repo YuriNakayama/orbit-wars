@@ -1,0 +1,201 @@
+"""Epoch-level diagnostic metrics for case11 imitation training (per_planet head).
+
+Two streams of metrics:
+
+  fire     binary: "did the source fire?" — derived from target_pid != no_op.
+  decision multi : "which target did the source pick?" — softmax over (P+1).
+
+The ship-pred regression head is summarized by ship_mae/ship_loss in the
+loss report and not duplicated here.
+"""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+import numpy as np
+import torch
+from sklearn.metrics import (
+    average_precision_score,
+    balanced_accuracy_score,
+    brier_score_loss,
+    f1_score,
+    mean_absolute_error,
+    precision_recall_fscore_support,
+    roc_auc_score,
+)
+
+from pipeline.imitation.case11.policy.types import PolicyOutput
+from pipeline.imitation.case11.training.dataset import BatchedSample
+
+
+@dataclass
+class _BinaryStore:
+    y_true: list[np.ndarray] = field(default_factory=list)
+    y_score: list[np.ndarray] = field(default_factory=list)
+
+
+@dataclass
+class _MultiStore:
+    y_true: list[np.ndarray] = field(default_factory=list)
+    y_prob: list[np.ndarray] = field(default_factory=list)
+
+
+class EpochMetricAccumulator:
+    """Collect logits/labels and compute non-accuracy diagnostics per epoch.
+
+    Stores at most `max_samples` examples per metric stream. Bounds train
+    epochs while still making validation AUC/F1 comparable.
+    """
+
+    def __init__(self, max_samples: int = 500_000) -> None:
+        self.max_samples = max(0, int(max_samples))
+        self.fire = _BinaryStore()
+        self.decision = _MultiStore()
+        self._counts = {"fire": 0, "decision": 0}
+
+    def update(
+        self,
+        head_mode: str,
+        output: PolicyOutput,
+        batch: BatchedSample,
+    ) -> None:
+        if head_mode != "per_planet":
+            raise ValueError(
+                f"case11 supports only head_mode='per_planet', got {head_mode!r}"
+            )
+        # Restrict to fire-eligible sources (layer2). Same row selection as
+        # the loss in losses.py so metrics report on the trained subset.
+        active = batch.effective_source_mask.bool()
+        if not active.any():
+            return
+        # last index of (P+1) is the no-op sentinel.
+        no_op_idx = int(output.per_planet_logits.shape[-1]) - 1
+        probs = _to_numpy(torch.softmax(output.per_planet_logits[active], dim=-1))
+        labels = _to_numpy(batch.target_pid_per_src[active]).astype(np.int64)
+        self._add_binary(
+            "fire",
+            (labels != no_op_idx).astype(np.int64),
+            1.0 - probs[:, no_op_idx],
+        )
+        self._add_multi("decision", labels, probs)
+
+    def compute(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        out.update(_prefix("fire", _binary_metrics(self.fire)))
+        out.update(_prefix("decision", _multi_metrics(self.decision)))
+        return out
+
+    def _room(self, name: str, n: int) -> int:
+        if self.max_samples <= 0:
+            return n
+        room = self.max_samples - self._counts[name]
+        return max(0, min(room, n))
+
+    def _add_binary(self, name: str, y_true: np.ndarray, y_score: np.ndarray) -> None:
+        n = self._room(name, int(y_true.shape[0]))
+        if n <= 0:
+            return
+        self.fire.y_true.append(y_true[:n].astype(np.int64, copy=False))
+        self.fire.y_score.append(y_score[:n].astype(np.float64, copy=False))
+        self._counts[name] += n
+
+    def _add_multi(self, name: str, y_true: np.ndarray, y_prob: np.ndarray) -> None:
+        n = self._room(name, int(y_true.shape[0]))
+        if n <= 0:
+            return
+        self.decision.y_true.append(y_true[:n].astype(np.int64, copy=False))
+        self.decision.y_prob.append(y_prob[:n].astype(np.float64, copy=False))
+        self._counts[name] += n
+
+
+def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    return tensor.detach().cpu().numpy()
+
+
+def _join(arrays: list[np.ndarray]) -> np.ndarray:
+    if not arrays:
+        return np.array([])
+    return np.concatenate(arrays, axis=0)
+
+
+def _safe_float(fn: Callable[[], float]) -> float:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            value = float(fn())
+    except ValueError:
+        return float("nan")
+    return value
+
+
+def _binary_metrics(store: _BinaryStore) -> dict[str, float]:
+    y_true = _join(store.y_true).astype(np.int64)
+    y_score = _join(store.y_score).astype(np.float64)
+    if y_true.size == 0:
+        return {"count": 0.0}
+    y_pred = (y_score >= 0.5).astype(np.int64)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y_true,
+        y_pred,
+        average="binary",
+        zero_division=0,
+    )
+    return {
+        "count": float(y_true.size),
+        "positive_rate": float(y_true.mean()),
+        "pred_positive_rate": float(y_pred.mean()),
+        "roc_auc": _safe_float(lambda: roc_auc_score(y_true, y_score)),
+        "pr_auc": _safe_float(lambda: average_precision_score(y_true, y_score)),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1": float(f1),
+        "balanced_acc": _safe_float(lambda: balanced_accuracy_score(y_true, y_pred)),
+        "mae": float(mean_absolute_error(y_true, y_score)),
+        "brier": float(brier_score_loss(y_true, y_score)),
+    }
+
+
+def _multi_metrics(store: _MultiStore) -> dict[str, float]:
+    y_true = _join(store.y_true).astype(np.int64)
+    y_prob = _join(store.y_prob).astype(np.float64)
+    if y_true.size == 0:
+        return {"count": 0.0}
+    y_pred = y_prob.argmax(axis=1).astype(np.int64)
+    return {
+        "count": float(y_true.size),
+        "macro_roc_auc": _multiclass_auc(y_true, y_prob),
+        "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        "weighted_f1": float(
+            f1_score(y_true, y_pred, average="weighted", zero_division=0)
+        ),
+        "balanced_acc": _safe_float(lambda: balanced_accuracy_score(y_true, y_pred)),
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+    }
+
+
+def _multiclass_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    labels = sorted(np.unique(y_true).astype(int).tolist())
+    if len(labels) < 2:
+        return float("nan")
+    if len(labels) == 2:
+        pos = labels[1]
+        return _safe_float(
+            lambda: roc_auc_score((y_true == pos).astype(np.int64), y_prob[:, pos])
+        )
+    return _safe_float(lambda: _ovr_auc_present_labels(y_true, y_prob, labels))
+
+
+def _ovr_auc_present_labels(
+    y_true: np.ndarray, y_prob: np.ndarray, labels: list[int]
+) -> float:
+    probs = y_prob[:, labels]
+    probs = probs / np.clip(probs.sum(axis=1, keepdims=True), 1e-12, None)
+    remapped = np.array([labels.index(int(v)) for v in y_true], dtype=np.int64)
+    return float(roc_auc_score(remapped, probs, multi_class="ovr", average="macro"))
+
+
+def _prefix(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    return {f"{prefix}_{k}": v for k, v in metrics.items()}

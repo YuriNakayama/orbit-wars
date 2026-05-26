@@ -1,5 +1,162 @@
 PREPROCESS_RAN=0
-if [ -n "<PREPROCESS_CMD>" ]; then
+# Special branch: parquet_to_npy converters do not produce a new parquet;
+# they read the existing mart parquet and emit per-column .npy files for
+# mmap consumption. Skip the parquet freshness check + post-preprocess
+# DVC track block entirely. The targeted mart pull in 40 already fetched
+# the parquet, so we just run the converter once and proceed to train.
+if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
+  echo "[onstart] step=parquet_to_npy case=<CASE> (skip parquet-skip + dvc-track)"
+  # case11_smoke shares case11's on-disk mart subdir; strip the _smoke
+  # suffix so npy out_root + parquet inputs point at data/mart/imitation/case11.
+  CASE_DIR_50=$(echo '<CASE>' | sed 's/_smoke$//')
+  # The .npy files are 100GB+ uncompressed (case11 full mart). Container
+  # disk on most pods (RTX 4090 SECURE: ~30GB) is too small, causing
+  # SIGBUS on mmap write. Force out-root onto /persist (network volume,
+  # 300GB). Also keep train_parquet / val_parquet as inputs read from
+  # the symlinked mart dir.
+  NPY_OUT_ROOT="/persist/data-mart-imitation/${CASE_DIR_50}"
+  mkdir -p "${NPY_OUT_ROOT}"
+  TRAIN_PQ_ABS="$(pwd)/data/mart/imitation/${CASE_DIR_50}/train.parquet"
+  VAL_PQ_ABS="$(pwd)/data/mart/imitation/${CASE_DIR_50}/val.parquet"
+  # Cleanup stale .npy directories from prior runs. The network volume
+  # has a 300GB quota that is shared across runs (orbit_wars), so the
+  # previous run's train_npy (~174GB) lingers and triggers "Disk quota
+  # exceeded" on the next conversion (observed retry #16 commit 7324d4f).
+  echo "[onstart] /persist before cleanup:"
+  df -h /persist 2>&1 | tail -2 || true
+  echo "[onstart] /persist usage breakdown (top-level dirs, slow):"
+  du -sh /persist/* 2>/dev/null | sort -h | tail -20 || true
+  # Drop the per-case .npy directories and any other lingering imitation
+  # converters' outputs to maximize free quota for the upcoming write.
+  for split in train val; do
+    if [ -d "${NPY_OUT_ROOT}/${split}_npy" ]; then
+      echo "[onstart] cleaning stale ${NPY_OUT_ROOT}/${split}_npy"
+      rm -rf "${NPY_OUT_ROOT}/${split}_npy"
+    fi
+  done
+  # Also remove any sibling case_npy dirs from earlier experiments since
+  # they're regenerable from parquet (~191GB recoverable per case).
+  find /persist/data-mart-imitation -maxdepth 2 -type d -name "*_npy" 2>/dev/null \
+    | while read -r d; do
+        echo "[onstart] cleaning stale npy dir ${d}"
+        rm -rf "${d}"
+      done
+  # Volume quota is 300GB. After 75GB dvc-cache + 46GB uv-cache + 6GB uv-venv
+  # only ~173GB remains — 1GB short of train_npy's 174GB footprint.
+  # Drop dvc-cache (regenerable from S3 in 5-10min via dvc pull) to free
+  # 75GB. This is the cheapest way to fit the conversion under quota.
+  if [ -d /persist/dvc-cache ]; then
+    DVC_CACHE_SIZE=$(du -sh /persist/dvc-cache 2>/dev/null | awk '{print $1}')
+    echo "[onstart] cleaning /persist/dvc-cache (was ${DVC_CACHE_SIZE}) to free quota"
+    rm -rf /persist/dvc-cache
+    mkdir -p /persist/dvc-cache
+  fi
+  echo "[onstart] /persist after cleanup:"
+  df -h /persist 2>&1 | tail -2 || true
+  echo "[onstart] parquet_to_npy out_root=${NPY_OUT_ROOT}"
+  # iter cb70d34 trap: bot/.venv/bin/python disappeared between
+  # 40_uv_sync_done and the parquet_to_npy command despite the early
+  # SKIP path proving it existed. MFS appears to garbage-collect symlink
+  # targets across pod boundaries. Re-validate and recover via uv sync.
+  #
+  # 2026-05-20 (a9b946c smoke trap): even when bin/python exists, the
+  # site-packages can be visibly empty — `python -c 'import pyarrow'`
+  # raised ModuleNotFoundError despite uv sync having installed 265
+  # packages 60s earlier. Validate by importing a known dep, not just
+  # by file existence.
+  VENV_OK=1
+  if [ ! -x bot/.venv/bin/python ]; then
+    VENV_OK=0
+    echo "[onstart] WARN: bot/.venv/bin/python missing" >&2
+  elif ! bot/.venv/bin/python -c "import pyarrow, torch, numpy" 2>/dev/null; then
+    VENV_OK=0
+    echo "[onstart] WARN: bot/.venv site-packages incomplete (import pyarrow/torch/numpy failed)" >&2
+  fi
+  if [ "${VENV_OK}" -eq 0 ]; then
+    echo "[onstart] forcing uv sync pre-parquet_to_npy" >&2
+    ls -la bot/.venv 2>&1 | head -3 || true
+    if [ -L bot/.venv ]; then
+      ls -la "$(readlink -f bot/.venv)" 2>&1 | head -5 || true
+    fi
+    rm -rf bot/.venv 2>/dev/null || true
+    mkdir -p /persist/uv-venv-bot
+    find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null || true
+    ln -sfn /persist/uv-venv-bot bot/.venv
+    if ! uv sync --frozen --no-dev --directory bot; then
+      echo "[onstart] uv sync recovery FAILED" >&2
+      mark "55_parquet_to_npy_failed"
+      exit 1
+    fi
+    if [ ! -x bot/.venv/bin/python ] \
+       || ! bot/.venv/bin/python -c "import pyarrow, torch, numpy" 2>/dev/null; then
+      echo "[onstart] uv sync recovery did not produce a usable venv" >&2
+      mark "55_parquet_to_npy_failed"
+      exit 1
+    fi
+    echo "[onstart] uv sync recovery complete"
+  fi
+  # parquet_to_npy takes ~14min and emits no marker by itself, which
+  # tickles the 900s STALL_THRESHOLD watcher and gets the pod killed
+  # mid-conversion (observed retry on commit 9584b73). Run a background
+  # heartbeat loop that emits a step=54_parquet_to_npy_heartbeat_N marker
+  # every 4min so the watcher sees ongoing progress.
+  mark "54_parquet_to_npy_started"
+  (
+    n=1
+    while sleep 240; do
+      mark "54_parquet_to_npy_heartbeat_${n}"
+      n=$((n + 1))
+    done
+  ) &
+  HB_PID=$!
+  # For *_smoke cases cap the convert volume so the whole pipeline
+  # (preprocess + train + S3 best.pt upload + cleanup) fits in ~15min,
+  # which is the verification window. Otherwise pass no caps (full conversion).
+  PQ_EXTRA_ARGS=""
+  if [[ "<CASE>" == *"_smoke" ]]; then
+    PQ_EXTRA_ARGS="--max-train-rows 20000 --max-val-rows 2000"
+    echo "[onstart] parquet_to_npy SMOKE caps: ${PQ_EXTRA_ARGS}"
+  fi
+  if ! ( cd bot && "${PY_BIN}" -m <PREPROCESS_CMD> \
+      --train-parquet "${TRAIN_PQ_ABS}" \
+      --val-parquet "${VAL_PQ_ABS}" \
+      --out-root "${NPY_OUT_ROOT}" \
+      ${PQ_EXTRA_ARGS} ); then
+    kill "${HB_PID}" 2>/dev/null || true
+    echo "[onstart] step=parquet_to_npy FAILED (exit code != 0)" >&2
+    mark "55_parquet_to_npy_failed"
+    exit 1
+  fi
+  kill "${HB_PID}" 2>/dev/null || true
+  # Symlink the per-split npy dirs back under data/mart/imitation/<CASE>/
+  # so the dataset's `_npy_dir_for` resolution (sibling of train.parquet)
+  # picks them up without code changes.
+  MART_CASE_DIR="$(pwd)/data/mart/imitation/${CASE_DIR_50}"
+  echo "[onstart] NPY_OUT_ROOT contents pre-symlink:"
+  ls -la "${NPY_OUT_ROOT}" 2>&1 | head -10 || true
+  for split in train val; do
+    SRC="${NPY_OUT_ROOT}/${split}_npy"
+    DST="${MART_CASE_DIR}/${split}_npy"
+    if [ -d "${SRC}" ]; then
+      rm -rf "${DST}" 2>/dev/null || true
+      if ln -s "${SRC}" "${DST}"; then
+        echo "[onstart] linked ${DST} -> ${SRC}"
+      else
+        echo "[onstart] FAILED to symlink ${DST} -> ${SRC}" >&2
+        mark "55_parquet_to_npy_failed"
+        exit 1
+      fi
+    else
+      echo "[onstart] WARN: ${SRC} not a directory" >&2
+      ls -la "$(dirname "${SRC}")" 2>&1 | tail -10 || true
+      mark "55_parquet_to_npy_failed"
+      exit 1
+    fi
+  done
+  echo "[onstart] MART_CASE_DIR contents post-symlink:"
+  ls -la "${MART_CASE_DIR}" 2>&1 | head -20 || true
+  echo "[onstart] step=parquet_to_npy done"
+elif [ -n "<PREPROCESS_CMD>" ]; then
   # dvc pull は missing blob を WARNING で済ませて exit 0 を返すため、
   # `.dvc` stub は git にあるが本体 blob が S3 にない (orphan) ケースで
   # `data/mart/imitation/<CASE>/*.parquet` が dangling symlink として

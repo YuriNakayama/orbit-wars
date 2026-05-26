@@ -1,0 +1,83 @@
+# imitation/case11 per_planet — case9 per_planet 派生の専用 case。
+# Per-source × (P+1) target categorical (planet_id 直接予測 + no-op sentinel) +
+# log1p(ships) regression head. Backbone = Set Transformer hidden=192 / ISABx4 /
+# heads=8 / inducing=24 (case9 と一致).
+#
+# データフィルタ (上で合意した条件):
+#   modes: ["1v1"]
+#   winners_only: true     — winner 側スロットの frame のみ採用
+#   top_team_rank: 80      — agent_<slot>_team_rank が 1..80 の試合のみ
+#   rating_quantile: 0.0   — winners + top_rank で十分絞り込み済みなので 0
+#   max_episodes: null     — 最新 lake (winner top80 ~5,042 対戦) を全件使用
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/kaggle_episodes/matches/index.parquet
+  replay_dir: data/lake/kaggle_episodes/matches/replays
+  out_train: data/mart/imitation/case11/train.parquet
+  out_val: data/mart/imitation/case11/val.parquet
+  rating_quantile: 0.0
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: null
+  winners_only: true
+  top_team_rank: 80
+
+model:
+  planet_in_dim: 41
+  global_in_dim: 20
+  cand_in_dim: 14
+  cand_k: 8
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_mode: per_planet
+
+train:
+  case: case11
+  # 2026-05-20 retry #16: epoch 0 計測で rate_b_per_s=0.62 (~2.7s/batch) で
+  # 安定 → モデル forward/backward が支配的。batch_size 512 → 1024 で
+  # batches を半減 (10477 → 5239) し、num_workers も 2 → 4 に増やして
+  # DataLoader 競合を緩和。lr は linear scaling で 3e-4 → 6e-4 に追従。
+  batch_size: 1024
+  # 2026-05-18 retry #13: lazy dataset で 1 epoch あたり ~2h かかる
+  # (5.36M rows / 512 batch = 10.5k batches × IO overhead)。45 epoch は
+  # 90h で非現実的なので 10 epoch + patience=3 に削って早期収束 or 中断。
+  epochs: 10
+  lr: 6.0e-4
+  weight_decay: 1.0e-4
+  # 2026-05-18 retry #15: parquet -> per-column .npy 化 (mmap_mode="r") で
+  # dataset の IO を OS page cache に委譲した。mmap は fork-safe なので
+  # num_workers=2 で安全に prefetch 並列化できる (parquet ParquetFile 路線
+  # では fork 不可だった)。pin_memory は retry #12 で leak したため off 維持。
+  # 2026-05-20: batch 1024 化に伴い num_workers=4 へ増やし IO 並列を強化。
+  num_workers: 4
+  pin_memory: false
+  persistent_workers: true
+  loss_weights:
+    target: 1.0
+    ship: 0.5
+    use_class_weights: false
+    label_smoothing: 0.0
+  scheduler:
+    type: cosine_warmup
+    t_max: 10
+    eta_min: 1.0e-5
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+  best_metric: val_target_fire_acc
+  best_metric_mode: max
+  early_stop:
+    metric: val_target_fire_acc
+    patience: 3
+    mode: max
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+  head_dropout: 0.1
+  weights_out: pipeline/imitation/case11/policy/weights.pt
+
+inference:
+  temperature: 1.0

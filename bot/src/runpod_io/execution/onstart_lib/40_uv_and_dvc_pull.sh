@@ -9,73 +9,89 @@ fi
 
 mark "30_before_uv_sync"
 echo "[onstart] step=uv_sync"
-# venv が persist 経由で残っているかを log に残す。lock 不変なら uv sync は
-# 「何もしない」ので、この行は分単位の高速化指標として後段の解析に役立つ。
-if [ -L bot/.venv ] && [ -f bot/.venv/pyvenv.cfg ]; then
-  echo "[onstart] uv venv reuse: bot/.venv -> $(readlink bot/.venv) (pre-existing)"
-else
-  echo "[onstart] uv venv fresh: building bot/.venv from scratch"
+# 2026-05-20: venv on /persist (MFS network volume) repeatedly produced
+# ImportError (libgomp .so unloadable; pyarrow missing despite install
+# log showing 265 packages installed). Build venv on container-local
+# disk instead. Cost: ~30-45s `uv sync` per pod (vs ~5s SKIP), but
+# eliminates the dominant failure class.
+#
+# Remove any stale /persist symlink left by older onstart scripts so
+# uv creates a real container-local directory.
+if [ -L bot/.venv ]; then
+  echo "[onstart] removing stale /persist symlink bot/.venv -> $(readlink bot/.venv)"
+  rm -f bot/.venv
 fi
 UV_SYNC_START=$(date +%s)
-
-# Fast path: bot/uv.lock の hash が前回 sync 時と同じで、persisted venv
-# (/persist/uv-venv-bot) に working python が居るなら uv sync を完全 skip。
-# attempt 5 (38c84d9) で uv sync が 291s かかっていた根本原因は
-# `Removed virtual environment` が走り全 wheel を install し直したこと。
-# lock 不変条件下では venv をそのまま再利用するのが最速 (~数秒)。
-LOCK_HASH=""
-LOCK_HASH_FILE="/persist/uv-venv-bot/.uv_lock_sha256"
-if [ -f bot/uv.lock ] && command -v sha256sum >/dev/null 2>&1; then
-  LOCK_HASH=$(sha256sum bot/uv.lock | awk '{print $1}')
-fi
-SKIP_UV_SYNC=0
-if [ -d /persist ] && [ -n "${LOCK_HASH}" ] \
-   && [ -f "${LOCK_HASH_FILE}" ] \
-   && [ "$(cat "${LOCK_HASH_FILE}" 2>/dev/null)" = "${LOCK_HASH}" ] \
-   && [ -x bot/.venv/bin/python ]; then
-  echo "[onstart] uv sync SKIP: lock hash unchanged (${LOCK_HASH:0:12}), venv intact"
-  SKIP_UV_SYNC=1
-fi
-
-if [ "${SKIP_UV_SYNC}" -eq 0 ]; then
-  echo "[onstart] uv sync RUN: lock hash=${LOCK_HASH:0:12} (file=${LOCK_HASH_FILE})"
-  # iter13 fix (case9 retry 2026-05-06 11:33): broken venv detection.
-  # bot/.venv (or its target) が中身は持つが bin/python が無い壊れた状態だと
-  # uv sync が "not a valid Python environment" で 3 retry 全失敗する。
-  # 復旧: bin/python が無ければ bot/.venv (symlink ごと) と persist 側を
-  # 強制的に空に戻して fresh build に倒す。
-  if [ ! -x bot/.venv/bin/python ]; then
-    echo "[onstart] uv sync: detected broken venv (bin/python missing); resetting"
-    rm -rf bot/.venv 2>/dev/null || true
-    if [ -d /persist/uv-venv-bot ]; then
-      find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null \
-        || rm -rf /persist/uv-venv-bot/* /persist/uv-venv-bot/.[!.]* 2>/dev/null \
-        || true
-      ln -sfn /persist/uv-venv-bot bot/.venv
-    fi
+for attempt in 1 2 3; do
+  if uv sync --frozen --no-dev --directory bot; then
+    break
   fi
-  for attempt in 1 2 3; do
-    # --frozen は --locked より厳格 (lock の依存解決を一切再計算しない)。
-    # 既存 lock を信用するので smoke run のような短命 pod では正しい挙動。
-    if uv sync --frozen --no-dev --directory bot; then
-      break
-    fi
-    echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
-    sleep 30
-    if [ "${attempt}" -eq 3 ]; then
-      echo "[onstart] uv_sync exhausted retries"
-      exit 1
-    fi
-  done
-  # lock hash を /persist に書き出して次回 run 用にメモ。
-  if [ -d /persist/uv-venv-bot ] && [ -n "${LOCK_HASH}" ]; then
-    echo "${LOCK_HASH}" > "${LOCK_HASH_FILE}" 2>/dev/null \
-      && echo "[onstart] uv lock hash recorded -> ${LOCK_HASH_FILE}" \
-      || echo "[onstart] uv lock hash record FAILED (non-fatal)" >&2
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
   fi
-fi
+done
 UV_SYNC_ELAPSED=$(( $(date +%s) - UV_SYNC_START ))
-echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s (skip=${SKIP_UV_SYNC})"
+echo "[onstart] uv sync elapsed=${UV_SYNC_ELAPSED}s (container-local)"
+# Sanity check: site-packages actually usable. Catches partial installs
+# or future MFS-style breakage early so 50/60 don't have to retry.
+if ! bot/.venv/bin/python -c "import pyarrow, torch, numpy, sklearn" 2>&1; then
+  echo "[onstart] FATAL: venv import smoke failed post uv sync" >&2
+  exit 1
+fi
+
+# 2026-05-22 retry #17 fix: uv sync で installed される torch wheel が
+# cu13 (CUDA 13.x driver 要求) になるケースを A100-SXM4-80GB pod で観測。
+# RunPod の pytorch image (cu1241=CUDA 12.4.1) は driver 12.4 のため
+# torch が "driver too old" で CPU fallback して 6.5h/epoch 化した
+# (retry #17 epoch 0 完走後 pod gone)。
+# 解決: GPU 認識を smoke で確認、失敗時は cu118 wheel で torch を
+# 強制 reinstall する (kaggle-kernel template と同じパターン)。
+CUDA_SMOKE_OUT=$(bot/.venv/bin/python -c "
+import json, torch
+out = {
+    'version': torch.__version__,
+    'cuda_build': torch.version.cuda,
+    'available': torch.cuda.is_available(),
+    'smoke_ok': False,
+    'err': None,
+}
+if torch.cuda.is_available():
+    try:
+        (torch.zeros(2, 2).cuda() + 1).sum().item()
+        out['smoke_ok'] = True
+    except Exception as e:
+        out['err'] = repr(e)
+print(json.dumps(out))
+" 2>&1 | tail -1)
+echo "[onstart] cuda probe: ${CUDA_SMOKE_OUT}"
+if ! echo "${CUDA_SMOKE_OUT}" | grep -q '"smoke_ok": true'; then
+  echo "[onstart] CUDA smoke failed; force-reinstalling torch with cu118 wheel"
+  bot/.venv/bin/pip install --quiet --force-reinstall \
+    --index-url https://download.pytorch.org/whl/cu118 \
+    torch || {
+      echo "[onstart] FATAL: torch cu118 reinstall failed" >&2
+      exit 1
+  }
+  CUDA_RECHECK=$(bot/.venv/bin/python -c "
+import json, torch
+out = {'available': torch.cuda.is_available(), 'smoke_ok': False, 'err': None}
+if torch.cuda.is_available():
+    try:
+        (torch.zeros(2, 2).cuda() + 1).sum().item()
+        out['smoke_ok'] = True
+    except Exception as e:
+        out['err'] = repr(e)
+print(json.dumps(out))
+" 2>&1 | tail -1)
+  echo "[onstart] cuda recheck: ${CUDA_RECHECK}"
+  if ! echo "${CUDA_RECHECK}" | grep -q '"smoke_ok": true'; then
+    echo "[onstart] FATAL: GPU unusable after cu118 reinstall" >&2
+    exit 1
+  fi
+fi
 
 mark "40_uv_sync_done"
 
@@ -250,19 +266,30 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   echo "[onstart] reinforce BC pull complete; verifying best.pt..."
   find "${BC_RUNS_PARENT}" -name "best.pt" -maxdepth 3 2>&1 | head -5
 else
-  # 診断: cwd と repo の dvc-tracked 状態を log に残す
-  echo "[onstart] dvc pull diagnostic:"
-  ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
-  # set -e は外しているので明示的に exit code を確認
-  if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches.dvc; then
-    echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
-    echo "[onstart] dvc pull diagnostic listing:"
-    ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
-    ls -la 2>&1 | head -10
-    git status --short 2>&1 | head -10
-    git log --oneline -3 2>&1 | head -3
-    mark "45_dvc_pull_kaggle_failed"
-    exit 1
+  # mart-only path: preprocess を pod 側で走らせない設計の case (mart は
+  # 事前 push 済) では kaggle_episodes (60GB+, 62k hive parquet files) の
+  # pull は不要。skip して直接 case 別 mart targeted pull に進む。
+  # PREPROCESS_CMD は instance.render_onstart が CASE_DEFAULTS の
+  # preprocess_cmd を埋め込む。空文字なら "mart 事前 push 済" と判断。
+  # 2026-05-18 case11 retry で /persist のキャッシュ不在 + 60GB pull が
+  # hang して 40_uv_sync_done で stall 連発した trap への対処。
+  if [ -z "<PREPROCESS_CMD>" ] || [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
+    echo "[onstart] dvc pull SKIP kaggle_episodes (PREPROCESS_CMD empty; mart-only path)"
+  else
+    # 診断: cwd と repo の dvc-tracked 状態を log に残す
+    echo "[onstart] dvc pull diagnostic:"
+    ls -la data/lake/kaggle_episodes/matches.dvc 2>&1 | head -3
+    # set -e は外しているので明示的に exit code を確認
+    if ! ${DVC_BIN} pull data/lake/kaggle_episodes/matches.dvc; then
+      echo "[onstart] dvc pull (kaggle_episodes) FAILED" >&2
+      echo "[onstart] dvc pull diagnostic listing:"
+      ls -la data/lake/kaggle_episodes/ 2>&1 | head -5
+      ls -la 2>&1 | head -10
+      git status --short 2>&1 | head -10
+      git log --oneline -3 2>&1 | head -3
+      mark "45_dvc_pull_kaggle_failed"
+      exit 1
+    fi
   fi
   # iter15 fix (case9 retry3 2026-05-06 12:00): `dvc pull --allow-missing` は
   # graph 解析で衝突 (case8 outs vs .dvc 重複) を検出すると case9 parquet を
@@ -270,7 +297,7 @@ else
   # を target 直接指定で pull すれば衝突を bypass できるので、 case 別に pull
   # を **--allow-missing の前** に 1 段追加する (--allow-missing 後に置くと
   # block 自体に到達しない事故が retry3 で発生)。
-  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//;s/_sweep_.*$//;s/_base_preprocess$//;s/_template_ships$//')
+  CASE_SUBDIR=$(echo '<CASE>' | sed 's/_three_head$//;s/_candidate_ships$//;s/_candidate$//;s/_dual$//;s/_sweep_.*$//;s/_base_preprocess$//;s/_template_ships$//;s/_smoke$//')
   CASE_MART_DIR="data/mart/imitation/${CASE_SUBDIR}"
   echo "[onstart] iter15 targeted pull: case='<CASE>' subdir='${CASE_SUBDIR}' dir='${CASE_MART_DIR}'"
   ls -la "${CASE_MART_DIR}/" 2>&1 | head -10
@@ -299,16 +326,31 @@ else
   # 残骸自体は preprocess skip ロジックで再利用される (新規 preprocess も上書き可能)。
   # memory `project_runpod_5_traps_2026_05_04.md` および
   # `project_runpod_onstart_pitfalls.md` 参照。
-  if ! ${DVC_BIN} pull --allow-missing --force; then
-    echo "[onstart] dvc pull (full) FAILED" >&2
-    mark "45_dvc_pull_full_failed"
-    exit 1
+  #
+  # 2026-05-18 case11 retry7: mart-only path (PREPROCESS_CMD="") では
+  # targeted pull で必要な mart は取得済 + kaggle_episodes も不要なので、
+  # この full pull は graph 解析で 60GB+ の outs を fetch しようとして
+  # hang する。SKIP して targeted pull の結果を尊重する。
+  if [ -z "<PREPROCESS_CMD>" ] || [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
+    echo "[onstart] dvc pull --allow-missing SKIP (PREPROCESS_CMD empty; targeted pull complete)"
+  else
+    if ! ${DVC_BIN} pull --allow-missing --force; then
+      echo "[onstart] dvc pull (full) FAILED" >&2
+      mark "45_dvc_pull_full_failed"
+      exit 1
+    fi
   fi
   # iter17 fix (case9 retry5 2026-05-06 12:12): `dvc pull --allow-missing --force`
   # が graph 整合のため targeted pull で取得した case 別 parquet を削除して
   # しまうケースを観測 (`D data/mart/imitation/case9/train.parquet`)。
   # --allow-missing 後に case 別 mart parquet を**再 pull**して復活させる。
-  if [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
+  #
+  # 2026-05-19 case11 retry trap: PREPROCESS_CMD empty path では full pull
+  # を SKIP しているので「`--allow-missing` が消した」前提が成立しない。
+  # しかし MFS の遅延コミットで file 存在 check が false negative になり、
+  # 不要な re-pull が hang する。empty path では iter17 をスキップする。
+  if [ -n "<PREPROCESS_CMD>" ] && [[ "<PREPROCESS_CMD>" != *"parquet_to_npy"* ]] \
+     && [ -f "${CASE_MART_DIR}/train.parquet.dvc" ] \
      && [ -f "${CASE_MART_DIR}/val.parquet.dvc" ]; then
     NEED_REPULL=0
     [ ! -f "${CASE_MART_DIR}/train.parquet" ] && NEED_REPULL=1
