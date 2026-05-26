@@ -1,8 +1,8 @@
-"""End-to-end JAX PPO training driver for reinforce/case1.
+"""End-to-end JAX PPO training driver for reinforce/case2.
 
 Glues `collect_rollout_jax` (W4-a) + `ppo_update_jax` (W4-c) into a
 PPO learning loop. Targets the same config schema as `train.py`
-(YAML at `pipeline/reinforce/case1/configs/*.yaml`) so the existing
+(YAML at `pipeline/reinforce/case2/configs/*.yaml`) so the existing
 runpod_io case wiring (train_module pointer) works unchanged.
 
 Pipeline per iteration:
@@ -14,7 +14,7 @@ Pipeline per iteration:
      → new model + opt_state + stats.
 
 Saves the latest model as `best.pt` (via numpy-side conversion so the
-PyTorch reinforce/case1 inference path can still load it via the same
+PyTorch reinforce/case2 inference path can still load it via the same
 `load_bc_weights` adapter) and writes `metrics.json` per iter.
 
 Note on the BC warm-start: we load the PyTorch BC weights into the JAX
@@ -43,22 +43,22 @@ import numpy as np
 import typer
 import yaml
 
-from pipeline.reinforce.case1.policy.featurizer_jax import (
+from pipeline.reinforce.case2.policy.featurizer_jax import (
     GLOBAL_FEAT_DIM,
     PLANET_FEAT_DIM,
 )
-from pipeline.reinforce.case1.policy.model_jax import (
+from pipeline.reinforce.case2.policy.model_jax import (
     ActorCriticJax,
     ModelConfigJax,
     load_bc_weights_jax,
 )
-from pipeline.reinforce.case1.training.ppo_jax import (
+from pipeline.reinforce.case2.training.ppo_jax import (
     FlatRollout,
     PPOConfigJax,
     make_optimizer,
     ppo_update_jax,
 )
-from pipeline.reinforce.case1.training.rollout_jax import (
+from pipeline.reinforce.case2.training.rollout_jax import (
     JaxRolloutBatch,
     collect_rollout_jax,
 )
@@ -298,7 +298,7 @@ def _run_iter(
 app = typer.Typer(add_completion=False)
 
 _DEFAULT_CONFIG = typer.Option(
-    Path("pipeline/reinforce/case1/configs/train_jax.yaml"),
+    Path("pipeline/reinforce/case2/configs/train_jax.yaml"),
     "--config",
     help="Path to PPO YAML config (relative to bot/).",
 )
@@ -312,7 +312,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     )
     # config is relative to bot/ (matches train.py contract). Resolve
     # relative to the repo `bot/` directory so callers can pass either
-    # `pipeline/reinforce/case1/configs/foo.yaml` or an absolute path.
+    # `pipeline/reinforce/case2/configs/foo.yaml` or an absolute path.
     if config.is_absolute():
         cfg_path = config
     else:

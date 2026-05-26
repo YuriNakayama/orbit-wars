@@ -330,6 +330,64 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "bot/pipeline/reinforce/case1/policy/weights.pt",
     },
+    # reinforce_case1_kaggle_smoke: Kaggle Kernel smoke variant. BC warm-start
+    # disabled because the Kaggle Kernel template has no DVC pull cell to
+    # fetch case9 per_planet BC weights. 6 iter x 4 ep — verifies that
+    # reinforce/case1 boots and PPO update / artifact collection survive on
+    # Kaggle GPU.
+    "reinforce_case1_kaggle_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_smoke",
+        "train_module": "pipeline.reinforce.case1.training.train",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case1_kaggle_jax_smoke: JAX-accelerated smoke variant of the
+    # above. Uses train_jax.py end-to-end (rollout + PPO update inside a
+    # single jit) so we can measure the README claim (17-18x speedup on RTX
+    # 4090) on Kaggle T4x2. BC warm-start stays OFF for the same dataset
+    # transport reason. Kaggle template auto-installs jax-cuda12 plugin +
+    # cuDNN 9.8 wheels for reinforce_*_jax_* cases.
+    "reinforce_case1_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # 50-iter Kaggle Kernel training variant (~27 min on T4x2).
+    "reinforce_case1_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case1_jax_train: RunPod 用の JAX 学習 case。Kaggle 30h quota
+    # を回避するため、kaggle_jax_train.yaml と同じ AA 構成 (300 iter, shaping=0.50)
+    # を RunPod GPU で走らせる。RTX 3090 (Medium stock, $0.22/h) を想定。
+    "reinforce_case1_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case1_jax_train",
+        "train_module": "pipeline.reinforce.case1.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case1/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case2: head 構造変更実験用 case (case1 ベース + from_head 追加)。
+    # per_planet head の NO_OP slot に per-source 発射推奨スコア (from_logit) を
+    # bias として加算し、発射判断を明示的に学習する。最初の head 変更実験。
+    "reinforce_case2_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case2_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case2.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case2/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.

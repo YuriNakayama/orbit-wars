@@ -48,6 +48,8 @@ def render_notebook(ctx: RenderContext) -> dict[str, Any]:
         _code_cell(_cell_install_wheels(dataset_mount)),
         _code_cell(_cell_install_bot(dataset_mount)),
     ]
+    if _needs_jax_cuda(ctx):
+        cells.append(_code_cell(_cell_install_jax_cuda()))
     if _needs_parquet_to_npy(ctx.case):
         cells.append(_code_cell(_cell_parquet_to_npy(ctx)))
     cells.extend(
@@ -119,6 +121,13 @@ def _cell_env_setup(ctx: RenderContext, run_dir: str, meta_json: str) -> str:
         "ORBIT_WARS_KAGGLE_KERNEL_META": meta_json,
         "ORBIT_WARS_RUN_DIR": run_dir,
     }
+    # reinforce_* cases run RL rollouts via kaggle_environments. The Kaggle
+    # Kernel dataset does not ship the manylinux Rust wheel by default, so
+    # force the vendored Python simulator backend to avoid ImportError on
+    # `orbit_wars_rust`. Imitation cases don't touch the simulator at train
+    # time so their default (Rust) backend is left alone.
+    if ctx.case.startswith("reinforce_"):
+        payload["ORBIT_WARS_BACKEND"] = "python"
     return (
         "# cell A: env setup\n"
         "import os\n"
@@ -308,6 +317,95 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"
         "subprocess.run([sys.executable, '-c', _IMPORT_PROBE], check=False)\n"
+    )
+
+
+def _needs_jax_cuda(ctx: RenderContext) -> bool:
+    """JAX を使う case (case 名や train_module に jax を含む) のときだけ
+    cuda12 plugin + cudnn 9.8 を install する cell を差し込む。
+    """
+    return "jax" in ctx.case or "jax" in ctx.train_module
+
+
+def _cell_install_jax_cuda() -> str:
+    """Install jax-cuda12 plugin + matching cuDNN so JAX picks up the T4 GPU.
+
+    Kaggle base image ships CPU JAX only; without the plugin XLA never sees
+    the GPU and train_jax falls back to CPU (defeating the 17× speedup).
+
+    重要な制約:
+    - `pip install --reinstall jax[cuda12]` は **避ける** (既ロード jax の
+      共有ライブラリハンドルが invalid 化して SIGABRT、orbit-wars README
+      で観測済)。plugin + pjrt + cudnn を素直に追加 install する。
+    - jax-cuda12-plugin 0.10 は compile-time CuDNN 9.8 を期待する。Kaggle
+      の base image は CuDNN 9.x 系だが version が plugin と合わないと
+      `RET_CHECK failure dnn_support != nullptr` で GPU 演算が abort する。
+      `nvidia-cudnn-cu12>=9.8,<9.9` を pin して plugin に合わせる。
+    """
+    return (
+        "# cell C2: install jax-cuda12 plugin + matching cuDNN + equinox/optax\n"
+        "import subprocess, sys, json, time\n"
+        "pkgs = [\n"
+        "    'jax-cuda12-plugin',\n"
+        "    'jax-cuda12-pjrt',\n"
+        "    'nvidia-cudnn-cu12>=9.8,<9.9',\n"
+        "    # train_jax depends on equinox (model) and optax (PPO update).\n"
+        "    # Kaggle base image does not ship these.\n"
+        "    'equinox>=0.11.0',\n"
+        "    'optax>=0.2.0',\n"
+        "]\n"
+        "print('installing JAX CUDA12 plugin + equinox/optax:', pkgs)\n"
+        "# Retry up to 3 times because files.pythonhosted.org occasionally\n"
+        "# returns ReadTimeoutError from the Kaggle outbound NAT (observed\n"
+        "# in run 20260522-030616). --retries lets pip retry within a\n"
+        "# single subprocess invocation; the outer for-loop covers full\n"
+        "# subprocess failures (e.g. SIGKILL on first DNS attempt).\n"
+        "last_err = ''\n"
+        "for attempt in range(3):\n"
+        "    r = subprocess.run(\n"
+        "        [\n"
+        "            'pip', 'install', '-q',\n"
+        "            '--retries', '5',\n"
+        "            '--timeout', '60',\n"
+        "        ] + pkgs,\n"
+        "        capture_output=True, text=True, check=False,\n"
+        "    )\n"
+        "    if r.returncode == 0:\n"
+        "        break\n"
+        "    last_err = r.stderr[-2000:]\n"
+        "    print(f'pip install attempt {attempt + 1} failed:', last_err)\n"
+        "    time.sleep(5)\n"
+        "else:\n"
+        "    msg = (\n"
+        "        'jax cuda plugin install failed after 3 attempts; '\n"
+        "        f'last err: {last_err}'\n"
+        "    )\n"
+        "    raise RuntimeError(msg)\n"
+        "print('pip install OK')\n"
+        "# Probe JAX devices in a subprocess so the live kernel doesn't\n"
+        "# import jax (would lock in the CPU backend before plugin is wired).\n"
+        "_PROBE = (\n"
+        "    'import json, jax\\n'\n"
+        "    'devs = jax.devices()\\n'\n"
+        "    'print(json.dumps({\"backend\": jax.default_backend(),'\n"
+        "    ' \"devices\": [str(d) for d in devs]}))\\n'\n"
+        ")\n"
+        "r = subprocess.run(\n"
+        "    [sys.executable, '-c', _PROBE],\n"
+        "    capture_output=True, text=True, check=False,\n"
+        ")\n"
+        "out = r.stdout.strip().splitlines()[-1] if r.stdout else '{}'\n"
+        "try:\n"
+        "    info = json.loads(out)\n"
+        "except Exception:\n"
+        "    info = {'raw': out, 'err': r.stderr[-500:]}\n"
+        "print('jax device probe:', info)\n"
+        "if info.get('backend') != 'gpu':\n"
+        "    # Fail loudly — train_jax on CPU defeats the purpose of using\n"
+        "    # Kaggle's GPU quota.\n"
+        "    raise RuntimeError(\n"
+        "        f'JAX did not bind to GPU; backend={info.get(\"backend\")!r}'\n"
+        "    )\n"
     )
 
 
