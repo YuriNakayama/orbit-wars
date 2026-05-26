@@ -18,6 +18,10 @@ from .strategy_helpers import build_modes, preferred_send
 
 def plan_moves(world: WorldModel) -> list[list[int | float]]:
     modes = build_modes(world)
+    # Seed the aim cache for the capture-probe grid in one batched vmap (JAX
+    # backend only; no-op under Python). This turns the O(P^2) capture probe
+    # sweep from P^2 individual jit dispatches into a single kernel launch.
+    world.warm_capture_probes()
     planned_commitments: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
     moves: list[list[int | float]] = []
     spent_total: dict[int, int] = defaultdict(int)

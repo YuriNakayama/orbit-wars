@@ -1,0 +1,26 @@
+{
+  "skill_name": "python-to-jax",
+  "evals": [
+    {
+      "id": 0,
+      "name": "single-file-env-wrapper",
+      "prompt": "bot/pipeline/reinforce/case2/training/env.py を JAX に書き換えて。GPU で回せるようにしたい。",
+      "expected_output": "Creates env_jax.py beside env.py, ports the OrbitWarsEpisode/reward-shaping logic to fixed-shape masked JAX, and writes a parity pytest that compares ship totals / shaping reward against the Python original within float32 tolerance. Reports green test output and any deferred features.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "vague-this-target",
+      "prompt": "rollout.py の中の collect_rollout を jax 化したい。これ、scan と vmap でちゃんと一本のトレースになるようにしてくれる？parity も確認したい。",
+      "expected_output": "Resolves the target to a rollout file (asks if ambiguous which case), ports the rollout loop to lax.scan + vmap with a single trace (no per-seed recompile), and writes a trajectory-parity test comparing macro state exactly and float positions within a band. References rollout_jax.py conventions.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "directory-agent-port",
+      "prompt": "pipeline/rulebase/case2 の rule-based agent 一式を JAX に port して。baseline_jax/ みたいなパッケージにして、元の Python agent と挙動が一致することをテストで担保したい。",
+      "expected_output": "Ports the agent directory file-by-file in dependency order into a *_jax/ package using fixed shapes + masks and lax primitives, mirrors the existing baseline_jax/ layout, and adds a parity test asserting the JAX agent's chosen actions match the Python agent on shared observations. Lint/types pass.",
+      "files": []
+    }
+  ]
+}

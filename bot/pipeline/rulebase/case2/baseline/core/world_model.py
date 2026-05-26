@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from .config import (
@@ -53,6 +54,31 @@ from .safety import (
     target_reachable_before_comet_expiry,
 )
 from .types import Fleet, Planet
+
+# Intercept-solver backend selector. The agent's hot path (`plan_shot` ->
+# aim solver) can run either the pure-Python `aim_with_prediction` or the JAX
+# `aim_with_prediction_jax` (via the host adapter). Default is Python so the
+# Kaggle submission — which has no GPU and does not bundle the `baseline_jax`
+# package — is unaffected. Set ORBIT_WARS_AIM_BACKEND=jax to route the hot path
+# through JAX (used by the identity test and the GPU bench). The JAX adapter is
+# imported lazily so importing this module never requires jax/baseline_jax.
+_AIM_BACKEND_ENV = "ORBIT_WARS_AIM_BACKEND"
+
+# Signature shared by aim_with_prediction (Python) and aim_jax (adapter).
+AimFn = Callable[
+    [Planet, Planet, int, dict[int, Planet], float, list[dict[str, Any]], set[int]],
+    tuple[float, int, float, float] | None,
+]
+
+
+def _aim_backend() -> AimFn:
+    import os
+
+    if os.environ.get(_AIM_BACKEND_ENV, "python").lower() == "jax":
+        from pipeline.rulebase.case2.baseline_jax.aim_adapter import aim_jax
+
+        return aim_jax
+    return aim_with_prediction
 
 
 def fleet_target_planet(
@@ -434,6 +460,11 @@ class WorldModel:
         }
         self.reaction_cache: dict[int, tuple[int, int]] = {}
         self.base_need_cache: dict[tuple[int, int], int] = {}
+        # Per-turn cache of aim results keyed by (src_id, target_id, ships).
+        # When the JAX backend is active, `warm_capture_probes()` fills this in
+        # one batched vmap so the O(P^2) capture-probe `plan_shot` calls become
+        # cache hits instead of P^2 individual jit dispatches.
+        self._aim_cache: dict[tuple[int, int, int], tuple[float, int, float, float] | None] = {}
 
         (
             self.reserve,
@@ -572,20 +603,93 @@ class WorldModel:
     def source_attack_left(self, source_id: int, spent_total: dict[int, int]) -> int:
         return max(0, self.available.get(source_id, 0) - spent_total[source_id])
 
+    def warm_capture_probes(self) -> None:
+        """Batch-solve the capture-probe (src,target) grid in ONE vmap and seed
+        `_aim_cache`. Speed-only: any cache miss (e.g. a probe-ship formula that
+        diverges from this estimate) simply falls through to a per-call solve in
+        `plan_shot`, so this can never change behavior — only the hot O(P^2)
+        probe sweep's dispatch count (P^2 individual jit calls -> one).
+
+        Only meaningful under the JAX backend; under Python it would just
+        pre-populate the same dict at no benefit, so it no-ops there.
+        """
+        import os
+
+        if os.environ.get(_AIM_BACKEND_ENV, "python").lower() != "jax":
+            return
+        from pipeline.rulebase.case2.baseline_jax.aim_adapter import (
+            MAX_COMET_PATH_LEN,
+            aim_jax_grid,
+        )
+        from pipeline.rulebase.case2.baseline_jax.aim_jax import resolve_comet_path
+
+        from .config import PARTIAL_SOURCE_MIN_SHIPS
+
+        zeros_path = [[0.0, 0.0] for _ in range(MAX_COMET_PATH_LEN)]
+        rows: list[tuple[float, ...]] = []
+        paths: list[list[list[float]]] = []
+        keys: list[tuple[int, int, int]] = []
+        for src in self.my_planets:
+            src_available = self.available.get(src.id, 0)  # spent_total empty at turn start
+            if src_available <= 0:
+                continue
+            for target in self.planets:
+                if target.id == src.id or target.owner == self.player:
+                    continue
+                # Replicates capture.py's rough_ships formula exactly.
+                rough_ships = max(
+                    1,
+                    min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS, int(target.ships) + 1)),
+                )
+                key = (src.id, target.id, rough_ships)
+                if key in self._aim_cache:
+                    continue
+                init = self.initial_by_id.get(target.id)
+                ix = float(init.x) if init is not None else float(target.x)
+                iy = float(init.y) if init is not None else float(target.y)
+                ir = float(init.radius) if init is not None else float(target.radius)
+                max_turns = HORIZON
+                if target.id in self.comet_ids:
+                    max_turns = min(
+                        max_turns, max(0, comet_remaining_life(target.id, self.comets) - 1)
+                    )
+                    path_arr, pidx, plen = resolve_comet_path(
+                        target.id, self.comets, self.comet_ids
+                    )
+                else:
+                    path_arr, pidx, plen = zeros_path, 0, 0
+                rows.append(
+                    (
+                        float(src.x), float(src.y), float(src.radius),
+                        float(target.x), float(target.y), ix, iy, ir,
+                        float(target.radius), rough_ships, max_turns, pidx, plen,
+                    )
+                )
+                paths.append(path_arr)
+                keys.append(key)
+        results = aim_jax_grid(rows, paths, self.ang_vel)
+        for key, res in zip(keys, results, strict=True):
+            self._aim_cache[key] = res
+
     def plan_shot(
         self, src_id: int, target_id: int, ships: int
     ) -> tuple[float, int, float, float] | None:
         src = self.planet_by_id[src_id]
         target = self.planet_by_id[target_id]
-        aim = aim_with_prediction(
-            src,
-            target,
-            ships,
-            self.initial_by_id,
-            self.ang_vel,
-            self.comets,
-            self.comet_ids,
-        )
+        cache_key = (src_id, target_id, ships)
+        if cache_key in self._aim_cache:
+            aim = self._aim_cache[cache_key]
+        else:
+            aim = _aim_backend()(
+                src,
+                target,
+                ships,
+                self.initial_by_id,
+                self.ang_vel,
+                self.comets,
+                self.comet_ids,
+            )
+            self._aim_cache[cache_key] = aim
         if aim is None:
             return None
         angle, turns, ix, iy = aim
