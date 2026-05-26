@@ -22,10 +22,11 @@ bot/src/
   submit/          Kaggle submission packaging / validation / quota (python -m submit)
   dataset/         Selfplay & Kaggle-episode data pipeline (python -m dataset)
   evaluation/      Cross-case eval (metrics, vs_baseline, snapshot_update)
-  utils/           Shared utilities (repo_root, fleet kinematics, trajectory safety)
-  vast/            Vast.ai GPU pod control CLI (python -m vast)
-  runpod_io/       RunPod GPU pod control CLI (python -m runpod_io)
-  kaggle_kernel/   Kaggle Notebook GPU training CLI (python -m kaggle_kernel)
+  utils/           Shared utilities (repo_root, fleet kinematics, trajectory safety, gpu_bench)
+  gpu/             GPU provider CLIs (one subpackage per provider):
+    vast/          Vast.ai GPU pod control CLI (python -m gpu.vast)
+    runpod/        RunPod GPU pod control CLI (python -m gpu.runpod)
+    kaggle/        Kaggle Notebook GPU training CLI (python -m gpu.kaggle)
 ```
 
 Agent implementations live under `bot/pipeline/<family>/case<N>/` (see

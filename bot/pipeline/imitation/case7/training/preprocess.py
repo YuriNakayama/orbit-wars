@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 import typer
 import yaml
 
+from gpu.runpod.execution.progress import mark_progress
 from pipeline.imitation.case7.policy.featurizer import (
     GLOBAL_FEAT_DIM,
     MAX_PLANETS,
@@ -37,7 +38,6 @@ from pipeline.imitation.case7.policy.templates import (
     T_NO_OP,
     classify_actual_target,
 )
-from runpod_io.execution.progress import mark_progress
 from utils.repo_root import absolute_under_repo, find_repo_root
 
 logger = logging.getLogger(__name__)

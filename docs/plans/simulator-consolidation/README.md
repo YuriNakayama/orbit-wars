@@ -24,7 +24,7 @@ simulator/                  ← bot 非依存の純粋シミュレータ層
   adapter/  orbit_wars_sim      ★backend 切替 adapter (旧 bot/src/env)
 
 bot/
-  src/        submit / dataset / vast / runpod_io / kaggle_kernel / evaluation / utils
+  src/        submit / dataset / evaluation / utils / gpu/{vast,runpod,kaggle}
   pipeline/   rulebase / imitation / reinforce ← 3 family のみ
     reinforce/_bench/   ★dev-only ベンチ (旧 bot/scripts + 旧 pipeline/_bench を吸収)
   tests/
@@ -40,13 +40,28 @@ RunPod 用インフラヘルパ (cuda12 install / jax reload / run dir / device
 `extra_prefixes` で parameterize)。BenchResult / `_bench_*` はベンチ固有の
 ため各モジュールに残置。
 
+## GPU CLI の `gpu/` 集約 (採用)
+
+GPU プロバイダ CLI 3 本を `bot/src/gpu/` 配下へ集約 (ユーザー決定):
+
+| 旧 | 新 | CLI |
+|----|----|-----|
+| `src/runpod_io` | `src/gpu/runpod` | `python -m gpu.runpod` |
+| `src/vast` | `src/gpu/vast` | `python -m gpu.vast` |
+| `src/kaggle_kernel` | `src/gpu/kaggle` | `python -m gpu.kaggle` |
+
+`-m` CLI が `gpu.*` に変わるため、`dev/{runpod,vast,kaggle}` wrapper (kaggle-kernel→
+kaggle にリネーム)、RunPod onstart の `60_train.sh` (`-m gpu.runpod.execution.
+system_monitor`)、Kaggle kernel template の埋め込み import (`gpu.kaggle.interactive.
+channel`) など **リモート実行される文字列も全て追従**。`vast` の rename は 3rd-party
+`vastai` / `vast.ai` 文字列を巻き込まないよう厳密な正規表現で実施。
+
 ## 採用しなかった案
 
-- **`bot/src/` 7 パッケージを `orbit_wars_bot` 単一 namespace へ統合**:
-  `python -m submit` 等の CLI エントリ規約と衝突し、`dev/*` shell 5 本・
-  RunPod/Kaggle onstart・kernel template (リモート実行で local 検証不可) の
-  外部修正を伴い silent breakage リスクが高いため**見送り** (ユーザー決定)。
-  `bot/src/` は現状の 7 top-level パッケージ構成を維持。
+- **`bot/src/` 残り 4 パッケージ (submit/dataset/evaluation/utils) を `orbit_wars_bot`
+  単一 namespace へ統合**: `python -m submit` 等の CLI エントリ規約と衝突し、
+  silent breakage リスクが高いため**見送り** (ユーザー決定)。GPU 系のように明確な
+  グルーピング理由がある場合のみ集約する方針。
 
 ## キーとなる設計判断
 

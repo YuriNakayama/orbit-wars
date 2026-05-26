@@ -363,7 +363,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 def _write_run_artifacts(run_dir: Path, report: TrainReport, seed: int) -> None:
     """metrics.json と run.json を run_dir に書き出す。"""
     # 遅延 import: 学習スクリプト本体の import グラフを汚染しないため
-    from vast.run_meta import RunMetadata, hash_params, write_run_json
+    from gpu.vast.run_meta import RunMetadata, hash_params, write_run_json
 
     metrics = {
         "epochs_run": report.epochs_run,
