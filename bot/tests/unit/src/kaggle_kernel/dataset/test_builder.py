@@ -112,6 +112,9 @@ def test_build_snapshot_includes_params_yaml(tmp_path: Path) -> None:
 
 
 def test_build_snapshot_includes_mart_files(tmp_path: Path) -> None:
+    """Kaggle dataset の top-level `data/` zip drop 回避のため、mart は
+    `kmart__<case>__<split>.parquet` という flat なファイル名で配置される。
+    """
     repo = tmp_path / "repo"
     dest = tmp_path / "snapshot"
     _fake_repo(repo)
@@ -122,17 +125,39 @@ def test_build_snapshot_includes_mart_files(tmp_path: Path) -> None:
     train_pq.write_bytes(b"PAR1-fake-train")
     val_pq.write_bytes(b"PAR1-fake-val")
     build_snapshot(repo, dest, include_mart_files=[train_pq, val_pq])
-    assert (dest / "data" / "mart" / "imitation" / "case1" / "train.parquet").is_file()
-    assert (dest / "data" / "mart" / "imitation" / "case1" / "val.parquet").is_file()
+    assert (dest / "kmart__case1__train.parquet").is_file()
+    assert (dest / "kmart__case1__val.parquet").is_file()
 
 
-def test_build_snapshot_mart_file_outside_repo_rejected(tmp_path: Path) -> None:
+def test_build_snapshot_mart_file_outside_repo_accepted(tmp_path: Path) -> None:
+    """worktree の data/ symlink が壊れた場合などに main repo の data/ を
+    直接 --mart で渡せるよう、path に `data/` segment があれば repo_root の外でも
+    `kmart__<case>__<split>.parquet` として flatten 配置する。
+    """
+    repo = tmp_path / "repo"
+    dest = tmp_path / "snapshot"
+    _fake_repo(repo)
+    outside_mart = tmp_path / "main" / "data" / "mart" / "imitation" / "caseX"
+    outside_mart.mkdir(parents=True)
+    outside_train = outside_mart / "train.parquet"
+    outside_train.write_bytes(b"x")
+    # path 内に `data` segment があれば flatten path 経路で受理される
+    build_snapshot(repo, dest, include_mart_files=[outside_train])
+    assert (dest / "kmart__caseX__train.parquet").is_file()
+
+
+def test_build_snapshot_mart_file_with_no_data_segment_rejected(
+    tmp_path: Path,
+) -> None:
+    """path に `data/` segment も無く repo_root の外でもある場合は relative_to
+    が失敗して ValueError が出る。
+    """
     repo = tmp_path / "repo"
     dest = tmp_path / "snapshot"
     _fake_repo(repo)
     outside = tmp_path / "outside.parquet"
     outside.write_bytes(b"x")
-    with pytest.raises(ValueError, match="not under repo_root"):
+    with pytest.raises(ValueError):
         build_snapshot(repo, dest, include_mart_files=[outside])
 
 
