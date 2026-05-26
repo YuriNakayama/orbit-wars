@@ -318,6 +318,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # smoke_gpu: bare GPU-acquisition smoke test. NOT a training case — runs
+    # pipeline/reinforce/_bench/gpu_smoke.py which prints CUDA availability /
+    # GPU name / VRAM, does one tiny CUDA tensor op, and exits 0. Designed to
+    # validate the RunPod basis end-to-end in seconds (no DVC pull / preprocess).
+    "smoke_gpu": {
+        "stage": "smoke_gpu",
+        "train_module": "pipeline.reinforce._bench.gpu_smoke",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case1: PPO + BC warm-start on case9 per_planet weights.
     # `family` differentiates the on-disk run dir (data/output/models/reinforce/...).
     "reinforce_case1": {

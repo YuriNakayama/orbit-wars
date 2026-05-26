@@ -17,7 +17,10 @@ dependencies = [
     "pyyaml>=6.0.2",
     "rich>=13.9.4",
     "typer>=0.15.2",
-    "torch>=2.3.0,<3",
+    # torch は base に置かず torch-cpu / torch-cu124 extra で排他選択する
+    # (下記 [project.optional-dependencies] と [tool.uv] conflicts)。cu124
+    # wheel は nvidia-cudnn-cu12==9.1.0.70 を hard pin し reinforce の cuda
+    # group (cudnn 9.8) と単一 lock で衝突するため、GPU torch だけを排他化する。
     "dvc[s3]>=3.55",
     "vastai>=0.3.0",
     "orbit-wars-vendor",
@@ -32,10 +35,55 @@ dependencies = [
     "optax>=0.2.0",
 ]
 
+[project.optional-dependencies]
+# torch GPU build (cu124)。imitation/smoke on RunPod 専用の排他 extra。
+# RunPod image (cu1241) と一致し cudnn 9.1 を引く → cuda group (cudnn 9.8) と
+# 排他 ([tool.uv] conflicts)。CPU build は torch-cpu group (default-groups) 側。
+torch-cu124 = ["torch>=2.3.0,<3"]
+
+# PyTorch index 群。explicit=true で torch 系のみに適用し jax/dvc を巻き込まない。
+# - cpu  : base の torch (cudnn を引かない)。Linux で cu130 mismatch を回避。
+# - cu124: torch-cuda extra 用。RunPod image (cu1241 = CUDA 12.4.1) と一致し、
+#          onstart の cu118 fallback を不要化する。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
 [tool.uv.sources]
 orbit-wars-vendor = { path = "../simulator/python", editable = true }
 orbit-wars-jax = { path = "../simulator/jax", editable = true }
 orbit-wars-sim = { path = "../simulator/adapter", editable = true }
+# torch index は選択肢で決まる:
+# - torch-cpu group  (既定): cpu index。Linux で cu130 mismatch / cudnn を回避。
+# - torch-cu124 extra (排他): cu124 index、Linux のみ (RunPod image 一致)。
+# macOS は cu124 wheel が無いので marker 不一致で default PyPI (CPU/MPS) に解決。
+torch = [
+    { index = "pytorch-cu124", extra = "torch-cu124", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", group = "torch-cpu" },
+]
+
+# torch-cpu を default group にし、bare `uv sync` (dev/setup, CI, onstart base) で
+# CPU torch を既定で入れる。RunPod imitation/smoke だけが
+# `--no-default-groups --extra torch-cu124` で GPU build に切替える。これで
+# 既存の torch 前提の call site が壊れない。
+# 排他宣言: torch-cpu group ⟂ torch-cu124 extra (同一 torch を 2 index から
+# 引けない)、torch-cu124 ⟂ cuda (cu124 の cudnn 9.1 vs JAX cuda group の cudnn
+# 9.8 衝突)。torch-cpu と cuda は共存可なので reinforce は
+# `--group cuda` (torch-cpu は default) で sync できる。
+[tool.uv]
+# "dev" は uv の既定。torch-cpu を足して bare sync で CPU torch も入るようにする
+# (default-groups を指定すると "dev" 既定が上書きされ消えるため明示再追加)。
+default-groups = ["dev", "torch-cpu"]
+conflicts = [
+    [{ group = "torch-cpu" }, { extra = "torch-cu124" }],
+    [{ extra = "torch-cu124" }, { group = "cuda" }],
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/submit", "src/dataset", "src/gpu", "src/evaluate", "src/utils", "pipeline"]
@@ -45,6 +93,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+# torch CPU build。default group なので bare `uv sync` で入る (dev/CI/onstart base)。
+# torch-cu124 extra と排他 ([tool.uv] conflicts)。
+torch-cpu = ["torch>=2.3.0,<3"]
 dev = [
     { include-group = "lint" },
     { include-group = "env" },
