@@ -45,7 +45,7 @@ class PerPlanetLossReport:
 def compute_per_planet_loss(
     output: PolicyOutput,
     target_pid_per_src: torch.Tensor,  # (B, P) int64; 0..P-1 = fire target slot,
-                                       # no_op_idx (== P) = teacher chose no-op
+    # no_op_idx (== P) = teacher chose no-op
     ship_pred_label: torch.Tensor,  # (B, P) float; log1p(ships) for fired, -1
     effective_source_mask: torch.Tensor,  # (B, P) bool — layer2 source mask
     should_learn_ship: torch.Tensor,  # (B, P) bool — layer3 ship-head mask

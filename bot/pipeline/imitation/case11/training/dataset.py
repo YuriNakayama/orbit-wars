@@ -152,9 +152,7 @@ class CaseFourDataset(Dataset[Sample]):
             effective_source_mask=torch.from_numpy(
                 np.array(self._effective_source_mask[idx])
             ),
-            should_learn_ship=torch.from_numpy(
-                np.array(self._should_learn_ship[idx])
-            ),
+            should_learn_ship=torch.from_numpy(np.array(self._should_learn_ship[idx])),
             target_pid_per_src=torch.from_numpy(
                 np.array(self._target_pid_per_src[idx])
             ),
@@ -173,9 +171,7 @@ def collate(samples: list[Sample]) -> BatchedSample:
         candidate_feats=torch.stack([s.candidate_feats for s in samples]),
         candidate_mask=torch.stack([s.candidate_mask for s in samples]),
         candidate_pid=torch.stack([s.candidate_pid for s in samples]),
-        effective_source_mask=torch.stack(
-            [s.effective_source_mask for s in samples]
-        ),
+        effective_source_mask=torch.stack([s.effective_source_mask for s in samples]),
         should_learn_ship=torch.stack([s.should_learn_ship for s in samples]),
         target_pid_per_src=torch.stack([s.target_pid_per_src for s in samples]),
         ship_pred_label=torch.stack([s.ship_pred_label for s in samples]),

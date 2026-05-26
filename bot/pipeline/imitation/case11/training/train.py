@@ -234,9 +234,7 @@ def _compute_loss_dispatch(
         output,  # type: ignore[arg-type]
         target_pid_per_src=batch.target_pid_per_src.to(device, non_blocking=True),
         ship_pred_label=batch.ship_pred_label.to(device, non_blocking=True),
-        effective_source_mask=batch.effective_source_mask.to(
-            device, non_blocking=True
-        ),
+        effective_source_mask=batch.effective_source_mask.to(device, non_blocking=True),
         should_learn_ship=batch.should_learn_ship.to(device, non_blocking=True),
         weights=loss_weights,
         no_op_idx=MAX_PLANETS,
@@ -656,9 +654,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
                 # If the metric ever changes, the filename token still
                 # reads as `vftf` for simplicity — the actual metric name
                 # is recorded in the JSON event right above.
-                history_name = (
-                    f"best_e{epoch}_vftf{best_metric_value:.4f}.pt"
-                )
+                history_name = f"best_e{epoch}_vftf{best_metric_value:.4f}.pt"
                 history_key = f"{key_prefix}/{history_name}"
                 latest_key = f"{key_prefix}/best.pt"
                 try:
