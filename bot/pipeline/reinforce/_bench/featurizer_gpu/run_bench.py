@@ -13,7 +13,6 @@ uploader and `dev/runpod pull` flow already work.
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
@@ -24,14 +23,17 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import typer
 
+from utils.gpu_bench import install_cuda_jax, reload_jax, run_dir
+
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(add_completion=False)
+
+_FEATURIZER_JAX_PREFIX = "pipeline.reinforce.case1.policy.featurizer_jax"
 
 
 @dataclass
@@ -43,44 +45,6 @@ class BenchResult:
     per_call_seconds: float
     per_env_seconds: float
     device: str
-
-
-def _run_dir() -> Path:
-    env_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
-    if env_dir:
-        return Path(env_dir)
-    fallback = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
-
-
-def _install_cuda_jax() -> None:
-    logger.info("installing jax[cuda12] via uv pip…")
-    proc = subprocess.run(
-        ["uv", "pip", "install", "--reinstall", "jax[cuda12]"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        logger.error(
-            "uv pip install jax[cuda12] failed: %s", (proc.stderr or "")[-500:]
-        )
-        proc.check_returncode()
-    logger.info("jax[cuda12] install OK")
-
-
-def _reload_jax() -> Any:
-    """Reload jax so cuda plugin is picked up. Also reload jax_env / our
-    featurizer_jax module since they import jax at module-load time."""
-    for mod in list(sys.modules):
-        if (
-            mod == "jax"
-            or mod.startswith(("jax.", "jaxlib", "orbit_wars_jax"))
-            or mod.startswith("pipeline.reinforce.case1.policy.featurizer_jax")
-        ):
-            sys.modules.pop(mod, None)
-    return importlib.import_module("jax")
 
 
 def _bench_pytorch(calls: int, seed: int) -> BenchResult:
@@ -181,12 +145,12 @@ def _bench_full(calls: int, seed: int) -> list[BenchResult]:
         return results
 
     try:
-        _install_cuda_jax()
+        install_cuda_jax()
     except subprocess.CalledProcessError as exc:
         logger.warning("jax[cuda12] install failed, skipping GPU bench: %s", exc)
         return results
 
-    jax = _reload_jax()
+    jax = reload_jax(extra_prefixes=(_FEATURIZER_JAX_PREFIX,))
     devices = jax.devices()
     logger.info("jax devices after cuda install: %s", devices)
     if not any(d.platform == "gpu" for d in devices):
@@ -212,8 +176,8 @@ def main(
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    run_dir = _run_dir()
-    logger.info("run_dir=%s", run_dir)
+    run_path = run_dir()
+    logger.info("run_dir=%s", run_path)
 
     started = time.perf_counter()
     results = _bench_full(calls=calls, seed=seed)
@@ -221,7 +185,7 @@ def main(
 
     payload: dict[str, Any] = {
         "schema_version": 0,
-        "case": "_bench/featurizer_gpu",
+        "case": "reinforce/_bench/featurizer_gpu",
         "started_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
         "host": socket.gethostname(),
         "platform": platform.platform(),
@@ -230,13 +194,13 @@ def main(
         "results": [asdict(r) for r in results],
         "runtime_seconds": round(runtime, 3),
     }
-    out_path = run_dir / "bench_results.json"
+    out_path = run_path / "bench_results.json"
     out_path.write_text(json.dumps(payload, indent=2))
     logger.info("wrote %s", out_path)
 
     # Onstart artifacts uploader expects best.pt + metrics.json.
-    (run_dir / "best.pt").write_bytes(b"")
-    (run_dir / "metrics.json").write_text(
+    (run_path / "best.pt").write_bytes(b"")
+    (run_path / "metrics.json").write_text(
         json.dumps(
             {
                 "iterations_run": len(results),

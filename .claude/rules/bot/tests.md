@@ -19,11 +19,11 @@ Pytest conventions for the bot test suite. General Python rules (type hints, log
 - Minimize use of mock and patch — keep close to actual behavior
 - Each test should be executable independently
 - Tests live under `bot/tests/`, mirroring the `bot/src/` layout
-- For agent tests, build scenarios through `env.orbit_wars.make_orbit_wars_env()` so local runs use the in-repo simulator backend.
+- For agent tests, build scenarios through `orbit_wars_sim.make_orbit_wars_env()` (the `simulator/adapter` package) so local runs use the in-repo simulator backend.
 
 ```python
 import pytest
-from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
+from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
 @pytest.fixture
 def env():

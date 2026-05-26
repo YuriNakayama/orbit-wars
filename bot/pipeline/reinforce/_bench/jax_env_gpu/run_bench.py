@@ -13,7 +13,6 @@ artifacts uploader picks up the JSON.
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
@@ -29,6 +28,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import typer
+
+from utils.gpu_bench import install_cuda_jax, reload_jax, run_dir
 
 logger = logging.getLogger(__name__)
 
@@ -165,45 +166,6 @@ def _bench_jax(episodes: int, vmap: int, seed: int = 0) -> BenchResult:
     )
 
 
-def _install_cuda_jax() -> None:
-    """Reinstall jax + jaxlib with cuda12 plugin in the active venv.
-
-    Pinning is intentionally loose (`jax[cuda12]`): jax/jaxlib has minor-version
-    drift on the cuda plugin and we just need *any* GPU-capable build at bench
-    time. The cpu wheel already in `.venv` is replaced.
-    """
-    logger.info("installing jax[cuda12] via uv pip…")
-    proc = subprocess.run(
-        ["uv", "pip", "install", "--reinstall", "jax[cuda12]"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        logger.error(
-            "uv pip install jax[cuda12] failed: %s", (proc.stderr or "")[-500:]
-        )
-        proc.check_returncode()
-    logger.info("jax[cuda12] install OK")
-
-
-def _reload_jax() -> Any:
-    """Reload jax + dependent modules so cuda plugin is picked up."""
-    for mod in list(sys.modules):
-        if mod == "jax" or mod.startswith(("jax.", "jaxlib", "orbit_wars_jax.")):
-            sys.modules.pop(mod, None)
-    return importlib.import_module("jax")
-
-
-def _run_dir() -> Path:
-    env_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
-    if env_dir:
-        return Path(env_dir)
-    fallback = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
-
-
 def _bench_full(episodes: int, seed: int) -> list[BenchResult]:
     results: list[BenchResult] = []
     logger.info("=== vendor ===")
@@ -225,12 +187,12 @@ def _bench_full(episodes: int, seed: int) -> list[BenchResult]:
         logger.info("not running on RunPod; skipping jax[cuda12] install + GPU bench")
         return results
     try:
-        _install_cuda_jax()
+        install_cuda_jax()
     except subprocess.CalledProcessError as exc:
         logger.warning("jax[cuda12] install failed, skipping GPU bench: %s", exc)
         return results
 
-    jax = _reload_jax()
+    jax = reload_jax()
     devices = jax.devices()
     logger.info("jax devices after cuda install: %s", devices)
     if not any(d.platform == "gpu" for d in devices):
@@ -258,8 +220,8 @@ def main(
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    run_dir = _run_dir()
-    logger.info("run_dir=%s", run_dir)
+    run_path = run_dir()
+    logger.info("run_dir=%s", run_path)
 
     started = time.perf_counter()
     results = _bench_full(episodes=episodes, seed=seed)
@@ -267,7 +229,7 @@ def main(
 
     payload: dict[str, Any] = {
         "schema_version": 0,
-        "case": "_bench/jax_env_gpu",
+        "case": "reinforce/_bench/jax_env_gpu",
         "started_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
         "host": socket.gethostname(),
         "platform": platform.platform(),
@@ -276,13 +238,13 @@ def main(
         "results": [asdict(r) for r in results],
         "runtime_seconds": round(runtime, 3),
     }
-    out_path = run_dir / "bench_results.json"
+    out_path = run_path / "bench_results.json"
     out_path.write_text(json.dumps(payload, indent=2))
     logger.info("wrote %s", out_path)
 
     # Onstart artifacts uploader expects best.pt + metrics.json (cf. case0 smoke).
-    (run_dir / "best.pt").write_bytes(b"")
-    (run_dir / "metrics.json").write_text(
+    (run_path / "best.pt").write_bytes(b"")
+    (run_path / "metrics.json").write_text(
         json.dumps(
             {
                 "iterations_run": len(results),

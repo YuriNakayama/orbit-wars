@@ -34,6 +34,12 @@ bot/
 (`orbit-wars-jax` / `orbit-wars-sim`) として `bot/pyproject.toml` の
 `[tool.uv.sources]` から参照。
 
+`reinforce/_bench` の 3 つの `*_gpu/run_bench.py` 間で重複していた GPU/JAX
+RunPod 用インフラヘルパ (cuda12 install / jax reload / run dir / device
+診断) は `bot/src/utils/gpu_bench.py` に統合し、drift を解消 (reload は
+`extra_prefixes` で parameterize)。BenchResult / `_bench_*` はベンチ固有の
+ため各モジュールに残置。
+
 ## 採用しなかった案
 
 - **`bot/src/` 7 パッケージを `orbit_wars_bot` 単一 namespace へ統合**:

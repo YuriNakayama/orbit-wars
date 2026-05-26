@@ -26,10 +26,11 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import typer
+
+from utils.gpu_bench import diagnostic_log, run_dir
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +46,6 @@ class BenchResult:
     per_step_seconds: float
     per_ep_seconds: float
     device: str
-
-
-def _run_dir() -> Path:
-    env_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
-    if env_dir:
-        return Path(env_dir)
-    fallback = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
 
 
 def _bench_jax(episodes: int, horizon: int, seed: int) -> BenchResult:
@@ -133,60 +125,6 @@ def _bench_full(horizons: list[int], seed: int) -> list[BenchResult]:
     return results
 
 
-def _diagnostic_log() -> None:
-    """Emit JAX env / device diagnostics + a tiny GPU smoke as the very
-    first action in `main()`. Distinguishes among:
-      (a) cuda12 plugin detected, GPU usable → bench should proceed
-      (b) devices=[CpuDevice] only → cuda12 plugin install or load failed
-      (c) `block_until_ready` hangs/crashes → cuda runtime/driver mismatch
-    Each `print` uses flush=True so the line reaches train.log before any
-    potential silent crash in subsequent JAX state.
-    """
-    print("=== JAX diagnostic start ===", flush=True)
-    import os as _os
-
-    for k in ("RUNPOD_POD_ID", "CUDA_VISIBLE_DEVICES", "JAX_PLATFORMS"):
-        print(f"env {k}={_os.environ.get(k, '<unset>')}", flush=True)
-    ldconfig_cmd = "ldconfig -p 2>/dev/null | grep libcuda.so | head -3"
-    print(
-        f"ldconfig libcuda: {_os.popen(ldconfig_cmd).read().strip()}",
-        flush=True,
-    )
-    nvsmi_cmd = (
-        "nvidia-smi --query-gpu=name,driver_version "
-        "--format=csv,noheader 2>&1 | head -1"
-    )
-    print(
-        f"nvidia-smi: {_os.popen(nvsmi_cmd).read().strip()}",
-        flush=True,
-    )
-    print("pip jax-cuda12 packages:", flush=True)
-    pip_cmd = 'uv pip list 2>&1 | grep -iE "^jax|^cuda" | head -10'
-    print(_os.popen(pip_cmd).read(), flush=True)
-
-    import jax
-
-    print(f"jax version: {jax.__version__}", flush=True)
-    try:
-        devs = jax.devices()
-        print(f"jax devices: {devs}", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"jax.devices() RAISED: {exc!r}", flush=True)
-        return
-    print(f"jax default_backend: {jax.default_backend()}", flush=True)
-
-    import jax.numpy as jnp
-
-    try:
-        x = jnp.ones(1000)
-        y = (x * 2.0).sum()
-        val = float(y.block_until_ready())
-        print(f"GPU smoke OK: y={val}", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"GPU smoke RAISED: {exc!r}", flush=True)
-    print("=== JAX diagnostic end ===", flush=True)
-
-
 @app.command()
 def main(
     seed: int = typer.Option(0, help="seed"),
@@ -195,9 +133,9 @@ def main(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    _diagnostic_log()
-    run_dir = _run_dir()
-    logger.info("run_dir=%s", run_dir)
+    diagnostic_log()
+    run_path = run_dir()
+    logger.info("run_dir=%s", run_path)
 
     started = time.perf_counter()
     results = _bench_full(horizons=[50, 200, 500], seed=seed)
@@ -205,7 +143,7 @@ def main(
 
     payload: dict[str, Any] = {
         "schema_version": 0,
-        "case": "_bench/rollout_gpu",
+        "case": "reinforce/_bench/rollout_gpu",
         "started_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
         "host": socket.gethostname(),
         "platform": platform.platform(),
@@ -214,12 +152,12 @@ def main(
         "results": [asdict(r) for r in results],
         "runtime_seconds": round(runtime, 3),
     }
-    out_path = run_dir / "bench_results.json"
+    out_path = run_path / "bench_results.json"
     out_path.write_text(json.dumps(payload, indent=2))
     logger.info("wrote %s", out_path)
 
-    (run_dir / "best.pt").write_bytes(b"")
-    (run_dir / "metrics.json").write_text(
+    (run_path / "best.pt").write_bytes(b"")
+    (run_path / "metrics.json").write_text(
         json.dumps(
             {
                 "iterations_run": len(results),
