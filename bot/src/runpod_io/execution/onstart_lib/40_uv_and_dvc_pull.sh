@@ -69,9 +69,12 @@ print(json.dumps(out))
 echo "[onstart] cuda probe: ${CUDA_SMOKE_OUT}"
 if ! echo "${CUDA_SMOKE_OUT}" | grep -q '"smoke_ok": true'; then
   echo "[onstart] CUDA smoke failed; force-reinstalling torch with cu118 wheel"
-  bot/.venv/bin/pip install --quiet --force-reinstall \
+  # uv-managed venvs do not ship a `pip` shim, so `bot/.venv/bin/pip` does not
+  # exist (this crashed the cu118 repair with "No such file"). Use `uv pip` —
+  # the supported way to install into a uv venv — targeting that venv.
+  (cd bot && VIRTUAL_ENV=.venv uv pip install --quiet --force-reinstall \
     --index-url https://download.pytorch.org/whl/cu118 \
-    torch || {
+    torch) || {
       echo "[onstart] FATAL: torch cu118 reinstall failed" >&2
       exit 1
   }
