@@ -14,23 +14,31 @@ For case-directory submit structure see `.claude/rules/bot/pipeline.md`. For pyt
 
 ## Bot Module Architecture (`bot/src/**`)
 
-The shared library for Orbit Wars agents follows the module layout below:
+`bot/src/` holds the shared **development** libraries (not submitted to Kaggle).
+Each subdirectory is exposed as a top-level package via `[tool.hatch.build.targets.wheel] packages`, so imports are bare (`from utils.repo_root import ...`, `from dataset...`):
 
 ```
 bot/src/
-  agents/          Submission agents (Kaggle Submission entrypoint)
-  env/             kaggle-environments wrappers and self-play utilities
-  features/        Observation -> features, orbit prediction, threat evaluation
-  policies/        Rulebase / trained policies
-  utils/           Shared utilities (math, visualization, logging)
+  submit/          Kaggle submission packaging / validation / quota (python -m submit)
+  dataset/         Selfplay & Kaggle-episode data pipeline (python -m dataset)
+  evaluation/      Cross-case eval (metrics, vs_baseline, snapshot_update)
+  utils/           Shared utilities (repo_root, fleet kinematics, trajectory safety)
+  vast/            Vast.ai GPU pod control CLI (python -m vast)
+  runpod_io/       RunPod GPU pod control CLI (python -m runpod_io)
+  kaggle_kernel/   Kaggle Notebook GPU training CLI (python -m kaggle_kernel)
 ```
+
+Agent implementations live under `bot/pipeline/<family>/case<N>/` (see
+`.claude/rules/bot/pipeline.md`). The simulator backends and env adapter live
+**outside `bot/`** under `simulator/` (`orbit_wars_vendor`, `orbit_wars_rust`,
+`orbit_wars_jax`, `orbit_wars_sim`) and are consumed as editable packages.
 
 ### Module Design Principles
 
 - Each module owns a single responsibility
 - Express inter-module dependencies via explicit imports
 - Keep feature extraction and policies loosely coupled so they can be swapped
-- Minimize dependencies in the submission entrypoint (`src/agents/main.py`); avoid heavy imports unavailable in the Kaggle runtime
+- Minimize dependencies in the submission entrypoint (`pipeline/<family>/case<N>/main.py`); avoid heavy imports unavailable in the Kaggle runtime
 
 ## General Principles
 

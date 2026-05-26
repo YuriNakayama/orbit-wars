@@ -76,9 +76,11 @@ bot/                Python 実装一式 (pyproject.toml / uv.lock はここに�
     imitation/          模倣学習パイプライン
       case1/            DeepSets BC
   tests/                Pytest unit tests
-simulator/              Orbit Wars simulator (公式 Python vendored copy + Rust 高速版)
-  python/               Apache-2.0 vendored kaggle_environments/envs/orbit_wars
+simulator/              Orbit Wars simulator backends + adapter (bot 非依存の純粋シミュレータ層)
+  python/               Apache-2.0 vendored kaggle_environments/envs/orbit_wars (orbit_wars_vendor)
   rust/                 PyO3 + maturin Rust 実装 (orbit_wars_rust._lib)
+  jax/                  JAX-native 実装 (orbit_wars_jax, jit + vmap, parity 済)
+  adapter/              backend 切替 adapter (orbit_wars_sim, ORBIT_WARS_BACKEND で rust/python 選択)
 infra/                  Terraform によるインフラ管理 (AWS 等)
   environment/          環境別 root module (dev / staging / prod)
     dev/
