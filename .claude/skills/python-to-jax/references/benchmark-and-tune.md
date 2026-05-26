@@ -61,6 +61,31 @@ the port is **JAX-GPU per-episode at a realistic horizon (e.g. 500) vs the
 Torch baseline**. Keep the Torch baseline cheap (e.g. `episodes=1`) if slow —
 you need its per-unit cost, not a large sample.
 
+### Batched vmap vs per-call dispatch — the result that decides everything
+
+Measured on a real L4 (case2 intercept solver, this repo): the **batched** path —
+one `vmap` over the whole (src×target) grid — beat the Python double loop by
+**66× / 273× / 681×** at grids 8², 16², 24². The **per-call** path — the same
+solver wired into the agent so each `plan_shot` makes its own jitted call — ran
+the agent's `act()` at **0.18×, i.e. 5.6× *slower*** than pure Python, and was
+*worse* on GPU than on CPU (0.18 vs 0.68). Same kernel, opposite verdict.
+
+Why: a GPU call has high fixed dispatch + host↔device transfer latency. Amortized
+over a 576-element vmap it's nothing; paid ~34 times per turn for individual
+small calls it dominates, and GPU's per-call latency is *higher* than CPU's. So:
+
+- **The speedup is in the batching, not the kernel.** Porting a function to JAX
+  buys nothing — sometimes loses — unless the *caller* hands it the whole loop
+  domain at once. Bench the batched grid AND the real per-call usage; report
+  both. If your only number is the grid, you haven't shown the entry point got
+  faster.
+- A sequential, control-flow-driven consumer (a rule-based agent calling the
+  solver per candidate, branching on each result) **cannot** be sped up by
+  swapping in a JAX function call-for-call. It needs restructuring to
+  "enumerate all candidates → one batched solve → select" — which may or may not
+  be worth it. Say so honestly rather than reporting the grid number as if the
+  agent got 600× faster.
+
 ## 3. The tuning playbook
 
 Order: **profile → JIT & loops → memory & precision → parallelize → data
