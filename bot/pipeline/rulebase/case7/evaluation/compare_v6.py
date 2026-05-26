@@ -33,7 +33,8 @@ class EpisodeStats:
 
 
 def _run_episode(v7_seat: int, seed: int) -> EpisodeStats:
-    from env.orbit_wars import make_orbit_wars_env
+    from orbit_wars_sim import make_orbit_wars_env
+
     from pipeline.rulebase.case6.baseline import agent as agent_v6
     from pipeline.rulebase.case7.baseline import agent as agent_v7
 

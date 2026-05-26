@@ -33,8 +33,7 @@ import pytest
 from orbit_wars_jax.observation import state_to_obs
 from orbit_wars_jax.reset import reset
 from orbit_wars_jax.step import empty_actions, step
-
-from env.orbit_wars import make_orbit_wars_env
+from orbit_wars_sim import make_orbit_wars_env
 
 # Float32 representation error budget for planet xy after N steps.
 # Empirically <1e-4 across 5 seeds × 49 steps (no comets yet).

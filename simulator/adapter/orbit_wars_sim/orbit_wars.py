@@ -15,7 +15,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from utils.repo_root import find_repo_root
+# This module lives at simulator/adapter/orbit_wars_sim/orbit_wars.py, so the
+# simulator/ root (sibling dirs rust/, python/, jax/) is three parents up. We
+# locate it relative to __file__ to stay independent of the bot/ package tree.
+_SIMULATOR_DIR = Path(__file__).resolve().parents[2]
 
 _PYTHON_BACKEND_ENV = "ORBIT_WARS_BACKEND"
 _PYTHON_BACKEND_VALUE = "python"
@@ -26,10 +29,9 @@ def _want_python_backend() -> bool:
 
 
 def _ensure_simulator_path() -> None:
-    repo_root = find_repo_root(Path(__file__))
     paths = [
-        repo_root / "simulator" / "rust" / "python",
-        repo_root / "simulator" / "python",
+        _SIMULATOR_DIR / "rust" / "python",
+        _SIMULATOR_DIR / "python",
     ]
     for path in paths:
         s = str(path)

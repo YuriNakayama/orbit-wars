@@ -16,7 +16,7 @@ from typing import Any
 
 def capture_observation(seed: int, turn: int, *, agents: int = 2) -> dict[str, Any]:
     """Reset orbit_wars and step `turn + 1` no-op turns; return the latest obs."""
-    from env.orbit_wars import make_orbit_wars_env
+    from orbit_wars_sim import make_orbit_wars_env
 
     env = make_orbit_wars_env(agents=agents, seed=seed)
     no_op_actions: list[list[Any]] = [[] for _ in range(agents)]

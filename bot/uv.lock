@@ -2727,6 +2727,7 @@ dependencies = [
     { name = "numpy" },
     { name = "optax" },
     { name = "orbit-wars-jax" },
+    { name = "orbit-wars-sim" },
     { name = "orbit-wars-vendor" },
     { name = "pandas" },
     { name = "polars" },
@@ -2788,6 +2789,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "optax", specifier = ">=0.2.0" },
     { name = "orbit-wars-jax", editable = "../simulator/jax" },
+    { name = "orbit-wars-sim", editable = "../simulator/adapter" },
     { name = "orbit-wars-vendor", editable = "../simulator/python" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "polars", specifier = ">=1.39.0" },
@@ -2851,6 +2853,20 @@ requires-dist = [
     { name = "jaxlib", specifier = ">=0.4.30" },
     { name = "numpy" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.4" }]
+
+[[package]]
+name = "orbit-wars-sim"
+version = "0.1.0"
+source = { editable = "../simulator/adapter" }
+dependencies = [
+    { name = "kaggle-environments" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "kaggle-environments" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3.4" }]

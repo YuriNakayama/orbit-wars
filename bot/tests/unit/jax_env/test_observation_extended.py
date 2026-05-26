@@ -12,8 +12,7 @@ from typing import Any
 
 from orbit_wars_jax.observation import state_to_obs
 from orbit_wars_jax.reset import reset
-
-from env.orbit_wars import make_orbit_wars_env
+from orbit_wars_sim import make_orbit_wars_env
 
 
 def _vendor_obs(seed: int, turns: int = 0) -> dict[str, Any]:
