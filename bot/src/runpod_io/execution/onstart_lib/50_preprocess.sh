@@ -82,7 +82,10 @@ if [[ "<PREPROCESS_CMD>" == *"parquet_to_npy"* ]]; then
     mkdir -p /persist/uv-venv-bot
     find /persist/uv-venv-bot -mindepth 1 -delete 2>/dev/null || true
     ln -sfn /persist/uv-venv-bot bot/.venv
-    if ! uv sync --frozen --no-dev --directory bot; then
+    # この recovery は parquet_to_npy preprocess (imitation family) 経路のみ。
+    # 40_uv_and_dvc_pull.sh と同じく GPU torch (cu124) で復元する。bare sync
+    # だと default group の CPU torch に戻り、step40 の cu124 を打ち消す。
+    if ! uv sync --frozen --no-dev --no-default-groups --extra torch-cu124 --directory bot; then
       echo "[onstart] uv sync recovery FAILED" >&2
       mark "55_parquet_to_npy_failed"
       exit 1
