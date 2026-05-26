@@ -35,6 +35,9 @@ from jax_env.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax_full import (
+    compute_actions_jax as _baseline_jax_full_actions,
+)
 
 from ..policy.featurizer_jax import (
     HistoryStateJax,
@@ -53,10 +56,12 @@ NUM_AGENTS_MAX = 4  # jax_env's NUM_AGENTS_MAX
 # opponent_mode constants — kept int to stay scan/vmap friendly.
 OPPONENT_NOOP: int = 0
 OPPONENT_BASELINE_JAX_LITE: int = 1
+OPPONENT_BASELINE_JAX_FULL: int = 2
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
     "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
+    "baseline_jax_full": OPPONENT_BASELINE_JAX_FULL,
 }
 
 
@@ -228,12 +233,23 @@ def _rollout_one_env(
 
         # Opponent row (seat 1-seat). For noop we leave the -1 sentinels
         # already written by sampled_action_to_env_actions. For
-        # baseline_jax_lite we compute its (L, 3) row and splice it in.
+        # baseline_jax_{lite,full} we compute its (L, 3) row and splice it in.
         opp_seat = jnp.int32(1) - jnp.int32(seat)
-        opp_baseline_actions = _baseline_jax_actions(state, 1 - seat)  # (L, 3)
+        opp_lite_actions = _baseline_jax_actions(state, 1 - seat)  # (L, 3)
+        opp_full_actions = _baseline_jax_full_actions(state, 1 - seat)  # (L, 3)
+        # Dispatch: 0 → noop (env_actions unchanged), 1 → lite, 2 → full.
+        opp_actions = jax.lax.switch(
+            jnp.clip(opponent_mode, 0, 2),
+            [
+                lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
+                lambda: opp_lite_actions,
+                lambda: opp_full_actions,
+            ],
+        )
+        # Splice into env_actions row for opponent seat only when not noop.
         env_actions = jax.lax.cond(
-            opponent_mode == OPPONENT_BASELINE_JAX_LITE,
-            lambda ea: ea.at[opp_seat].set(opp_baseline_actions),
+            opponent_mode != OPPONENT_NOOP,
+            lambda ea: ea.at[opp_seat].set(opp_actions),
             lambda ea: ea,
             env_actions,
         )
