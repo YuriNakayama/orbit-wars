@@ -69,7 +69,13 @@ print(json.dumps(out))
 echo "[onstart] cuda probe: ${CUDA_SMOKE_OUT}"
 if ! echo "${CUDA_SMOKE_OUT}" | grep -q '"smoke_ok": true'; then
   echo "[onstart] CUDA smoke failed; force-reinstalling torch with cu118 wheel"
-  bot/.venv/bin/pip install --quiet --force-reinstall \
+  # uv 管理 venv には pip バイナリが無い (bot/.venv/bin/pip 不在) ため、
+  # `pip install` 直叩きは "No such file or directory" で死ぬ
+  # (run 20260526-15xxxx で観測)。uv pip install --python <venv python> で
+  # 同じ venv に対し pip 相当の install を行う。--reinstall-package torch が
+  # pip の --force-reinstall 相当。cu118 wheel は sm_50-sm_90 を網羅し、
+  # RunPod の cu124 image driver でも CUDA を認識する。
+  uv pip install --python bot/.venv/bin/python --reinstall-package torch \
     --index-url https://download.pytorch.org/whl/cu118 \
     torch || {
       echo "[onstart] FATAL: torch cu118 reinstall failed" >&2
