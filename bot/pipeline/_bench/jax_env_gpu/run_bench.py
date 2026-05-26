@@ -100,9 +100,8 @@ def _bench_jax(episodes: int, vmap: int, seed: int = 0) -> BenchResult:
     """JAX env with vmap=N. Uses the current default backend (cpu / gpu)."""
     import jax
     import jax.numpy as jnp
-
-    from jax_env.reset import reset
-    from jax_env.step import empty_actions, step
+    from orbit_wars_jax.reset import reset
+    from orbit_wars_jax.step import empty_actions, step
 
     device = jax.default_backend()
     actions = empty_actions()
@@ -191,7 +190,7 @@ def _install_cuda_jax() -> None:
 def _reload_jax() -> Any:
     """Reload jax + dependent modules so cuda plugin is picked up."""
     for mod in list(sys.modules):
-        if mod == "jax" or mod.startswith(("jax.", "jaxlib", "jax_env.")):
+        if mod == "jax" or mod.startswith(("jax.", "jaxlib", "orbit_wars_jax.")):
             sys.modules.pop(mod, None)
     return importlib.import_module("jax")
 

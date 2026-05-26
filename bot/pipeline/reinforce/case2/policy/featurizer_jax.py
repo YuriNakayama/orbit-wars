@@ -35,13 +35,12 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-
-from jax_env.constants import (
+from orbit_wars_jax.constants import (
     BOARD_SIZE,
     CENTER,
     ROTATION_RADIUS_LIMIT,
 )
-from jax_env.state import EnvState
+from orbit_wars_jax.state import EnvState
 
 # Output dimensions — matches the PyTorch featurizer in featurizer.py.
 PLANET_FEAT_DIM = 41

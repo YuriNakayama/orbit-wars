@@ -21,6 +21,7 @@ dependencies = [
     "dvc[s3]>=3.55",
     "vastai>=0.3.0",
     "orbit-wars-vendor",
+    "orbit-wars-jax",
     "runpod>=1.7.0",
     "psutil>=6.0.0",
     "scikit-learn>=1.8.0",
@@ -32,6 +33,7 @@ dependencies = [
 
 [tool.uv.sources]
 orbit-wars-vendor = { path = "../simulator/python", editable = true }
+orbit-wars-jax = { path = "../simulator/jax", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/submit", "src/dataset", "src/vast", "src/runpod_io", "src/kaggle_kernel", "src/evaluation", "src/utils", "pipeline"]

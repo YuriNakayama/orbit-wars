@@ -167,7 +167,7 @@ def sampled_action_to_env_actions(
         axis=-1,
     )  # (P, 3)
     # Pad to MAX_LAUNCHES_PER_AGENT (= jax_env.MAX_PLANETS = 48).
-    from jax_env.step import MAX_LAUNCHES_PER_AGENT
+    from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
     pad_len = MAX_LAUNCHES_PER_AGENT - P
     pad = jnp.full((pad_len, 3), -1.0, dtype=jnp.float32)

@@ -25,11 +25,10 @@ _VENDOR_ROOT = Path(__file__).resolve().parents[2] / "simulator" / "python"
 if str(_VENDOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_VENDOR_ROOT))
 
+from orbit_wars_jax.reset import reset  # noqa: E402
+from orbit_wars_jax.state import EnvState  # noqa: E402
+from orbit_wars_jax.step import empty_actions, step  # noqa: E402
 from orbit_wars_vendor.orbit_wars import interpreter as vendor_interpreter  # noqa: E402
-
-from jax_env.reset import reset  # noqa: E402
-from jax_env.state import EnvState  # noqa: E402
-from jax_env.step import empty_actions, step  # noqa: E402
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 logger = logging.getLogger(__name__)

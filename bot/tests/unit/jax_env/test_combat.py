@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
-
-from jax_env.combat import resolve_combat
-from jax_env.constants import (
+from orbit_wars_jax.combat import resolve_combat
+from orbit_wars_jax.constants import (
     MAX_COMETS,
     MAX_COMET_PATH_LEN,
     MAX_FLEETS,
     MAX_PLANETS,
     NUM_AGENTS_MAX,
 )
-from jax_env.state import EnvState
+from orbit_wars_jax.state import EnvState
 
 
 def _empty_state(

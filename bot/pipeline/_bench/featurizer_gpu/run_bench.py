@@ -76,7 +76,7 @@ def _reload_jax() -> Any:
     for mod in list(sys.modules):
         if (
             mod == "jax"
-            or mod.startswith(("jax.", "jaxlib", "jax_env"))
+            or mod.startswith(("jax.", "jaxlib", "orbit_wars_jax"))
             or mod.startswith("pipeline.reinforce.case1.policy.featurizer_jax")
         ):
             sys.modules.pop(mod, None)
@@ -86,8 +86,9 @@ def _reload_jax() -> Any:
 def _bench_pytorch(calls: int, seed: int) -> BenchResult:
     """PyTorch baseline: warm up + measure mean per-call wall-clock."""
     # Local imports so this module stays import-light.
-    from jax_env.observation import state_to_obs
-    from jax_env.reset import reset
+    from orbit_wars_jax.observation import state_to_obs
+    from orbit_wars_jax.reset import reset
+
     from pipeline.reinforce.case1.policy.featurizer import (
         HistoryState,
         featurize,
@@ -119,7 +120,8 @@ def _bench_jax(calls: int, vmap: int, seed: int) -> BenchResult:
     import jax.numpy as jnp
 
     # Reload so we pick up cuda jax if it was just installed.
-    from jax_env.reset import reset
+    from orbit_wars_jax.reset import reset
+
     from pipeline.reinforce.case1.policy.featurizer_jax import (
         featurize_jax_w1,
         init_history_jax,
