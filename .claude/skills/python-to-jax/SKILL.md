@@ -25,6 +25,30 @@ under `bot/pipeline/reinforce/case1`), and every port is anchored by a **parity
 test** that compares the JAX output to the Python original. That test is the
 contract — write it first, port until it passes.
 
+## First, check the port can actually pay off (throughput, not latency)
+
+JAX/GPU wins **throughput** — many independent units (episodes, boards,
+candidates) computed in parallel under one `vmap`. It does **not** win
+**latency**: a single small computation (one agent turn, one short function
+call) runs *slower* on GPU than in Python, because the fixed per-call dispatch +
+host↔device transfer cost exceeds the work. Measured in this repo: the same
+intercept solver hit **681× on a batched (24×24) grid** but **0.18× (5.6×
+slower)** when called per-turn inside a rule-based agent's `act()` — a ~6 ms
+workload that GPU offload can't beat (the dispatch alone costs more).
+
+So before porting *for speed*, ask: **is there a batch axis to amortize over?**
+- RL rollouts / self-play (many episodes), training steps (minibatches),
+  evaluating a board over many candidates at once → **yes, port it**, the vmap
+  axis is the win.
+- A single rule-based turn, an interactive request, any one-shot sub-10 ms call
+  with no batch dimension → **GPU can't help**; porting may slow it down. Port
+  only if it feeds a batched consumer, and benchmark the *consumer's* unit
+  (see `references/benchmark-and-tune.md` §2), not the function in isolation.
+
+Porting for *correctness/reuse* (sharing a kernel with the JAX env, enabling
+autodiff) can still be worth it without a speed win — just don't claim a speedup
+that the usage pattern can't deliver.
+
 ## The core loop (TDD)
 
 The user picked TDD for a reason: a JAX port that "looks right" but silently
