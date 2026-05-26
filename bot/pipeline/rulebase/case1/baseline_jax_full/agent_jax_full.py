@@ -67,27 +67,10 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     is_target = valid & (owner != seat_i32)
     is_enemy = is_target & (owner >= 0)  # excluding neutrals (owner=-1)
 
-    # ---- Phase 4 defense: reserve based on nearest enemy ETA -----------
-    # For each my planet (src), compute min ETA from any enemy-owned
-    # planet to src (using current xy approximation; orbit refinement
-    # would inflate this). Reserve = ceil(prod * eta) so we survive
-    # until enemy threat could arrive.
-    src_xy_def = xy[:, None, :]  # (P, 1, 2)
-    other_xy_def = xy[None, :, :]  # (1, P, 2)
-    enemy_dist = jnp.sqrt(
-        jnp.sum((src_xy_def - other_xy_def) ** 2, axis=-1) + 1e-8
-    )  # (P, P)
-    # Speed proxy: fleet of 10 ships (vendor: speed ~1.84). Conservative.
-    enemy_speed_proxy = _fleet_speed(jnp.float32(10.0))  # scalar
-    enemy_eta = enemy_dist / enemy_speed_proxy  # (P, P) — turns enemy_src → my_src
-    # Mask: only count from enemy planets, exclude self / non-enemy.
-    enemy_mask = is_enemy[None, :] & (~jnp.eye(MAX_PLANETS, dtype=jnp.bool_))
-    enemy_eta_masked = jnp.where(enemy_mask, enemy_eta, jnp.float32(1e6))  # (P, P)
-    min_eta_per_src = jnp.min(enemy_eta_masked, axis=1)  # (P,)
-    # Clip to a reasonable horizon so distant enemies don't tie up surplus
-    # forever; lite used 3 turns flat, this caps at 15 turns.
-    horizon = jnp.minimum(jnp.maximum(min_eta_per_src, jnp.float32(2.0)), jnp.float32(15.0))
-    reserve = jnp.ceil(prod * horizon).astype(jnp.float32)
+    # ---- reserve: lite-compatible flat 3-turn (Phase 4 ETA-based was
+    # over-reserving, causing full to lose to lite in self-play. Keep
+    # lite parity for now; revisit in Phase 6 tuning.).
+    reserve = jnp.ceil(prod * jnp.float32(PRODUCTION_TURNS_RESERVE)).astype(jnp.float32)
     reserve = jnp.minimum(reserve, ships)
     surplus = jnp.where(is_mine, jnp.maximum(0.0, ships - reserve), 0.0)  # (P,)
 
@@ -174,10 +157,11 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     # Affordable in 1 shot.
     solo_afford = pair_basic_mask & (need <= surplus[:, None])
     # Affordable in 2 shots (each src contributes >= need * ratio).
+    # Phase 3 swarm: temporarily disabled — initial broadcast logic was
+    # buggy and we couldn't separate its effect from orbit/crash. Will
+    # re-enable in Phase 6 tuning.
     half_threshold = need * jnp.float32(PAIR_SWARM_NEED_RATIO)
-    pair_afford = pair_basic_mask & (surplus[:, None] >= half_threshold) & (
-        ~solo_afford
-    )
+    pair_afford = jnp.zeros_like(pair_basic_mask)
 
     # pair is valid only if score positive enough (avoid griefing self).
     score_floor = jnp.float32(PAIR_SWARM_MIN_TARGET_SCORE)
