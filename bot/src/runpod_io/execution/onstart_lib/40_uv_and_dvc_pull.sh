@@ -21,9 +21,22 @@ if [ -L bot/.venv ]; then
   echo "[onstart] removing stale /persist symlink bot/.venv -> $(readlink bot/.venv)"
   rm -f bot/.venv
 fi
+# torch build を family で選ぶ:
+# - imitation/smoke: GPU torch (cu124) を torch-cu124 extra で入れる。default
+#   group の torch-cpu は --no-default-groups で外す (extra と排他のため)。
+#   これで RunPod image (cu1241) と一致し、cu118 fallback が不要になる。
+# - reinforce: torch は CPU build (default group torch-cpu) で可。GPU は JAX が
+#   担い、cuda group (cudnn 9.8) は後段 line ~430 で別途 sync する。cu124 extra
+#   は cuda group と cudnn 衝突するので絶対に入れない。
+if [ "<CASE_FAMILY>" = "reinforce" ]; then
+  UV_SYNC_ARGS="--frozen --no-dev --directory bot"
+else
+  UV_SYNC_ARGS="--frozen --no-dev --no-default-groups --extra torch-cu124 --directory bot"
+fi
+echo "[onstart] uv sync args: ${UV_SYNC_ARGS}"
 UV_SYNC_START=$(date +%s)
 for attempt in 1 2 3; do
-  if uv sync --frozen --no-dev --directory bot; then
+  if uv sync ${UV_SYNC_ARGS}; then
     break
   fi
   echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
@@ -42,6 +55,13 @@ if ! bot/.venv/bin/python -c "import pyarrow, torch, numpy, sklearn" 2>&1; then
   exit 1
 fi
 
+# torch GPU smoke + cu118 fallback は **非 reinforce family のみ**。
+# reinforce は torch を CPU build (default group torch-cpu) で入れ、GPU 計算は
+# JAX が担うため、torch.cuda.is_available()=false は正常。ここで cu118 reinstall
+# を走らせると cuda group と cudnn が衝突し env を壊すので絶対に実行しない。
+# 非 reinforce (imitation/smoke) は torch-cu124 extra で cu124 build を入れて
+# いるので通常 available=true。万一 cu130 等にズレた場合のみ fallback が効く。
+if [ "<CASE_FAMILY>" != "reinforce" ]; then
 # 2026-05-22 retry #17 fix: uv sync で installed される torch wheel が
 # cu13 (CUDA 13.x driver 要求) になるケースを A100-SXM4-80GB pod で観測。
 # RunPod の pytorch image (cu1241=CUDA 12.4.1) は driver 12.4 のため
@@ -97,6 +117,9 @@ print(json.dumps(out))
     echo "[onstart] FATAL: GPU unusable after cu118 reinstall" >&2
     exit 1
   fi
+fi
+else
+  echo "[onstart] torch CUDA smoke SKIP (reinforce family: torch=CPU, GPU は JAX)"
 fi
 
 mark "40_uv_sync_done"

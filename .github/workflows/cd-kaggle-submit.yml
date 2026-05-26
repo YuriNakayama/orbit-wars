@@ -47,7 +47,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --dev
 
       - name: Verify competition access
         run: uv run kaggle competitions list --group entered
