@@ -24,7 +24,7 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) competition 
 ```
 bot/                    Python implementation (pyproject.toml / uv.lock live here)
   src/                  Shared dev libs (submit, dataset, vast, runpod_io, kaggle_kernel, evaluation, utils)
-  pipeline/             Agent families (rulebase / imitation / reinforce) + _bench/ (dev-only benchmarks)
+  pipeline/             Agent families only: rulebase / imitation / reinforce (reinforce/_bench は dev-only ベンチ)
   tests/                Pytest unit tests
 simulator/              Orbit Wars simulator backends + adapter (bot 非依存の純粋シミュレータ層)
   python/               Apache-2.0 vendored copy of kaggle_environments/envs/orbit_wars (orbit_wars_vendor)

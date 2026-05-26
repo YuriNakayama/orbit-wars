@@ -7,7 +7,7 @@ we want to verify with cProfile before committing to JAX env integration.
 
 Usage::
 
-    cd bot && uv run python -m pipeline._bench.profile_rollout --episodes 4
+    cd bot && uv run python -m pipeline.reinforce._bench.profile_rollout --episodes 4
 
 Outputs:
 - cProfile pstats dump to stdout (top 30 by cumulative time)
@@ -31,8 +31,8 @@ import yaml
 from torch import optim
 
 # Mirror train.py imports.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from pipeline.reinforce.case1.policy.model import (  # noqa: E402
     ActorCritic,
@@ -94,7 +94,7 @@ def main(
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    cfg_path = Path(__file__).resolve().parents[2] / config
+    cfg_path = Path(__file__).resolve().parents[3] / config
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
     train_cfg = cfg["training"]

@@ -7,7 +7,7 @@ Runs as a RunPod onstart "train" stage. Measures wall-clock for:
     vmap=1/16/32/64)
 
 Writes `bench_results.json` to the run dir. Mirrors the structure of
-`pipeline/_bench/jax_env_gpu/run_bench.py` so the onstart artifacts
+`pipeline/reinforce/_bench/jax_env_gpu/run_bench.py` so the onstart artifacts
 uploader and `dev/runpod pull` flow already work.
 """
 

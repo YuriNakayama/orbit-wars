@@ -2,9 +2,9 @@
 
 Usage::
 
-    uv run python -m pipeline._bench.bench_jax_env vendor --episodes 16 --seed 0
-    uv run python -m pipeline._bench.bench_jax_env jax --episodes 16 --vmap 1
-    uv run python -m pipeline._bench.bench_jax_env jax --episodes 16 --vmap 16
+    uv run python -m pipeline.reinforce._bench.bench_jax_env vendor --episodes 16
+    uv run python -m pipeline.reinforce._bench.bench_jax_env jax --episodes 16 --vmap 1
+    uv run python -m pipeline.reinforce._bench.bench_jax_env jax --episodes 16 --vmap 16
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import typer
 
 # Vendor sim path.
-_VENDOR_ROOT = Path(__file__).resolve().parents[3] / "simulator" / "python"
+_VENDOR_ROOT = Path(__file__).resolve().parents[4] / "simulator" / "python"
 if str(_VENDOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_VENDOR_ROOT))
 

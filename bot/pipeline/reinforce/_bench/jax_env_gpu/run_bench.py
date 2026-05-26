@@ -47,7 +47,7 @@ class BenchResult:
 
 def _vendor_root() -> Path:
     """Path to simulator/python (added to sys.path lazily)."""
-    return Path(__file__).resolve().parents[4] / "simulator" / "python"
+    return Path(__file__).resolve().parents[5] / "simulator" / "python"
 
 
 def _ensure_vendor_on_path() -> None:

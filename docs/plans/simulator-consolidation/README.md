@@ -25,7 +25,8 @@ simulator/                  ← bot 非依存の純粋シミュレータ層
 
 bot/
   src/        submit / dataset / vast / runpod_io / kaggle_kernel / evaluation / utils
-  pipeline/   rulebase / imitation / reinforce / _bench (★旧 bot/scripts を吸収)
+  pipeline/   rulebase / imitation / reinforce ← 3 family のみ
+    reinforce/_bench/   ★dev-only ベンチ (旧 bot/scripts + 旧 pipeline/_bench を吸収)
   tests/
 ```
 

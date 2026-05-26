@@ -6,7 +6,7 @@ delivers a real speedup without round-tripping through full rollouts.
 
 Usage::
 
-    cd bot && uv run python -m pipeline._bench.bench_featurizer --iters 200
+    cd bot && uv run python -m pipeline.reinforce._bench.bench_featurizer --iters 200
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pipeline.reinforce.case1.policy.featurizer import HistoryState, featurize
 app = typer.Typer(add_completion=False)
 
 _FIXTURE_OBS = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "tests/unit/pipeline/reinforce/case1/fixtures/featurize_parity_obs.pkl"
 )
 _DEFAULT_ITERS = typer.Option(200, help="Iterations per turn for averaging.")

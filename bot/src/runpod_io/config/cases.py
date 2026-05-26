@@ -407,7 +407,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
     "bench_jax_env_gpu": {
         "family": "reinforce",
         "stage": "bench_jax_env_gpu",
-        "train_module": "pipeline._bench.jax_env_gpu.run_bench",
+        "train_module": "pipeline.reinforce._bench.jax_env_gpu.run_bench",
         "config_arg": "",
         "preprocess_cmd": "",
         "canonical_weights": "",
@@ -420,7 +420,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
     "bench_featurizer_gpu": {
         "family": "reinforce",
         "stage": "bench_featurizer_gpu",
-        "train_module": "pipeline._bench.featurizer_gpu.run_bench",
+        "train_module": "pipeline.reinforce._bench.featurizer_gpu.run_bench",
         "config_arg": "",
         "preprocess_cmd": "",
         "canonical_weights": "",
@@ -431,7 +431,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
     "bench_rollout_gpu": {
         "family": "reinforce",
         "stage": "bench_rollout_gpu",
-        "train_module": "pipeline._bench.rollout_gpu.run_bench",
+        "train_module": "pipeline.reinforce._bench.rollout_gpu.run_bench",
         "config_arg": "",
         "preprocess_cmd": "",
         "canonical_weights": "",

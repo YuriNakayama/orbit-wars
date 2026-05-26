@@ -1,6 +1,6 @@
 """GPU bench for the W4 JAX rollout (end-to-end featurize + forward + env).
 
-Mirrors `pipeline/_bench/featurizer_gpu/run_bench.py` so the RunPod
+Mirrors `pipeline/reinforce/_bench/featurizer_gpu/run_bench.py` so the RunPod
 onstart artifact uploader picks it up unchanged. Measures wall-clock
 for full rollouts at horizons {50, 200, 500} and episode counts {1, 16}
 on:
