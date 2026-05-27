@@ -179,11 +179,11 @@ def _bench_act(seed: int) -> list[dict[str, object]]:
     def time_backend(backend: str) -> float:
         os.environ["ORBIT_WARS_AIM_BACKEND"] = backend
         # warm-up (jit compile for jax) — not timed
-        setattr(agent_mod, "_OM_STATE", agent_mod.om.OMState())
+        agent_mod._OM_STATE = agent_mod.om.OMState()
         agent_mod.agent(obs_snapshots[0])
         per_turn = []
         for obs in obs_snapshots:
-            setattr(agent_mod, "_OM_STATE", agent_mod.om.OMState())
+            agent_mod._OM_STATE = agent_mod.om.OMState()
             t0 = time.perf_counter()
             agent_mod.agent(obs)
             per_turn.append(time.perf_counter() - t0)

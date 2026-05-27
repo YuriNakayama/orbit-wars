@@ -24,7 +24,6 @@ import importlib
 
 import jax.numpy as jnp
 import pytest
-
 from orbit_wars_jax.observation import state_to_obs
 from orbit_wars_jax.reset import reset
 from orbit_wars_jax.step import empty_actions, step
