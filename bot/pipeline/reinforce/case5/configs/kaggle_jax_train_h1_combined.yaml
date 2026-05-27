@@ -1,0 +1,66 @@
+# reinforce/case5 — support_reward H1 (ship+planet 同時併用差分 shaping)
+#
+# case5 = case3 のレシピを丸ごと継承 (case3 自体は case2 から from_head 除去)。
+# 本 config は kaggle_jax_train.yaml (確立 baseline) をベースに、報酬 shaping を
+# ship 差分と planet 差分の **同時併用** に切り替えた H1 検証用。
+#
+# 差分点 (baseline = kaggle_jax_train.yaml との比較):
+#   - shaping_mode: planets → combined
+#   - coef_planet: 0.50   (= baseline の planets 単体 shaping_coef、現 best を温存)
+#   - coef_ship:   0.001  (ship 差分を微量追加。ship は production で絶対値が大きいため小係数)
+#   shaping_coef は combined モードでは未使用 (coef_ship/coef_planet が支配)。
+#
+# 仮説: 領域支配 (planet) と戦力 (ship) の両状態を同時に密フィードバックすると
+#       収束速度・最終性能が向上する。両項とも turn 差分 → potential-based を維持。
+#
+# 期待: baseline (planets 単体 0.50, last-10 ~0.50, trend +0.305) に対し
+#       last-10 +3pp 以上 もしくは trend 明確改善 で採用。
+#
+# wall-clock 見積: RunPod RTX 3090/4090 cu12 ~3h。VRAM 24GB+ 必須 (A4000 16GB は OOM)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 200
+  episodes_per_iter: 128
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50      # combined では未使用 (legacy ships/planets 用)
+  shaping_mode: combined  # H1: ship Δ と planet Δ を個別係数で同時加算
+  coef_ship: 0.001        # ship 差分係数 (production スケールを考慮し小さめ)
+  coef_planet: 0.50       # planet 差分係数 (= baseline planets 単体 best)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case5_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
