@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from env.orbit_wars import make_orbit_wars_env
-from jax_env.observation import state_to_obs
-from jax_env.reset import reset
+from orbit_wars_jax.observation import state_to_obs
+from orbit_wars_jax.reset import reset
+from orbit_wars_sim import make_orbit_wars_env
 
 
 def _vendor_obs(seed: int, turns: int = 0) -> dict[str, Any]:

@@ -27,11 +27,11 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.state import EnvState
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
+from orbit_wars_jax.step import step as jax_env_step
 
-from jax_env.reset import reset
-from jax_env.state import EnvState
-from jax_env.step import MAX_LAUNCHES_PER_AGENT
-from jax_env.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )

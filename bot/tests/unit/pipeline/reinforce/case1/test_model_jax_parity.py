@@ -18,9 +18,9 @@ import jax
 import numpy as np
 import pytest
 import torch
+from orbit_wars_jax.observation import state_to_obs
+from orbit_wars_jax.reset import reset
 
-from jax_env.observation import state_to_obs
-from jax_env.reset import reset
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
     featurize,

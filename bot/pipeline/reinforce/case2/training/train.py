@@ -86,7 +86,7 @@ def _mark_progress(step: str) -> None:
     if not os.environ.get("RUNPOD_POD_ID"):
         return
     try:
-        from runpod_io.execution.progress import write_progress_marker
+        from gpu.runpod.execution.progress import write_progress_marker
 
         write_progress_marker(step)
     except Exception as exc:  # noqa: BLE001

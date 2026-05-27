@@ -24,10 +24,9 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-
-from jax_env.constants import MAX_PLANETS
-from jax_env.state import EnvState
-from jax_env.step import MAX_LAUNCHES_PER_AGENT
+from orbit_wars_jax.constants import MAX_PLANETS
+from orbit_wars_jax.state import EnvState
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
 # Vendor constants — replicated to avoid pulling in the Python sim.
 # These match `simulator/python/orbit_wars_vendor/orbit_wars.py`.

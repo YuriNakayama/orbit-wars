@@ -23,4 +23,4 @@
 # the marker timeline after completion.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec uv run --directory bot python -m runpod_io "$@"
+exec uv run --directory bot python -m gpu.runpod "$@"

@@ -2676,6 +2676,8 @@ dependencies = [
     { name = "kaggle-environments" },
     { name = "numpy" },
     { name = "optax" },
+    { name = "orbit-wars-jax" },
+    { name = "orbit-wars-sim" },
     { name = "orbit-wars-vendor" },
     { name = "pandas" },
     { name = "polars" },
@@ -2745,6 +2747,8 @@ requires-dist = [
     { name = "kaggle-environments", specifier = ">=1.17.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "optax", specifier = ">=0.2.0" },
+    { name = "orbit-wars-jax", editable = "../simulator/jax" },
+    { name = "orbit-wars-sim", editable = "../simulator/adapter" },
     { name = "orbit-wars-vendor", editable = "../simulator/python" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "polars", specifier = ">=1.39.0" },
@@ -2794,6 +2798,40 @@ lint = [
     { name = "types-requests", specifier = ">=2.32.0.20250913" },
 ]
 torch-cpu = [{ name = "torch", specifier = ">=2.3.0,<3", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "orbit-wars", group = "torch-cpu" } }]
+
+[[package]]
+name = "orbit-wars-jax"
+version = "0.1.0"
+source = { editable = "../simulator/jax" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jax", specifier = ">=0.4.30" },
+    { name = "jaxlib", specifier = ">=0.4.30" },
+    { name = "numpy" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.4" }]
+
+[[package]]
+name = "orbit-wars-sim"
+version = "0.1.0"
+source = { editable = "../simulator/adapter" }
+dependencies = [
+    { name = "kaggle-environments" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "kaggle-environments" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.4" }]
 
 [[package]]
 name = "orbit-wars-vendor"

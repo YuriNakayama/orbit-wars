@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 import torch
+from orbit_wars_sim import make_orbit_wars_env
 
-from env.orbit_wars import make_orbit_wars_env
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
     featurize,

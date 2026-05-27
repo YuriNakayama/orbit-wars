@@ -12,11 +12,11 @@ import logging
 import jax
 import jax.numpy as jnp
 import typer
+from orbit_wars_jax.constants import NUM_AGENTS_MAX
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
+from orbit_wars_jax.step import step as jax_env_step
 
-from jax_env.constants import NUM_AGENTS_MAX
-from jax_env.reset import reset
-from jax_env.step import MAX_LAUNCHES_PER_AGENT
-from jax_env.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as lite_actions,
 )

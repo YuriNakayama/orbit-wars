@@ -21,11 +21,11 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from orbit_wars_jax.observation import state_to_obs
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.state import EnvState
+from orbit_wars_jax.step import empty_actions, step
 
-from jax_env.observation import state_to_obs
-from jax_env.reset import reset
-from jax_env.state import EnvState
-from jax_env.step import empty_actions, step
 from pipeline.reinforce.case1.policy.featurizer import (
     HistoryState,
     featurize,

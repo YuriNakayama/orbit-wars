@@ -23,7 +23,8 @@ class EpisodeStats:
 
 def _run_one(args: tuple[int, int, bool]) -> tuple[int, int, int | None, int]:
     """Worker entry: (v9_seat, seed, no_anti) -> (v9_seat, seed, winner, turns)."""
-    from env.orbit_wars import make_orbit_wars_env
+    from orbit_wars_sim import make_orbit_wars_env
+
     from pipeline.rulebase.case4.baseline import agent as agent_v4
     from pipeline.rulebase.case9.baseline import agent as agent_v9
     from pipeline.rulebase.case9.baseline.core import config as cfg

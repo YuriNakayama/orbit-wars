@@ -27,8 +27,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-
-from jax_env.constants import CENTER, ROTATION_RADIUS_LIMIT
+from orbit_wars_jax.constants import CENTER, ROTATION_RADIUS_LIMIT
 
 
 def predict_planet_xy(

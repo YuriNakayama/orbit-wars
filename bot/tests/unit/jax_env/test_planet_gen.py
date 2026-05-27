@@ -12,11 +12,10 @@ _VENDOR_ROOT = Path(__file__).resolve().parents[4] / "simulator" / "python"
 if str(_VENDOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_VENDOR_ROOT))
 
+from orbit_wars_jax.planet_gen import generate_planets  # noqa: E402
 from orbit_wars_vendor.orbit_wars import (  # noqa: E402
     generate_planets as vendor_generate_planets,
 )
-
-from jax_env.planet_gen import generate_planets  # noqa: E402
 
 
 @pytest.mark.parametrize("seed", list(range(100)))

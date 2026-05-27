@@ -30,6 +30,15 @@ if [ -d "$ROOT_DIR/simulator/python" ]; then
   (cd "$ROOT_DIR/simulator/python" && uv run pytest orbit_wars_vendor/tests -q)
 fi
 
+# simulator/jax (orbit_wars_jax) and simulator/adapter (orbit_wars_sim) have no
+# standalone test dirs — their behavior is covered by bot/tests (jax_env parity
+# + adapter-backed integration). Smoke-import them to catch a broken editable
+# install early.
+if [ -d "$ROOT_DIR/simulator/jax" ] || [ -d "$ROOT_DIR/simulator/adapter" ]; then
+  echo "== simulator/{jax,adapter}: import smoke =="
+  (cd "$ROOT_DIR/bot" && uv run python -c "import orbit_wars_jax.step, orbit_wars_sim; print('orbit_wars_jax + orbit_wars_sim import OK')")
+fi
+
 if [ -d "$ROOT_DIR/simulator/rust" ] && command -v cargo >/dev/null 2>&1; then
   echo "== simulator/rust: cargo test =="
   # extension-module feature must be off when cargo links a test binary.

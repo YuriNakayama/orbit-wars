@@ -17,7 +17,7 @@ import typer
 import yaml
 from torch.utils.data import DataLoader
 
-from evaluation.metrics import (
+from evaluate.metrics import (
     FromArrays,
     ShipsArrays,
     TargetArrays,

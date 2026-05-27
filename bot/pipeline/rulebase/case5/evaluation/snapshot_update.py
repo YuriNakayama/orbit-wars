@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from evaluation.snapshot_update import capture_observation, write_snapshot
+from evaluate.snapshot_update import capture_observation, write_snapshot
 from pipeline.rulebase.case5.baseline import agent as baseline_agent
 from utils.repo_root import find_repo_root
 

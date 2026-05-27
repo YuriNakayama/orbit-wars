@@ -19,6 +19,11 @@ _VENDOR_ROOT = Path(__file__).resolve().parents[4] / "simulator" / "python"
 if str(_VENDOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_VENDOR_ROOT))
 
+from orbit_wars_jax.geometry import (  # noqa: E402
+    distance,
+    point_to_segment_distance,
+    swept_pair_hit,
+)
 from orbit_wars_vendor.orbit_wars import (  # noqa: E402
     distance as vendor_distance,
 )
@@ -27,12 +32,6 @@ from orbit_wars_vendor.orbit_wars import (  # noqa: E402
 )
 from orbit_wars_vendor.orbit_wars import (  # noqa: E402
     swept_pair_hit as vendor_swept,
-)
-
-from jax_env.geometry import (  # noqa: E402
-    distance,
-    point_to_segment_distance,
-    swept_pair_hit,
 )
 
 

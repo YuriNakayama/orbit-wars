@@ -92,7 +92,7 @@ def _wrap_with_timing(agent: Any, timings: list[float]) -> Any:
 
 def run_one_match(spec: MatchSpec) -> tuple[dict[str, Any], bytes | None]:
     """Run a single match and return (record_dict, gzipped_replay_or_none)."""
-    from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
+    from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
     num_agents = len(spec.agents)
     config: dict[str, Any] = {"agents": num_agents, "seed": spec.seed}

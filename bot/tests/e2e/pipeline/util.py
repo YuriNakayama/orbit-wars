@@ -7,7 +7,7 @@ import random
 from collections.abc import Callable
 from typing import Any
 
-from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
+from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
 __all__ = [
     "assert_agent_runs_against_random_to_done",

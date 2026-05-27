@@ -58,6 +58,7 @@ __pycache__/
 .pytest_cache
 .ruff_cache
 .coverage
+.coverage.*
 .mypy_cache
 backend/tests/coverage/
 
