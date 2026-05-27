@@ -504,9 +504,19 @@ def _cell_train(ctx: RenderContext, run_dir: str, dataset_mount: str) -> str:
 
 
 def _cell_collect_artifacts(ctx: RenderContext, run_dir: str) -> str:
+    # The train cell sets ORBIT_WARS_RUN_DIR=run_dir, so train_jax/train write
+    # directly into `run_dir` (= /kaggle/working/runs/<id>). This cell is a
+    # belt-and-suspenders fallback that also pulls anything a case wrote under
+    # its config-default tree (data/output/models/<family>/<subdir>/runs/<id>).
+    # The family/subdir must be resolved per-case — hardcoding `imitation`
+    # silently dropped reinforce artifacts. case_family/case_subdir are pure
+    # lookups over the shared CASE_DEFAULTS registry.
+    from gpu.runpod.config.cases import case_family, case_subdir  # noqa: PLC0415
+
+    family = case_family(ctx.case)
+    subdir = case_subdir(ctx.case)
     src = (
-        f"/tmp/orbit-wars-repo/data/output/models/imitation/"
-        f"{ctx.case}/runs/{ctx.run_id}/"
+        f"/tmp/orbit-wars-repo/data/output/models/{family}/{subdir}/runs/{ctx.run_id}/"
     )
     return (
         "# cell E: collect artifacts into run_dir\n"

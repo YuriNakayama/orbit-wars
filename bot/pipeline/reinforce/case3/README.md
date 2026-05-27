@@ -57,51 +57,37 @@ pipeline/reinforce/case3/
 │   ├── types.py             BatchFeatures / WorldSnapshot
 │   └── weights.pt           学習済み重み (DVC 管理)
 ├── training/                開発用 (.submitignore)
-│   ├── env.py               OrbitWarsEpisode + shaping
-│   ├── rollout.py           GAE + on-policy buffer
-│   ├── ppo.py               clipped surrogate + KL(BC) anchor
-│   └── train.py             typer CLI
-├── configs/
-│   ├── smoke.yaml           4 iter × 4 ep smoke (opponent=random_noop)
-│   └── train.yaml           50 iter × 8 ep 本番 (opponent=baseline_v1)
+│   ├── env.py               OrbitWarsEpisode + shaping (PyTorch 経路)
+│   ├── rollout.py / ppo.py / train.py   PyTorch PPO (legacy、parity 参照用)
+│   └── *_jax.py             JAX PPO (本番経路、下記「JAX 化」参照)
+├── configs/                 *_jax.yaml が現役。kaggle_jax_train.yaml が canonical
 └── evaluation/eval_vs_baseline.py
 ```
 
-## 学習レシピ
+> 学習レシピの実値は本番 config `configs/kaggle_jax_train.yaml` を唯一の正とする
+> (上記「継承した工夫」表と一致)。`smoke.yaml` / `train.yaml` 等の PyTorch config
+> は legacy parity 用で、値が異なる。
 
-| 項目 | 値 |
-|------|-----|
-| BC 重み | `data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt` |
-| lr | 1e-4 (BC repr 保護のため case0 の 3e-4 より低め) |
-| γ / λ | 0.99 / 0.95 |
-| clip_eps | 0.2 |
-| entropy_coef | 0.003 (BC prior が良いので低め) |
-| **kl_beta** | **0.1** (frozen BC reference との KL anchor) |
-| ppo_epochs | 4 |
-| shaping_coef | 0.001 × Δ(my_ships − enemy_ships) |
-| 報酬 | terminal ±1 + shaping |
-| opponent | smoke は `random_noop`、本番は `baseline_v1` → self-play へ curriculum 予定 |
-
-## 手順
+## 手順 (JAX 学習、本番)
 
 ```bash
 cd bot
 
-# 1) BC 重み取得 (初回のみ)
-cd .. && uv run --project bot dvc pull data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0.dvc
-cd bot
+# 1) CPU smoke で配線確認 (1 iter × 4 ep × 50 step)
+uv run python -m pipeline.reinforce.case3.training.train_jax \
+    --config pipeline/reinforce/case3/configs/train_jax_smoke.yaml
 
-# 2) smoke training
-uv run python -m pipeline.reinforce.case3.training.train
+# 2) 本番学習は RunPod GPU で (kaggle_jax_train.yaml = 200 iter)
+git push origin <branch>
+dev/runpod train "$(git rev-parse HEAD)" --case case3 --watch
 
-# 3) 重みを canonical 位置にコピー
-cp data/output/models/reinforce/case3/runs/local_*/best.pt \
-   pipeline/reinforce/case3/policy/weights.pt
-
-# 4) 評価 (vs baseline_v1, 100 戦)
+# 3) 評価 (vs baseline, 100 戦)
 uv run python -m pipeline.reinforce.case3.evaluation.eval_vs_baseline \
     --episodes 100 --baseline baseline_v1
 ```
+
+> JAX `best.pt` は npz 形式。PyTorch inference (`policy/agent.py`) への再ロードは
+> 未対応 (follow-up)。PyTorch 経路で学習する場合のみ `training/train.py` を使う。
 
 agent registry: `rl_v3` として `bot/src/dataset/selfplay/agents.py` に登録。
 
