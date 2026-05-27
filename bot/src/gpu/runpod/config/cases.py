@@ -422,6 +422,31 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case6: PFSP (Prioritized Fictitious Self-Play). case3 の学習
+    # レシピを継承しつつ対戦相手構成のみ変更。H1 = curriculum late を
+    # self_snapshot に差し替え、学習開始時点の凍結 self snapshot と自己対戦。
+    "reinforce_case6_kaggle_jax_train_h1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
+    # the self_snapshot opponent path launches and collects artifacts on RunPod).
+    "reinforce_case6_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.

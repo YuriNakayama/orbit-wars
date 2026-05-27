@@ -39,7 +39,11 @@ training:
   minibatch_size: 256
   max_grad_norm: 0.5
   target_kl: null
-  opponent: baseline_jax_lite
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 2  # smoke: exercise both noop early and self_snapshot late
+    early: noop
+    late: self_snapshot
 
 output:
   run_dir: data/output/models/reinforce/case6_train_jax/runs
