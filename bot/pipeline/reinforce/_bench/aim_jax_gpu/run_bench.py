@@ -48,8 +48,15 @@ def _make_planets(n: int, seed: int) -> list[Planet]:
 
     rng = random.Random(seed)
     return [
-        Planet(i, 1, rng.uniform(15, 85), rng.uniform(15, 85),
-               rng.uniform(1.0, 3.0), rng.randint(1, 400), 1)
+        Planet(
+            i,
+            1,
+            rng.uniform(15, 85),
+            rng.uniform(15, 85),
+            rng.uniform(1.0, 3.0),
+            rng.randint(1, 400),
+            1,
+        )
         for i in range(n)
     ]
 
@@ -66,9 +73,7 @@ def _python_grid(srcs: list[Planet], tgts: list[Planet]) -> int:
     return hits
 
 
-def _build_jax_arrays(
-    srcs: list[Planet], tgts: list[Planet]
-) -> tuple[jax.Array, ...]:
+def _build_jax_arrays(srcs: list[Planet], tgts: list[Planet]) -> tuple[jax.Array, ...]:
     sx = jnp.array([[s.x] for s in srcs], dtype=jnp.float32)
     sy = jnp.array([[s.y] for s in srcs], dtype=jnp.float32)
     sr = jnp.array([[s.radius] for s in srcs], dtype=jnp.float32)
@@ -88,9 +93,21 @@ def _jax_runner() -> jax.stages.Wrapped:
     grid_fn = jax.vmap(
         jax.vmap(
             lambda sx, sy, sr, tx, ty, tr, sh: aim_with_prediction_jax(
-                sx, sy, sr, tx, ty, tx, ty, tr, tr, sh,
-                jnp.float32(ANG_VEL), jnp.int32(HORIZON),
-                no_comet, jnp.int32(0), jnp.int32(0),
+                sx,
+                sy,
+                sr,
+                tx,
+                ty,
+                tx,
+                ty,
+                tr,
+                tr,
+                sh,
+                jnp.float32(ANG_VEL),
+                jnp.int32(HORIZON),
+                no_comet,
+                jnp.int32(0),
+                jnp.int32(0),
             )
         )
     )
@@ -145,9 +162,7 @@ def main(seed: int = typer.Option(0)) -> None:
     for r in act_results:
         logger.info("act result: %s", r)
 
-    run_dir = Path(
-        "data/output/models/reinforce/aim_jax_gpu/runs"
-    )
+    run_dir = Path("data/output/models/reinforce/aim_jax_gpu/runs")
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / "bench_results.json"
     out_path.write_text(json.dumps(results, indent=2))

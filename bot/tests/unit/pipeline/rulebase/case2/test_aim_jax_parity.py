@@ -65,12 +65,21 @@ def test_aim_parity_noncomet(seed: int) -> None:
             src, target, ships, initial_by_id, ang_vel, comets=[], comet_ids=set()
         )
         angle, turns, ix, iy, valid = aim_with_prediction_jax(
-            jnp.float32(src.x), jnp.float32(src.y), jnp.float32(src.radius),
-            jnp.float32(target.x), jnp.float32(target.y),
-            jnp.float32(target.x), jnp.float32(target.y), jnp.float32(target.radius),
-            jnp.float32(target.radius), jnp.int32(ships),
-            jnp.float32(ang_vel), jnp.int32(HORIZON),
-            jnp.array(_NO_COMET, dtype=jnp.float32), jnp.int32(0), jnp.int32(0),
+            jnp.float32(src.x),
+            jnp.float32(src.y),
+            jnp.float32(src.radius),
+            jnp.float32(target.x),
+            jnp.float32(target.y),
+            jnp.float32(target.x),
+            jnp.float32(target.y),
+            jnp.float32(target.radius),
+            jnp.float32(target.radius),
+            jnp.int32(ships),
+            jnp.float32(ang_vel),
+            jnp.int32(HORIZON),
+            jnp.array(_NO_COMET, dtype=jnp.float32),
+            jnp.int32(0),
+            jnp.int32(0),
         )
         jax_valid = bool(valid)
         if (py is None) != (not jax_valid):
@@ -137,15 +146,25 @@ def test_aim_parity_comet(seed: int) -> None:
         py = aim_with_prediction(
             src, target, ships, initial_by_id, ang_vel, comets, comet_ids
         )
-        path_arr, path_index, path_len = resolve_comet_path(target.id, comets, comet_ids)
+        path_arr, path_index, path_len = resolve_comet_path(
+            target.id, comets, comet_ids
+        )
         angle, turns, ix, iy, valid = aim_with_prediction_jax(
-            jnp.float32(src.x), jnp.float32(src.y), jnp.float32(src.radius),
-            jnp.float32(target.x), jnp.float32(target.y),
-            jnp.float32(target.x), jnp.float32(target.y), jnp.float32(target.radius),
-            jnp.float32(target.radius), jnp.int32(ships),
-            jnp.float32(ang_vel), jnp.int32(HORIZON),
+            jnp.float32(src.x),
+            jnp.float32(src.y),
+            jnp.float32(src.radius),
+            jnp.float32(target.x),
+            jnp.float32(target.y),
+            jnp.float32(target.x),
+            jnp.float32(target.y),
+            jnp.float32(target.radius),
+            jnp.float32(target.radius),
+            jnp.int32(ships),
+            jnp.float32(ang_vel),
+            jnp.int32(HORIZON),
             jnp.array(path_arr, dtype=jnp.float32),
-            jnp.int32(path_index), jnp.int32(path_len),
+            jnp.int32(path_index),
+            jnp.int32(path_len),
         )
         jax_valid = bool(valid)
         if (py is None) != (not jax_valid):

@@ -43,9 +43,7 @@ def _run_agent_fresh(agent_mod: object, obs: dict, backend: str, monkeypatch) ->
 
 @pytest.mark.parametrize("seed", [0, 1, 5])
 def test_agent_identity_python_vs_jax(seed: int, monkeypatch) -> None:
-    agent_mod = importlib.import_module(
-        "pipeline.rulebase.case2.baseline.agent"
-    )
+    agent_mod = importlib.import_module("pipeline.rulebase.case2.baseline.agent")
 
     state = reset(seed=seed, num_agents=2)
     n_steps = 12

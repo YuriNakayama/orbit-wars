@@ -206,17 +206,32 @@ def _search_safe_intercept_jax(
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         # Lead position at the candidate (fractional) turn.
         px, py, pos_ok = _predict_position(
-            t_curx, t_cury, t_initx, t_inity, t_initr, ang_vel, cand,
-            comet_path, path_index, path_len,
+            t_curx,
+            t_cury,
+            t_initx,
+            t_inity,
+            t_initr,
+            ang_vel,
+            cand,
+            comet_path,
+            path_index,
+            path_len,
         )
         angle, turns, ok = estimate_arrival_jax(sx, sy, sr, px, py, tr, ships)
         # |turns - cand| <= tol gate.
         consistent = jnp.abs(turns.astype(jnp.float32) - cand) <= INTERCEPT_TOLERANCE
         actual_turns = jnp.maximum(turns, jnp.ceil(cand).astype(jnp.int32))
         apx, apy, apos_ok = _predict_position(
-            t_curx, t_cury, t_initx, t_inity, t_initr, ang_vel,
+            t_curx,
+            t_cury,
+            t_initx,
+            t_inity,
+            t_initr,
+            ang_vel,
             actual_turns.astype(jnp.float32),
-            comet_path, path_index, path_len,
+            comet_path,
+            path_index,
+            path_len,
         )
         cangle, cturns, cok = estimate_arrival_jax(sx, sy, sr, apx, apy, tr, ships)
         delta = jnp.abs(cturns - actual_turns).astype(jnp.float32)
@@ -287,8 +302,16 @@ def aim_with_prediction_jax(
         live = ~done
         # predict_target_position at current est turns; comet may return None.
         px, py, pos_ok = _predict_position(
-            t_curx, t_cury, t_initx, t_inity, t_initr, ang_vel,
-            e_turns.astype(jnp.float32), comet_path, path_index, path_len,
+            t_curx,
+            t_cury,
+            t_initx,
+            t_inity,
+            t_initr,
+            ang_vel,
+            e_turns.astype(jnp.float32),
+            comet_path,
+            path_index,
+            path_len,
         )
         # Python: `if pos is None: return None` — terminal failure for this step.
         new_pos_failed = pos_failed | (live & ~pos_ok)
@@ -310,7 +333,13 @@ def aim_with_prediction_jax(
             done | (live & ~pos_ok) | (active & converged) | (live & pos_ok & ~n_ok)
         )
         return (
-            out_tx, out_ty, out_ang, out_turns, new_done, new_fellback, new_pos_failed
+            out_tx,
+            out_ty,
+            out_ang,
+            out_turns,
+            new_done,
+            new_fellback,
+            new_pos_failed,
         ), None
 
     init = (t_curx, t_cury, angle0, turns0, ~ok0, ~ok0, jnp.bool_(False))
@@ -320,8 +349,21 @@ def aim_with_prediction_jax(
 
     # Sweep fallback result (always computed; used when ~ok0 or fellback).
     s_ang, s_turns, s_ix, s_iy, s_valid = _search_safe_intercept_jax(
-        sx, sy, sr, t_curx, t_cury, t_initx, t_inity, t_initr, tr, ships, ang_vel,
-        max_turns, comet_path, path_index, path_len,
+        sx,
+        sy,
+        sr,
+        t_curx,
+        t_cury,
+        t_initx,
+        t_inity,
+        t_initr,
+        tr,
+        ships,
+        ang_vel,
+        max_turns,
+        comet_path,
+        path_index,
+        path_len,
     )
 
     use_sweep = (~ok0) | fellback

@@ -464,7 +464,9 @@ class WorldModel:
         # When the JAX backend is active, `warm_capture_probes()` fills this in
         # one batched vmap so the O(P^2) capture-probe `plan_shot` calls become
         # cache hits instead of P^2 individual jit dispatches.
-        self._aim_cache: dict[tuple[int, int, int], tuple[float, int, float, float] | None] = {}
+        self._aim_cache: dict[
+            tuple[int, int, int], tuple[float, int, float, float] | None
+        ] = {}
 
         (
             self.reserve,
@@ -603,7 +605,9 @@ class WorldModel:
     def source_attack_left(self, source_id: int, spent_total: dict[int, int]) -> int:
         return max(0, self.available.get(source_id, 0) - spent_total[source_id])
 
-    def _pure_probe_ships(self, src: Planet, target: Planet, src_available: int) -> set[int]:
+    def _pure_probe_ships(
+        self, src: Planet, target: Planet, src_available: int
+    ) -> set[int]:
         """All (src,target)-pure probe-ship counts the missions request.
 
         These are the probe sizes computable from turn-start state alone (no
@@ -659,10 +663,14 @@ class WorldModel:
         paths: list[list[list[float]]] = []
         keys: list[tuple[int, int, int]] = []
         for src in self.my_planets:
-            src_available = self.available.get(src.id, 0)  # spent_total empty at turn start
+            src_available = self.available.get(
+                src.id, 0
+            )  # spent_total empty at turn start
             if src_available <= 0:
                 continue
-            init_cache: dict[int, tuple[float, float, float, int, list[list[float]], int, int]] = {}
+            init_cache: dict[
+                int, tuple[float, float, float, int, list[list[float]], int, int]
+            ] = {}
             for target in self.planets:
                 if target.id == src.id or target.owner == self.player:
                     continue
@@ -671,11 +679,14 @@ class WorldModel:
                     init = self.initial_by_id.get(tid)
                     ix = float(init.x) if init is not None else float(target.x)
                     iy = float(init.y) if init is not None else float(target.y)
-                    ir = float(init.radius) if init is not None else float(target.radius)
+                    ir = (
+                        float(init.radius) if init is not None else float(target.radius)
+                    )
                     max_turns = HORIZON
                     if tid in self.comet_ids:
                         max_turns = min(
-                            max_turns, max(0, comet_remaining_life(tid, self.comets) - 1)
+                            max_turns,
+                            max(0, comet_remaining_life(tid, self.comets) - 1),
                         )
                         path_arr, pidx, plen = resolve_comet_path(
                             tid, self.comets, self.comet_ids
@@ -690,9 +701,19 @@ class WorldModel:
                         continue
                     rows.append(
                         (
-                            float(src.x), float(src.y), float(src.radius),
-                            float(target.x), float(target.y), ix, iy, ir,
-                            float(target.radius), ships, max_turns, pidx, plen,
+                            float(src.x),
+                            float(src.y),
+                            float(src.radius),
+                            float(target.x),
+                            float(target.y),
+                            ix,
+                            iy,
+                            ir,
+                            float(target.radius),
+                            ships,
+                            max_turns,
+                            pidx,
+                            plen,
                         )
                     )
                     paths.append(path_arr)

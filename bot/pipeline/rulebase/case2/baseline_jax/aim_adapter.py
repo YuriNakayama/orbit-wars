@@ -62,13 +62,21 @@ def aim_jax(
         max_turns = min(max_turns, max(0, comet_remaining_life(target.id, comets) - 1))
 
     angle, turns, ix, iy, valid = _jitted_aim(
-        jnp.float32(src.x), jnp.float32(src.y), jnp.float32(src.radius),
-        jnp.float32(target.x), jnp.float32(target.y),
-        jnp.float32(init_x), jnp.float32(init_y), jnp.float32(init_r),
-        jnp.float32(target.radius), jnp.int32(ships),
-        jnp.float32(ang_vel), jnp.int32(max_turns),
+        jnp.float32(src.x),
+        jnp.float32(src.y),
+        jnp.float32(src.radius),
+        jnp.float32(target.x),
+        jnp.float32(target.y),
+        jnp.float32(init_x),
+        jnp.float32(init_y),
+        jnp.float32(init_r),
+        jnp.float32(target.radius),
+        jnp.int32(ships),
+        jnp.float32(ang_vel),
+        jnp.int32(max_turns),
         jnp.asarray(path_arr, dtype=jnp.float32),
-        jnp.int32(path_index), jnp.int32(path_len),
+        jnp.int32(path_index),
+        jnp.int32(path_len),
     )
     if not bool(valid):
         return None
@@ -109,8 +117,21 @@ def aim_jax_grid(
     plen = jnp.asarray([r[12] for r in rows], dtype=jnp.int32)
     paths_arr = jnp.asarray(paths, dtype=jnp.float32)
     angle, turns, ix, iy, valid = _grid_aim(
-        sx, sy, sr, tcx, tcy, ix0, iy0, ir, tr, ships,
-        jnp.float32(ang_vel), max_turns, paths_arr, pidx, plen,
+        sx,
+        sy,
+        sr,
+        tcx,
+        tcy,
+        ix0,
+        iy0,
+        ir,
+        tr,
+        ships,
+        jnp.float32(ang_vel),
+        max_turns,
+        paths_arr,
+        pidx,
+        plen,
     )
     out: list[tuple[float, int, float, float] | None] = []
     for i in range(len(rows)):
