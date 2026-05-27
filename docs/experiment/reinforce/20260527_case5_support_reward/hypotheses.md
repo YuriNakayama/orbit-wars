@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case5 support_reward
 
 > 作成日: 2026-05-27
-> 最終更新: 2026-05-27
+> 最終更新: 2026-05-28 (iter1 analysis 完了)
 > 状態: in_progress
 > 最大 iteration: リスト消化まで (deepen も許可)
 > 主要メトリクス: 合成指標 — vs `baseline_jax_lite` の **last-10 iter 平均 win_rate** と 学習 **reward trend (右肩上がり度)** を同時評価 (収束速度 + 最終性能)
@@ -50,7 +50,7 @@ report shaping 以外の変更は本 case では行わない。
 
 ## 仮説リスト (priority 順)
 
-- [ ] (P1) H1: ship 差分と planet 差分を **同時併用** shaping (`coef_ship·Δship + coef_planet·Δplanet`) — 現状は排他二択。両領域の状態を同時に密フィードバック。potential-based を保ちバイアス無し。
+- [x] (P1) H1: ship 差分と planet 差分を **同時併用** shaping (`coef_ship·Δship + coef_planet·Δplanet`) — 現状は排他二択。両領域の状態を同時に密フィードバック。potential-based を保ちバイアス無し。 — **inconclusive (trend は adopted 寄り)** (iter1: lite phase last-10 0.549 / trend +0.376, baseline 比 +~5pp。max approx_kl 0.0055 で安定、200 iter 完走。n<300 で確定保留)
 - [ ] (P1) H2: 保持「**割合**」差分 shaping (potential = `mine/(mine+enemy)` を ship・planet で算出し、その turn 差分を報酬) — 絶対数の production スケール依存を排し [0,1] 正規化で係数調整が容易。
 - [ ] (P2, depends on H1) H4: 併用時の `coef_ship : coef_planet` **比率 sweep** (例 0.5:0.5 / 0.25:0.75 / 0.75:0.25) — planets=0.50 単体が現 best なので ship 成分の最適追加量を探る。H1 採用が前提。
 - [ ] (P2) H5: **production potential** 補助 (保有惑星の production 合計の差分を shaping) — 単なる惑星数より高 production 惑星の保持を評価。territorial 信号の質向上。
@@ -64,7 +64,7 @@ report shaping 以外の変更は本 case では行わない。
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
-| 1 | 2026-05-27T15:16Z | H1 | iter1_plan.md | 20260527-151636__feature-support-reward__2f37b9e__seed0 | last-10 0.549 / trend +0.376 (lite phase) | inconclusive (trend は adopted 寄り) | iter1_result.md (analysis 未実施) |
+| 1 | 2026-05-27T15:16Z | H1 | iter1_plan.md | 20260527-151636__feature-support-reward__2f37b9e__seed0 | last-10 0.549 / trend +0.376 (lite phase) | inconclusive (trend は adopted 寄り) | iter1_result.md (analysis: 学習ログ baseで実施、replay skip) |
 
 ## 参考 (References)
 
