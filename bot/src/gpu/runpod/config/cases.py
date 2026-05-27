@@ -447,6 +447,31 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # bench_baseline_jax_gpu: GPU bench for the rulebase/case2 baseline_jax
+    # numeric port (geometry/physics). Times the Python scalar-loop original
+    # vs JAX (cpu wheel) vs JAX (GPU after jax[cuda12]) across a vmap batch
+    # sweep. Same family/onstart shape as the other bench_*_gpu cases so the
+    # artifacts uploader and `dev/runpod pull` work unchanged.
+    "bench_baseline_jax_gpu": {
+        "family": "reinforce",
+        "stage": "bench_baseline_jax_gpu",
+        "train_module": "pipeline.reinforce._bench.baseline_jax_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # bench_aim_jax_gpu: GPU bench for the case2 intercept solver — both the
+    # (src,target) grid vmap (vs Python double loop) AND the act()-level turn
+    # time (Python vs JAX aim backend, on jax_env obs). Same onstart shape as
+    # the other bench_*_gpu cases.
+    "bench_aim_jax_gpu": {
+        "family": "reinforce",
+        "stage": "bench_aim_jax_gpu",
+        "train_module": "pipeline.reinforce._bench.aim_jax_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
