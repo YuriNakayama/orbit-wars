@@ -64,6 +64,7 @@ report shaping 以外の変更は本 case では行わない。
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
+| 1 | 2026-05-27T15:16Z | H1 | iter1_plan.md | 20260527-151636__feature-support-reward__2f37b9e__seed0 | last-10 0.549 / trend +0.376 (lite phase) | inconclusive (trend は adopted 寄り) | iter1_result.md (analysis 未実施) |
 
 ## 参考 (References)
 
