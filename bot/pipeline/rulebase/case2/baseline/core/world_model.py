@@ -603,15 +603,46 @@ class WorldModel:
     def source_attack_left(self, source_id: int, spent_total: dict[int, int]) -> int:
         return max(0, self.available.get(source_id, 0) - spent_total[source_id])
 
-    def warm_capture_probes(self) -> None:
-        """Batch-solve the capture-probe (src,target) grid in ONE vmap and seed
-        `_aim_cache`. Speed-only: any cache miss (e.g. a probe-ship formula that
-        diverges from this estimate) simply falls through to a per-call solve in
-        `plan_shot`, so this can never change behavior — only the hot O(P^2)
-        probe sweep's dispatch count (P^2 individual jit calls -> one).
+    def _pure_probe_ships(self, src: Planet, target: Planet, src_available: int) -> set[int]:
+        """All (src,target)-pure probe-ship counts the missions request.
 
-        Only meaningful under the JAX backend; under Python it would just
-        pre-populate the same dict at no benefit, so it no-ops there.
+        These are the probe sizes computable from turn-start state alone (no
+        dependence on a prior plan_shot result), drawn from the capture / harass
+        / snipe / crash probe formulas. Final/send shot sizes depend on probe
+        results and are NOT enumerable here — they fall through to per-call.
+        Over-enumerating is harmless: extra entries just seed the speed-only
+        cache (see warm_probes), never change behavior.
+        """
+        from .config import HARASS_MIN_TARGET_SHIPS, PARTIAL_SOURCE_MIN_SHIPS
+
+        t_ships = int(target.ships)
+        s_ships = int(src.ships)
+        out: set[int] = set()
+        # capture.rough_ships
+        out.add(max(1, min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS, t_ships + 1))))
+        # harass.probe
+        out.add(max(t_ships + 2, HARASS_MIN_TARGET_SHIPS + 2))
+        # snipe.probe
+        out.add(min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS, t_ships + 8)))
+        # crash_exploit.probe
+        out.add(min(max(PARTIAL_SOURCE_MIN_SHIPS, 12), s_ships))
+        return {s for s in out if s >= 1}
+
+    def warm_probes(self) -> None:
+        """Batch-solve every (src,target)-pure probe shot in ONE vmap and seed
+        `_aim_cache`. This is the batch-first consumer pattern: enumerate the
+        whole probe domain up front, solve it in a single vmap'd kernel, then let
+        the missions read results from the cache — instead of dispatching one
+        jitted call per (src,target,ships).
+
+        Speed-only and behavior-preserving: the cache returns exactly what a
+        per-call `plan_shot` would, and any size the missions request that we did
+        NOT pre-seed (the data-dependent final/send shots) simply falls through
+        to a per-call solve. So over- or under-enumeration changes throughput,
+        never the agent's decisions.
+
+        JAX backend only; no-op under Python (it would pre-fill the same dict at
+        no benefit).
         """
         import os
 
@@ -623,8 +654,6 @@ class WorldModel:
         )
         from pipeline.rulebase.case2.baseline_jax.aim_jax import resolve_comet_path
 
-        from .config import PARTIAL_SOURCE_MIN_SHIPS
-
         zeros_path = [[0.0, 0.0] for _ in range(MAX_COMET_PATH_LEN)]
         rows: list[tuple[float, ...]] = []
         paths: list[list[list[float]]] = []
@@ -633,40 +662,43 @@ class WorldModel:
             src_available = self.available.get(src.id, 0)  # spent_total empty at turn start
             if src_available <= 0:
                 continue
+            init_cache: dict[int, tuple[float, float, float, int, list[list[float]], int, int]] = {}
             for target in self.planets:
                 if target.id == src.id or target.owner == self.player:
                     continue
-                # Replicates capture.py's rough_ships formula exactly.
-                rough_ships = max(
-                    1,
-                    min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS, int(target.ships) + 1)),
-                )
-                key = (src.id, target.id, rough_ships)
-                if key in self._aim_cache:
-                    continue
-                init = self.initial_by_id.get(target.id)
-                ix = float(init.x) if init is not None else float(target.x)
-                iy = float(init.y) if init is not None else float(target.y)
-                ir = float(init.radius) if init is not None else float(target.radius)
-                max_turns = HORIZON
-                if target.id in self.comet_ids:
-                    max_turns = min(
-                        max_turns, max(0, comet_remaining_life(target.id, self.comets) - 1)
+                tid = target.id
+                if tid not in init_cache:
+                    init = self.initial_by_id.get(tid)
+                    ix = float(init.x) if init is not None else float(target.x)
+                    iy = float(init.y) if init is not None else float(target.y)
+                    ir = float(init.radius) if init is not None else float(target.radius)
+                    max_turns = HORIZON
+                    if tid in self.comet_ids:
+                        max_turns = min(
+                            max_turns, max(0, comet_remaining_life(tid, self.comets) - 1)
+                        )
+                        path_arr, pidx, plen = resolve_comet_path(
+                            tid, self.comets, self.comet_ids
+                        )
+                    else:
+                        path_arr, pidx, plen = zeros_path, 0, 0
+                    init_cache[tid] = (ix, iy, ir, max_turns, path_arr, pidx, plen)
+                ix, iy, ir, max_turns, path_arr, pidx, plen = init_cache[tid]
+                for ships in self._pure_probe_ships(src, target, src_available):
+                    key = (src.id, tid, ships)
+                    if key in self._aim_cache:
+                        continue
+                    rows.append(
+                        (
+                            float(src.x), float(src.y), float(src.radius),
+                            float(target.x), float(target.y), ix, iy, ir,
+                            float(target.radius), ships, max_turns, pidx, plen,
+                        )
                     )
-                    path_arr, pidx, plen = resolve_comet_path(
-                        target.id, self.comets, self.comet_ids
-                    )
-                else:
-                    path_arr, pidx, plen = zeros_path, 0, 0
-                rows.append(
-                    (
-                        float(src.x), float(src.y), float(src.radius),
-                        float(target.x), float(target.y), ix, iy, ir,
-                        float(target.radius), rough_ships, max_turns, pidx, plen,
-                    )
-                )
-                paths.append(path_arr)
-                keys.append(key)
+                    paths.append(path_arr)
+                    keys.append(key)
+        if not rows:
+            return
         results = aim_jax_grid(rows, paths, self.ang_vel)
         for key, res in zip(keys, results, strict=True):
             self._aim_cache[key] = res
