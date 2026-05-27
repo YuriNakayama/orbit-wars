@@ -1,6 +1,6 @@
 """GPU bench for the rulebase/case2 JAX core port (geometry / physics).
 
-Mirrors `pipeline/_bench/rollout_gpu/run_bench.py` so the RunPod onstart
+Mirrors `pipeline/reinforce/_bench/rollout_gpu/run_bench.py` so the RunPod onstart
 artifact uploader picks it up unchanged (anything under `_bench/<name>_gpu/`).
 
 What it measures
