@@ -128,24 +128,43 @@ def _planet_count_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.A
 SHAPING_MODE_SHIPS: int = 0
 SHAPING_MODE_PLANETS: int = 1
 SHAPING_MODE_COMBINED: int = 2  # H1: ship Δ と planet Δ を個別係数で同時加算
+SHAPING_MODE_RATIO: int = 3  # H2: 保持割合 mine/(mine+enemy) の Δ を shaping
 SHAPING_MODE_NAME_TO_INT: dict[str, int] = {
     "ships": SHAPING_MODE_SHIPS,
     "planets": SHAPING_MODE_PLANETS,
     "combined": SHAPING_MODE_COMBINED,
+    "ratio": SHAPING_MODE_RATIO,
 }
 
+_RATIO_EPS: float = 1e-6
 
-def _shaping_diffs(state: EnvState, seat: int) -> tuple[jax.Array, jax.Array]:
-    """Return (Δship, Δplanet) = (mine-enemy) for both signals.
 
-    Both are computed unconditionally (cheap) so the combined mode can
-    carry two independent potentials. Single-signal modes zero out the
-    unused coefficient (see `_shaping_coefs`) and stay bit-identical to
-    the legacy single-diff behavior.
+def _shaping_potentials(
+    state: EnvState, seat: int, shaping_mode: int
+) -> tuple[jax.Array, jax.Array]:
+    """Return (Φ_ship, Φ_planet) potentials for the configured mode.
+
+    - ships / planets / combined → diff potential (mine - enemy)
+    - ratio (H2)                 → retention ratio mine/(mine+enemy)
+
+    Both signals are computed unconditionally (cheap) and carried
+    independently so each mode keeps two separate potentials → the
+    per-turn shaping reward = c_ship·ΔΦ_ship + c_planet·ΔΦ_planet stays
+    potential-based (PBRS) for every mode. Legacy modes are bit-identical
+    because `_shaping_coefs` zeroes the unused coefficient.
     """
     ship_my, ship_en = _ship_totals(state, seat)
     plt_my, plt_en = _planet_count_totals(state, seat)
-    return ship_my - ship_en, plt_my - plt_en
+    diff_ship = ship_my - ship_en
+    diff_plt = plt_my - plt_en
+    ratio_ship = ship_my / (ship_my + ship_en + _RATIO_EPS)
+    ratio_plt = plt_my / (plt_my + plt_en + _RATIO_EPS)
+    out: tuple[jax.Array, jax.Array] = jax.lax.cond(
+        shaping_mode == SHAPING_MODE_RATIO,
+        lambda: (ratio_ship, ratio_plt),
+        lambda: (diff_ship, diff_plt),
+    )
+    return out
 
 
 def _shaping_coefs(
@@ -154,25 +173,27 @@ def _shaping_coefs(
     coef_ship: float,
     coef_planet: float,
 ) -> tuple[jax.Array, jax.Array]:
-    """Resolve (c_ship, c_planet) so reward = c_ship·Δship + c_planet·Δplanet.
+    """Resolve (c_ship, c_planet) so reward = c_ship·ΔΦ_ship + c_planet·ΔΦ_planet.
 
-    - ships    → (shaping_coef, 0)   (legacy: only ship diff)
-    - planets  → (0, shaping_coef)   (legacy: only planet diff)
-    - combined → (coef_ship, coef_planet)  (H1: both signals)
+    - ships    → (shaping_coef, 0)            (legacy: only ship diff)
+    - planets  → (0, shaping_coef)            (legacy: only planet diff)
+    - combined → (coef_ship, coef_planet)     (H1: both diff signals)
+    - ratio    → (shaping_coef, shaping_coef) (H2: both ratio signals, equal weight)
 
-    Unifying all three modes into one additive form keeps the scan body
-    a single trace and makes the legacy modes provably equivalent.
+    Unifying all modes into one additive form keeps the scan body a single
+    trace and makes the legacy modes provably equivalent.
     """
     c_ship = jnp.float32(coef_ship)
     c_planet = jnp.float32(coef_planet)
     c_coef = jnp.float32(shaping_coef)
     zero = jnp.float32(0.0)
     out: tuple[jax.Array, jax.Array] = jax.lax.switch(
-        jnp.clip(shaping_mode, 0, 2),
+        jnp.clip(shaping_mode, 0, 3),
         [
             lambda: (c_coef, zero),  # ships
             lambda: (zero, c_coef),  # planets
             lambda: (c_ship, c_planet),  # combined
+            lambda: (c_coef, c_coef),  # ratio
         ],
     )
     return out
@@ -204,7 +225,7 @@ def _rollout_one_env(
 
     # Initial shaping diffs (ship and planet carried independently so the
     # combined mode keeps two separate potentials → potential-based).
-    init_ship_diff, init_plt_diff = _shaping_diffs(init_state, seat)
+    init_ship_diff, init_plt_diff = _shaping_potentials(init_state, seat, shaping_mode)
     c_ship, c_planet = _shaping_coefs(
         shaping_mode, shaping_coef, coef_ship, coef_planet
     )
@@ -312,11 +333,12 @@ def _rollout_one_env(
             state,
         )
 
-        # Shaping reward: c_ship·Δ(ship diff) + c_planet·Δ(planet diff).
-        # Ship and planet potentials are tracked independently so combined
-        # mode stays potential-based per signal (H1). Legacy ships/planets
-        # modes zero one coefficient (see _shaping_coefs) → unchanged.
-        ship_diff, plt_diff = _shaping_diffs(state_for_next, seat)
+        # Shaping reward: c_ship·ΔΦ_ship + c_planet·ΔΦ_planet, where Φ is the
+        # mode-specific potential (diff for ships/planets/combined, ratio for
+        # H2). Both potentials are tracked independently so every mode stays
+        # potential-based per signal. Legacy modes zero one coefficient
+        # (see _shaping_coefs) → bit-identical.
+        ship_diff, plt_diff = _shaping_potentials(state_for_next, seat, shaping_mode)
         shaping = c_ship * (ship_diff - prev_ship_diff) + c_planet * (
             plt_diff - prev_plt_diff
         )

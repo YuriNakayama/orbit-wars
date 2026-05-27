@@ -22,6 +22,7 @@ from pipeline.reinforce.case5.policy.model_jax import ActorCriticJax, ModelConfi
 from pipeline.reinforce.case5.training.rollout_jax import (
     SHAPING_MODE_COMBINED,
     SHAPING_MODE_PLANETS,
+    SHAPING_MODE_RATIO,
     SHAPING_MODE_SHIPS,
     _shaping_coefs,
     collect_rollout_jax,
@@ -55,6 +56,13 @@ def test_shaping_coefs_combined_mode_uses_both_explicit_coefs() -> None:
     np.testing.assert_allclose(c_planet, 0.5, rtol=1e-6)
 
 
+def test_shaping_coefs_ratio_mode_uses_shaping_coef_for_both() -> None:
+    """H2: ratio mode applies shaping_coef equally to ship and planet ratio."""
+    c_ship, c_planet = _coefs(SHAPING_MODE_RATIO, 0.5, 0.001, 0.5)
+    np.testing.assert_allclose(c_ship, 0.5, rtol=1e-6)
+    np.testing.assert_allclose(c_planet, 0.5, rtol=1e-6)
+
+
 def _tiny_model() -> ActorCriticJax:
     cfg = ModelConfigJax(
         hidden=32,
@@ -81,6 +89,27 @@ def test_combined_rollout_rewards_are_finite() -> None:
     )
     rewards = np.asarray(batch.rewards)
     assert np.all(np.isfinite(rewards)), "combined shaping produced non-finite reward"
+
+
+def test_ratio_rollout_rewards_are_finite() -> None:
+    """H2 end-to-end smoke: ratio mode must not emit NaN/inf rewards.
+
+    Ratio potentials are in [0,1] so per-turn shaping ΔΦ ∈ [-1,1]; with
+    shaping_coef=0.5 the shaping term stays bounded and finite.
+    """
+    model = _tiny_model()
+    batch = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(3),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=0.5,
+    )
+    rewards = np.asarray(batch.rewards)
+    assert np.all(np.isfinite(rewards)), "ratio shaping produced non-finite reward"
 
 
 def test_combined_with_zero_ship_coef_matches_planets_mode() -> None:

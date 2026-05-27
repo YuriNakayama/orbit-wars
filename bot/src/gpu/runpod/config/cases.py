@@ -430,7 +430,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "stage": "train_reinforce_case5_kaggle_jax_train",
         "train_module": "pipeline.reinforce.case5.training.train_jax",
         "config_arg": (
-            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h1_combined.yaml"
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h1_combined.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H2: 保持割合 mine/(mine+enemy) の Δ を shaping (ratio mode)。
+    "reinforce_case5_kaggle_jax_train_h2_ratio": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h2_ratio",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h2_ratio.yaml"
         ),
         "preprocess_cmd": "",
         "canonical_weights": "",

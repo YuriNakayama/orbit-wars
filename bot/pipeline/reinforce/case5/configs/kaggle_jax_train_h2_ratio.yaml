@@ -1,0 +1,63 @@
+# reinforce/case5 — support_reward H2 (保持割合差分 shaping)
+#
+# case5 = case3 のレシピを丸ごと継承 (case3 自体は case2 から from_head 除去)。
+# 本 config は kaggle_jax_train.yaml (確立 baseline) をベースに、報酬 shaping を
+# 保持「割合」 mine/(mine+enemy) の turn 差分に切り替えた H2 検証用。
+#
+# 差分点 (baseline = kaggle_jax_train.yaml):
+#   - shaping_mode: planets → ratio
+#   - shaping_coef: 0.50  (ratio は [0,1] 正規化なので diff 系より同係数でも効きが変わる)
+#   reward = shaping_coef · ((Δr_ship) + (Δr_planet)),  r = mine/(mine+enemy)
+#
+# 仮説: 絶対数でなく保持割合を potential にすると production スケール非依存で
+#       係数調整が容易・報酬スケールが安定し、収束/最終性能が向上する。
+#       potential-based を維持 (ship/planet 割合を 2 本独立 carry)。
+#
+# 比較対象: H1 combined (last-10 0.549 / trend +0.376)。+3pp or trend 改善で採用。
+#
+# wall-clock 見積: RunPod RTX 3090/4090 cu12 ~3h。VRAM 24GB+ 必須 (A4000 16GB は OOM)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 200
+  episodes_per_iter: 128
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50      # ratio mode では ship/planet 両割合に等しく適用
+  shaping_mode: ratio     # H2: 保持割合 mine/(mine+enemy) の Δ を shaping
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case5_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
