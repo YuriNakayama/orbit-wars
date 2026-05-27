@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import random
+from typing import Any
 
 import jax.numpy as jnp
 import pytest
@@ -109,7 +110,9 @@ def test_aim_parity_noncomet(seed: int) -> None:
     )
 
 
-def _make_comet(planet_id: int, seed: int) -> tuple[Planet, list[dict], set[int], int]:
+def _make_comet(
+    planet_id: int, seed: int
+) -> tuple[Planet, list[dict[str, Any]], set[int], int]:
     """Build a comet target + a comets list with a straight-line path.
 
     Returns (target_planet, comets, comet_ids, path_index). The target's current

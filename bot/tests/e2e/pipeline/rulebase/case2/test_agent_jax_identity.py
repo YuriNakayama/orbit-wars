@@ -21,6 +21,8 @@ and that the two never disagree on whether to act at all (empty vs non-empty).
 from __future__ import annotations
 
 import importlib
+from types import ModuleType
+from typing import Any
 
 import jax.numpy as jnp
 import pytest
@@ -29,20 +31,26 @@ from orbit_wars_jax.reset import reset
 from orbit_wars_jax.step import empty_actions, step
 
 
-def _run_agent_fresh(agent_mod: object, obs: dict, backend: str, monkeypatch) -> list:
+def _run_agent_fresh(
+    agent_mod: ModuleType,
+    obs: dict[str, Any],
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[list[int | float]]:
     """Run the agent on `obs` with a fresh OM state and the given aim backend."""
-    import os
-
     monkeypatch.setenv("ORBIT_WARS_AIM_BACKEND", backend)
-    # Reset module-global opponent-model state so the call is deterministic.
-    agent_mod._OM_STATE = agent_mod.om.OMState()  # type: ignore[attr-defined]
-    moves = agent_mod.agent(obs)  # type: ignore[attr-defined]
-    del os
+    # Reset module-global opponent-model state so the call is deterministic
+    # (via the module __dict__ — setattr trips ruff B010, direct attr trips
+    # mypy on ModuleType).
+    vars(agent_mod)["_OM_STATE"] = agent_mod.om.OMState()
+    moves = agent_mod.agent(obs)
     return [list(m) for m in moves]
 
 
 @pytest.mark.parametrize("seed", [0, 1, 5])
-def test_agent_identity_python_vs_jax(seed: int, monkeypatch) -> None:
+def test_agent_identity_python_vs_jax(
+    seed: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     agent_mod = importlib.import_module("pipeline.rulebase.case2.baseline.agent")
 
     state = reset(seed=seed, num_agents=2)
