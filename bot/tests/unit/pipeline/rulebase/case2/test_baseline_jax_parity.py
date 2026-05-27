@@ -54,6 +54,11 @@ from pipeline.rulebase.case2.baseline_jax.physics_jax import (
     travel_time_jax,
 )
 
+# JAX jit-compile heavy (geometry/physics ports + vmap batched check over 256
+# samples). Marked slow so CI's fast slice (-m "not slow") skips it; runs in the
+# full/local lane.
+pytestmark = pytest.mark.slow
+
 PARITY_TOL = 1e-4
 N_SAMPLES = 256
 

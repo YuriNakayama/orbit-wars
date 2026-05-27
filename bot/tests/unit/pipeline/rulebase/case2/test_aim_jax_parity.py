@@ -33,6 +33,11 @@ from pipeline.rulebase.case2.baseline_jax.aim_jax import (
     resolve_comet_path,
 )
 
+# JAX jit-compile heavy (lax.scan intercept solver + sweep over a parametrized
+# seed matrix) — ~20s. Marked slow so CI's fast slice (-m "not slow") skips it;
+# it runs in the full/local lane where parity is verified.
+pytestmark = pytest.mark.slow
+
 ANGLE_TOL = 1e-3
 POS_TOL = 1e-3
 _NO_COMET = [[0.0, 0.0] for _ in range(MAX_COMET_PATH_LEN)]
