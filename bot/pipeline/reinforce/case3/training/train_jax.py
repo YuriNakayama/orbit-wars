@@ -160,19 +160,21 @@ def _flatten_rollout(
 
 
 def _save_best_pt(model: ActorCriticJax, path: Path) -> None:
-    """Dump the model leaves into a numpy archive at `path`.
+    """Dump the model leaves into a numpy npz archive written at exactly `path`.
 
-    The PyTorch inference path uses `torch.load(.pt, weights_only=True)`
-    expecting a state_dict. For W5 smoke we emit the JAX leaves as a
-    numpy `.npz` and rename to `.pt` (since the runpod artifacts
-    uploader is path-string based). Inference re-loading is a follow-
-    up — out of scope for the bench wall-clock measurement.
+    The leaves are stored as an npz payload but the file keeps the caller's
+    name verbatim (e.g. `best.pt`). We must write through an open file handle:
+    `np.savez(str(path))` appends a `.npz` suffix when given a path string, so
+    `np.savez("best.pt")` would silently create `best.pt.npz` — leaving the
+    onstart artifact uploaders (which look for `best.pt`) with nothing to ship.
+    PyTorch inference re-loading of these JAX leaves is a follow-up.
     """
     leaves = eqx.filter(model, eqx.is_array)
     flat_leaves = jax.tree.leaves(leaves)
     # Just store as a dict of numpy arrays keyed by index.
     arrays = {f"leaf_{i}": np.asarray(arr) for i, arr in enumerate(flat_leaves)}
-    np.savez(str(path), **arrays)  # type: ignore[arg-type]
+    with path.open("wb") as fh:
+        np.savez(fh, **arrays)  # type: ignore[arg-type]
 
 
 def _upload_best_to_s3(best_pt: Path, iteration: int, win_rate: float) -> None:
