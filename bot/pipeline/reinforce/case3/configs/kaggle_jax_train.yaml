@@ -1,0 +1,71 @@
+# Kaggle Kernel JAX *training* config (200 iter) for reinforce/case3.
+#
+# case3 = case2 の有用な学習レシピを継承し、from_head を除去した case。
+# 目的: case2 (from_head 追加) の head 変更効果を切り分ける ablation 兼、
+# case1 純正 head + 確立済み学習レシピの統合ベースライン。
+#
+# モデル: case1 と同一の PerPlanetHead (pointer target categorical + ship_pred
+#         regression + value head)。from_head は持たない。
+#
+# 継承した「from_head 以外の有用な工夫」(case1/case2 実験で確立):
+#   - shaping_mode: planets      — ships Δ ではなく領域支配 Δ を報酬 shaping に (F)
+#   - shaping_coef: 0.50         — V' で trend 最高 (+0.145)。1.0 は over-shaping (V")
+#   - opponent: curriculum       — early=noop で勝ち体験を確立後 baseline_jax_lite へ
+#   - switch_iter: 5             — baseline 期を最大化 (H4 で optimum、trend +0.204)
+#   - lr 3e-5 → 3e-6 線形 decay   — per-update Δ 縮小で plateau 脱出 (H + D)
+#   - episodes_per_iter: 128     — sample variance を 1/2 に (S、noise floor 半減)
+#   - gamma 0.995 / entropy 0.02 / target_kl 0.02 — terminal reach・固化抑制・trust region
+#   - iterations: 200            — 長期学習。case1 Z v2 が同手法 200 iter で last-10 0.491
+#
+# 期待: case2 H6 (from_head 込み 200 iter) と本 case3 (from_head 無し) を比較し、
+#       from_head が長期学習でも last-10 を押し上げるかを純粋判定する。
+#       case1 Z v2 (head 変更なし、別 case 系列) との比較で recipe 統合効果も確認。
+#
+# wall-clock 見積: Kaggle T4x2 ~6h / RunPod RTX4090 cu12 ~3h。
+#   実験は RunPod (Kaggle 30h quota 消費済) で実施想定。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0                # seed=1 試行は seed 効果ではなく yaml 再構成が主因と判明
+  iterations: 200        # H6: 50 → 200 で長期学習。case1 Z v2 (200 iter, last-10 0.491) と同手法で 0.5 突破狙い
+  episodes_per_iter: 128 # S: 32 → 128 で sample variance を 1/2 (ノイズフロア半減)
+  horizon: 500           # J 撤回: horizon=1000 で trend +0.062 と劣化 (H+J v2 結果)。500 戻し。
+  lr: 3.0e-5             # H: 1e-4 → 3e-5 で per-update Δ 縮小、plateau 脱出余地
+  # D: lr 3e-5 → 3e-6 を 50 iter × 2 epoch × ceil(128×500/256) = 50 × 2 × 250 = 25000 updates で線形 decay
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000  # H6: 25000 → 100000 (update 数 4x、200 iter 全体で線形 decay 完走)
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95       # M 撤回: 0.90 で trend +0.075 と後退、0.95 戻し
+  shaping_coef: 0.50      # Y: V' (0.50, trend +0.145) を best として 100 iter 化。V" 1.0 は over-shaping (value_loss 0.47)
+  shaping_mode: planets   # F: ships → planets (territorial 信号、production の影響なし)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02      # G: 0.01 → 0.02 で policy 固化をさらに抑制
+  kl_beta: 0.0  # no BC reference => no KL anchor
+  ppo_epochs: 2
+  minibatch_size: 256     # N 撤回: 128 で trend +0.103 (H only +0.106 と同等)、256 戻し
+  max_grad_norm: 0.5
+  target_kl: 0.02         # G: trust region 強制、暴走防止
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5  # H6: H5 否定で H4 best (sw=5) に戻し、200 iter 長期学習に集中
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case3_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
