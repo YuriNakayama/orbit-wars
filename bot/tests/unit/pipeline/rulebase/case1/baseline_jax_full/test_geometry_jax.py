@@ -6,8 +6,8 @@ import math
 
 import jax.numpy as jnp
 import numpy as np
+from orbit_wars_jax.constants import CENTER, ROTATION_RADIUS_LIMIT
 
-from jax_env.constants import CENTER, ROTATION_RADIUS_LIMIT
 from pipeline.rulebase.case1.baseline_jax_full.geometry_jax import predict_planet_xy
 
 

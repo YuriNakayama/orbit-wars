@@ -490,7 +490,7 @@ def train(cfg: dict[str, Any]) -> TrainReport:
 
 def _write_run_json(run_dir: Path, summary: dict[str, Any], *, seed: int) -> None:
     """`<run_dir>/run.json` を case1 互換 schema で生成する。"""
-    from vast.run_meta import RunMetadata, write_run_json
+    from gpu.vast.run_meta import RunMetadata, write_run_json
 
     git_sha = os.environ.get("ORBIT_WARS_GIT_SHA") or _git_sha()
     git_branch = os.environ.get("ORBIT_WARS_GIT_BRANCH") or _git_branch_slug()

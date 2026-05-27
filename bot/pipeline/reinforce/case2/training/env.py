@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from env.orbit_wars import make_orbit_wars_env
+from orbit_wars_sim import make_orbit_wars_env
 
 OpponentAgent = Callable[[Any], list[list[int | float]]]
 

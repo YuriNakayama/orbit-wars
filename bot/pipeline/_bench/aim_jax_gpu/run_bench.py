@@ -162,9 +162,9 @@ def _bench_act(seed: int) -> list[dict[str, object]]:
     import os
     import statistics
 
-    from jax_env.observation import state_to_obs
-    from jax_env.reset import reset
-    from jax_env.step import empty_actions, step
+    from orbit_wars_jax.observation import state_to_obs
+    from orbit_wars_jax.reset import reset
+    from orbit_wars_jax.step import empty_actions, step
 
     agent_mod = importlib.import_module("pipeline.rulebase.case2.baseline.agent")
 

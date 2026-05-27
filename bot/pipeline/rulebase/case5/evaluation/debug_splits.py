@@ -64,11 +64,11 @@ def _load_agent(case: str):  # type: ignore[no-untyped-def]
 
 
 def _run_episode(case: str, seed: int) -> list[TurnStats]:
-    from env.orbit_wars import make_orbit_wars_env
+    from orbit_wars_sim import make_orbit_wars_env
 
     ag = _load_agent(case)
     env = make_orbit_wars_env(agents=2, seed=seed)
-    from env.orbit_wars import run_orbit_wars_episode
+    from orbit_wars_sim import run_orbit_wars_episode
 
     run_orbit_wars_episode(env, [ag, ag])
 

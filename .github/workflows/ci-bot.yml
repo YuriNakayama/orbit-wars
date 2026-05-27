@@ -52,11 +52,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install bot deps (uv sync)
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --dev
         working-directory: bot
 
       - name: Install simulator/python deps (workspace dep of bot)
-        run: uv sync --all-extras --dev
+        run: uv sync --dev
         working-directory: simulator/python
 
       # bot self-play / executor は orbit_wars_rust を import するので

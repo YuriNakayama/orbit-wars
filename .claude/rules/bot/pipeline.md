@@ -161,7 +161,7 @@ case<N>/
 
 | Directory | Purpose | Excluded by `.submitignore`? |
 |-----------|---------|-------------------------------|
-| `evaluation/` | typer wrappers around `src/evaluation/*` | yes |
+| `evaluation/` | typer wrappers around `src/evaluate/*` | yes |
 | `training/`   | imitation cases only — preprocess/train scripts | yes |
 | `eda/`, `notebook/` | exploratory analysis | yes |
 | `configs/`    | per-case YAML kept locally (params.yaml集約はしない) | yes |
@@ -173,7 +173,7 @@ Cases must remain self-contained. **Never** import from another case
 (`from pipeline.rulebase.case2.* import ...` inside `case1/`). When the same
 helper is needed in multiple cases, copy it into each — duplication is
 preferred to cross-case coupling. Shared development utilities live in
-`bot/src/` (e.g. `src/evaluation/`, `src/utils/repo_root.py`) and are
+`bot/src/` (e.g. `src/evaluate/`, `src/utils/repo_root.py`) and are
 imported only from `evaluation/` / `training/` (excluded from submission tar).
 
 ## Anti-patterns

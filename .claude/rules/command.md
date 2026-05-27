@@ -13,7 +13,7 @@ dev/create-worktree   # Create git worktree with .env copy
 dev/dvc               # DVC operations (setup / pull / repro / push / dag / add)
 dev/vast              # Vast.ai GPU pod control (train / pull / promote / cost-report / volume)
 dev/runpod            # RunPod GPU pod control (train / pull / promote / cost-report / volume)
-dev/kaggle-kernel     # Kaggle Notebook free-tier GPU (train / pull / promote / dataset / cost-report)
+dev/kaggle            # Kaggle Notebook free-tier GPU (train / pull / promote / dataset / cost-report)
 ```
 
 ## DVC Commands
@@ -145,33 +145,33 @@ Vast.ai / RunPod と並ぶ第三の GPU 学習基盤。Kaggle Notebooks (Save & 
 #    KAGGLE_USERNAME=<your-username> と KAGGLE_KEY=<your-key> を bot/.env に追記
 
 # 1) (初回のみ) bot/ を Kaggle Dataset として upload
-dev/kaggle-kernel dataset push --commit-sha "$(git rev-parse HEAD)"
+dev/kaggle dataset push --commit-sha "$(git rev-parse HEAD)"
 
 # 2) commit & push, then launch on Kaggle
 git push origin <branch>
-dev/kaggle-kernel train "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2 --watch
+dev/kaggle train "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2 --watch
 #   → bot/ snapshot を dataset の新 version として push
 #   → notebook 自動生成 → kernel push
 #   → --watch で QUEUED → RUNNING → COMPLETE / ERROR まで polling
 
 # 3) 成果物 pull (kaggle kernels output → ローカル dvc add)
-dev/kaggle-kernel pull <run_id> --case case1
+dev/kaggle pull <run_id> --case case1
 
 # 4) 採用なら canonical weights に昇格 (vast/runpod と同等)
-dev/kaggle-kernel promote <run_id> --case case1 [--eval-results PATH]
+dev/kaggle promote <run_id> --case case1 [--eval-results PATH]
 
 # 5) 月次 free GPU 時間レポート (金額は 0)
-dev/kaggle-kernel cost-report --month 2026-05
+dev/kaggle cost-report --month 2026-05
 
 # 進捗確認 / ログ
-dev/kaggle-kernel ps                            # active kernel 一覧
-dev/kaggle-kernel status <run_id>               # 単一 run の launch + kernel status + run.json
-dev/kaggle-kernel watch <run_id>                # 終了まで polling、完了で desktop 通知
-dev/kaggle-kernel logs <run_id> [--tail N]      # 完了済 kernel の train.log (要事前 pull)
+dev/kaggle ps                            # active kernel 一覧
+dev/kaggle status <run_id>               # 単一 run の launch + kernel status + run.json
+dev/kaggle watch <run_id>                # 終了まで polling、完了で desktop 通知
+dev/kaggle logs <run_id> [--tail N]      # 完了済 kernel の train.log (要事前 pull)
 
 # Dataset 管理
-dev/kaggle-kernel dataset push --label "<note>"  # commit SHA を version_notes に記録
-dev/kaggle-kernel dataset status                 # 現在の dataset の processing 状態
+dev/kaggle dataset push --label "<note>"  # commit SHA を version_notes に記録
+dev/kaggle dataset status                 # 現在の dataset の processing 状態
 ```
 
 Vast.ai / RunPod と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` に成果物を保存し、DVC/S3 remote も共有。`run.json` の `kaggle_kernel_meta` field で kaggle 経由かを区別可能。`KAGGLE_USERNAME` / `KAGGLE_KEY` は `bot/.env` に置き、key は <https://www.kaggle.com/settings> で発行。
@@ -180,25 +180,25 @@ Kaggle Kernel は **学習用** であり、Kaggle competition への submit ker
 
 ### Interactive Mode (Kaggle Notebook を sleep loop で常駐 + S3 command channel)
 
-Kaggle には SSH がないため、`dev/kaggle-kernel dev` で **S3 を双方向 channel として使う sleep-loop notebook** を push する。Claude (local) が S3 inbox にコマンドを put すると、kernel が拾って実行し outbox に結果を書き戻す。RunPod `dev/ssh/sync/destroy` と機能的に等価。**kernel が ERROR / OOM で死亡しても S3 に heartbeat + 直前の outbox が残るため、SSH なしで死亡直前の状況が掴める** のが核心。
+Kaggle には SSH がないため、`dev/kaggle dev` で **S3 を双方向 channel として使う sleep-loop notebook** を push する。Claude (local) が S3 inbox にコマンドを put すると、kernel が拾って実行し outbox に結果を書き戻す。RunPod `dev/ssh/sync/destroy` と機能的に等価。**kernel が ERROR / OOM で死亡しても S3 に heartbeat + 直前の outbox が残るため、SSH なしで死亡直前の状況が掴める** のが核心。
 
 ```bash
 # 1) interactive kernel 起動 (RunPod dev 相当)
 git push origin <branch>
-dev/kaggle-kernel dev "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2
+dev/kaggle dev "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2
 
 # 2) heartbeat 確認 (state=ready / running / idle / shutdown / voluntary_exit)
-dev/kaggle-kernel info <run_id>
+dev/kaggle info <run_id>
 
 # 3) 任意 bash を kernel 上で実行 (S3 経由、ssh-exec 相当)
-dev/kaggle-kernel exec <run_id> -- python -c "import torch; print(torch.cuda.is_available())"
-dev/kaggle-kernel exec <run_id> --cwd /tmp/orbit-wars-repo/bot -- pytest tests/unit/
+dev/kaggle exec <run_id> -- python -c "import torch; print(torch.cuda.is_available())"
+dev/kaggle exec <run_id> --cwd /tmp/orbit-wars-repo/bot -- pytest tests/unit/
 
 # 4) ローカル file を kernel に転送 (rsync push 相当)
-dev/kaggle-kernel sync <run_id> --file bot/pipeline/imitation/case1/training/train.py
+dev/kaggle sync <run_id> --file bot/pipeline/imitation/case1/training/train.py
 
 # 5) 明示的に終了 (Kaggle 側は次の Quota cycle で自動停止、即時停止は Web UI から)
-dev/kaggle-kernel destroy <run_id> -y
+dev/kaggle destroy <run_id> -y
 ```
 
 制約: Internet ON 必須 (S3 アクセスのため、submit kernel には流用不可)、AWS creds は kernel 側にも必要 (`bot/.env` を dataset に同梱 or Kaggle Secrets 登録)、Kaggle 9h 上限超過で kernel は強制停止 (`--max-idle-minutes` で voluntary exit を早めることが推奨)。

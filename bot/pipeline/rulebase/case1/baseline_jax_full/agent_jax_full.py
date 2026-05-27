@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-
-from jax_env.constants import CENTER, MAX_PLANETS
-from jax_env.state import EnvState
-from jax_env.step import MAX_LAUNCHES_PER_AGENT
+from orbit_wars_jax.constants import CENTER, MAX_PLANETS
+from orbit_wars_jax.state import EnvState
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
 from .geometry_jax import predict_planet_xy
 

@@ -25,9 +25,9 @@ import importlib
 import jax.numpy as jnp
 import pytest
 
-from jax_env.observation import state_to_obs
-from jax_env.reset import reset
-from jax_env.step import empty_actions, step
+from orbit_wars_jax.observation import state_to_obs
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.step import empty_actions, step
 
 
 def _run_agent_fresh(agent_mod: object, obs: dict, backend: str, monkeypatch) -> list:

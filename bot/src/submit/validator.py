@@ -54,7 +54,7 @@ def dry_run(case_dir: Path, *, turns: int | None = None) -> dict[str, Any]:
     module = _load_agent_module(main_py)
     agent_fn = cast(Any, module.agent)
 
-    from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
+    from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
     configuration: dict[str, Any] = {}
     if turns is not None:

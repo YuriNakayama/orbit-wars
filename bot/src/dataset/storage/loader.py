@@ -42,7 +42,7 @@ def load_replay_payload(match_id: str, data_root: Path) -> dict[str, Any]:
 
 def load_replay(match_id: str, data_root: Path) -> Any:
     """Reconstruct an Orbit Wars Environment from a stored replay."""
-    from env.orbit_wars import make_orbit_wars_env
+    from orbit_wars_sim import make_orbit_wars_env
 
     payload = load_replay_payload(match_id, data_root=data_root)
     if payload.get("name", "orbit_wars") != "orbit_wars":

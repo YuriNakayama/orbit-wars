@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
-
-from jax_env.reset import reset
-from jax_env.step import empty_actions, step
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.step import empty_actions, step
 
 
 def test_step_compiles_and_runs_no_op() -> None:
@@ -42,8 +41,8 @@ def test_step_with_launch_action() -> None:
     home_ships = int(state.planet_ships[home_idx])
 
     # Build action: agent 0 launches 5 ships from home, angle 0.
-    from jax_env.constants import NUM_AGENTS_MAX
-    from jax_env.step import MAX_LAUNCHES_PER_AGENT
+    from orbit_wars_jax.constants import NUM_AGENTS_MAX
+    from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
     actions = np.full(
         (NUM_AGENTS_MAX, MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=np.float32

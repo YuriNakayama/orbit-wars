@@ -13,8 +13,8 @@ import logging
 from dataclasses import asdict, dataclass
 
 import typer
+from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
-from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
 from pipeline.imitation.case0.policy.agent import agent
 
 logger = logging.getLogger(__name__)

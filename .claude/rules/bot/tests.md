@@ -19,11 +19,11 @@ Pytest conventions for the bot test suite. General Python rules (type hints, log
 - Minimize use of mock and patch — keep close to actual behavior
 - Each test should be executable independently
 - Tests live under `bot/tests/`, mirroring the `bot/src/` layout
-- For agent tests, build scenarios through `env.orbit_wars.make_orbit_wars_env()` so local runs use the in-repo simulator backend.
+- For agent tests, build scenarios through `orbit_wars_sim.make_orbit_wars_env()` (the `simulator/adapter` package) so local runs use the in-repo simulator backend.
 
 ```python
 import pytest
-from env.orbit_wars import make_orbit_wars_env, run_orbit_wars_episode
+from orbit_wars_sim import make_orbit_wars_env, run_orbit_wars_episode
 
 @pytest.fixture
 def env():
@@ -78,11 +78,11 @@ Prefer placing as many tests as practical under `unit`.
 
 Additional placement rules:
 
-- `src/evaluation`'s own logic tests belong under `unit/src/evaluation`.
-- Tests that use `src/evaluation` to evaluate a pipeline case belong under `e2e/pipeline/...` when they execute self-play or Orbit Wars episodes.
+- `src/evaluate`'s own logic tests belong under `unit/src/evaluate`.
+- Tests that use `src/evaluate` to evaluate a pipeline case belong under `e2e/pipeline/...` when they execute self-play or Orbit Wars episodes.
 - Prefer `conftest.py` for shared fixtures and pytest-only setup. Use a `utils` package only for tiny importable helpers that cannot be represented as fixtures.
 - `utils` packages must not contain `test_*.py` files or `test_*` test functions. Test bodies must live outside `utils`.
-- Tests may depend on `tests/pipeline/utils`-style helpers only when the helper is tiny (for example short assertion helpers). If helper logic becomes worth testing, move it to `bot/src/evaluation` or another `bot/src` module.
-- Avoid importing test implementation from another test module. Shared production-like evaluation, aggregation, snapshot, or comparison logic belongs in `bot/src/evaluation`.
+- Tests may depend on `tests/pipeline/utils`-style helpers only when the helper is tiny (for example short assertion helpers). If helper logic becomes worth testing, move it to `bot/src/evaluate` or another `bot/src` module.
+- Avoid importing test implementation from another test module. Shared production-like evaluation, aggregation, snapshot, or comparison logic belongs in `bot/src/evaluate`.
 - Pytest scope markers are assigned from the top-level directory by `bot/tests/conftest.py` only for `integration` and `e2e`; `unit` tests intentionally have no scope marker. Keep the directory classification as the source of truth and reserve per-test markers for orthogonal concerns such as `slow` or `timeout`.
 

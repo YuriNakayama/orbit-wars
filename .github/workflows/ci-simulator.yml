@@ -54,11 +54,11 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install bot deps (uv sync) — needed as host venv for maturin
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --dev
         working-directory: bot
 
       - name: Install simulator/python deps
-        run: uv sync --all-extras --dev
+        run: uv sync --dev
         working-directory: simulator/python
 
       - name: Build + install Rust extension into bot venv
