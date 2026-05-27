@@ -45,6 +45,7 @@ AGENT_REGISTRY: dict[str, str] = {
     "il_v11_per_planet": "pipeline.imitation.case11.policy.agent:agent",
     "rl_v0": "pipeline.reinforce.case0.policy.agent:agent",
     "rl_v1": "pipeline.reinforce.case1.policy.agent:agent",
+    "rl_v3": "pipeline.reinforce.case3.policy.agent:agent",
     "random": "random",
 }
 

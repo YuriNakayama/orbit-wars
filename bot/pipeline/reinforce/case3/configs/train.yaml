@@ -1,0 +1,45 @@
+# Production-scale config for reinforce/case3 (PPO + BC warm-start, per_planet).
+#
+# Designed to be launched on RunPod GPU. Hyperparams promoted from the CPU
+# `cpu_stable_v1.yaml` smoke that kept approx_kl < ~0.5 and bc_kl < ~0.5 (the
+# tighter trust region of the cpu_stable family). 100 iter × 16 ep ≈ 50 000+
+# transitions in total; expected GPU wall-clock ≈ 1-2 h on an A6000-class node
+# (CPU 30 iter took 44 min; GPU should accelerate the forward / PPO update path).
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt
+
+training:
+  seed: 0
+  iterations: 100
+  episodes_per_iter: 16
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.5
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.05
+  opponent: baseline_v1
+
+output:
+  run_dir: data/output/models/reinforce/case3/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

@@ -399,6 +399,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case3: case2 の有用な学習レシピ (planets shaping=0.50 /
+    # curriculum switch_iter=5 / lr 3e-5 線形 decay / 200 iter 長期学習) を
+    # 継承しつつ from_head を除去した case (= case1 純正 head)。case2 の
+    # head 変更効果を切り分ける ablation 兼、学習レシピの統合ベースライン。
+    "reinforce_case3_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case3_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case3.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case3/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
