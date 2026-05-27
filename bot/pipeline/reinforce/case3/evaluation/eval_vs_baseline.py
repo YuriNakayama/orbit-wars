@@ -1,4 +1,4 @@
-"""Evaluate rl_v1 (reinforce/case3) vs a chosen baseline over N episodes."""
+"""Evaluate rl_v3 (reinforce/case3) vs a chosen baseline over N episodes."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from utils.repo_root import absolute_under_repo
 
 logger = logging.getLogger(__name__)
 
-CHALLENGER = "rl_v1"
+CHALLENGER = "rl_v3"
 
 app = typer.Typer(
     add_completion=False,

@@ -175,6 +175,51 @@ def _save_best_pt(model: ActorCriticJax, path: Path) -> None:
     np.savez(str(path), **arrays)  # type: ignore[arg-type]
 
 
+def _upload_best_to_s3(best_pt: Path, iteration: int, win_rate: float) -> None:
+    """Stream the latest best.pt to S3 the moment a new best fires.
+
+    Mirrors the imitation/case11 layer-1 safeguard: the onstart heartbeat
+    (60s) and post-train upload still run, but RL iters can be minutes long,
+    so a host preempt between best-update and the next heartbeat would lose
+    the freshest weights. Uploading on every improvement closes that window.
+
+    `ORBIT_WARS_BEST_S3_PREFIX` is set by onstart to the per-run artifacts
+    directory (no trailing filename). We upload two objects:
+      <prefix>/best_i{iter}_win{rate:.4f}.pt  — per-iter history (preempt-safe)
+      <prefix>/best.pt                          — latest-best alias
+    Outside RunPod the var is empty and we skip silently.
+    """
+    prefix = os.environ.get("ORBIT_WARS_BEST_S3_PREFIX", "").strip()
+    if not (prefix and prefix.startswith("s3://")):
+        return
+    bucket, _, key_prefix = prefix[len("s3://") :].rstrip("/").partition("/")
+    history_key = f"{key_prefix}/best_i{iteration}_win{win_rate:.4f}.pt"
+    latest_key = f"{key_prefix}/best.pt"
+    try:
+        import boto3  # noqa: PLC0415
+
+        s3 = boto3.client("s3")
+        s3.upload_file(str(best_pt), bucket, history_key)
+        s3.upload_file(str(best_pt), bucket, latest_key)
+        logger.info(
+            json.dumps(
+                {
+                    "event": "best_s3_upload",
+                    "iter": iteration,
+                    "history_uri": f"s3://{bucket}/{history_key}",
+                    "latest_uri": f"s3://{bucket}/{latest_key}",
+                }
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "best.pt S3 upload failed iter=%d prefix=%s err=%s",
+            iteration,
+            prefix,
+            exc,
+        )
+
+
 def _build_optimizer_state(model: ActorCriticJax, cfg: PPOConfigJax) -> tuple[Any, Any]:
     """Returns (optimizer, opt_state)."""
     optimizer = make_optimizer(cfg)
@@ -423,9 +468,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             row["approx_kl"],
             row["bc_kl"],
         )
-        best_win = max(best_win, row["win_rate"])
-        # Save model snapshot.
-        _save_best_pt(model, run_dir / "best.pt")
+        # Save the latest snapshot every iter (local run_dir), then mirror to
+        # S3 only when this iter improves the running best so the freshest
+        # weights survive a mid-training host preempt (layer-1 safeguard).
+        best_pt = run_dir / "best.pt"
+        _save_best_pt(model, best_pt)
+        if row["win_rate"] >= best_win:
+            best_win = row["win_rate"]
+            _upload_best_to_s3(best_pt, row["iter"], best_win)
 
     runtime = time.perf_counter() - started
     report = TrainReport(
