@@ -422,6 +422,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5: case3 を丸ごと継承し support (補助) reward を検証する case。
+    # H1 = ship 差分と planet 差分を個別係数で同時加算する combined shaping。
+    # docs/experiment/reinforce/20260527_case5_support_reward/ 参照。
+    "reinforce_case5_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h1_combined.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
