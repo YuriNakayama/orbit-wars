@@ -1,0 +1,42 @@
+# CPU 安定化検証 (vs baseline_v1):
+# 直接 baseline_v1 の obs 分布で学習。stable 設定を踏襲、iterations を 30 に拡張。
+#
+# 期待: vs random で 100% 取れた stable レシピが、baseline_v1 obs 分布に
+# 適応した場合に勝率を引き上げられるか確認。約 30 分前後の見込み。
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt
+
+training:
+  seed: 0
+  iterations: 30
+  episodes_per_iter: 16
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.5
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  opponent: baseline_v1
+
+output:
+  run_dir: data/output/models/reinforce/case6/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
