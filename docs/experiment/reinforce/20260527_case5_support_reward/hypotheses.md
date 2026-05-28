@@ -66,6 +66,7 @@ report shaping 以外の変更は本 case では行わない。
 |---|---|---|---|---|---|---|---|
 | 1 | 2026-05-27T15:16Z | H1 | iter1_plan.md | 20260527-151636__feature-support-reward__2f37b9e__seed0 | last-10 0.549 / trend +0.376 (lite phase) | inconclusive (trend は adopted 寄り) | iter1_result.md (analysis: 学習ログ baseで実施、replay skip) |
 | 2 | 2026-05-27T18:23Z | H2 | iter2_plan.md | 20260527-182312__feature-support-reward__c359b68__seed0 | last-10 0.763 / trend +0.651 (lite phase, H1 比 +21pp) | adopted | iter2_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 3 | 2026-05-28T00:48Z | H4 | iter3_plan.md | 20260528-004854__feature-support-reward__8e2e4a3__seed0 | last-10 0.820 / trend +0.668 (lite, H2 比 +5.6pp, coef 0.50→1.0) | adopted | iter3_result.md (analysis 未実施) |
 
 ## 参考 (References)
 
