@@ -52,9 +52,14 @@
         iter5 の switch で win 0.984→0.766 と一時下降し snapshot が短期的に学習信号を供給したが、
         iter150 で ~1.0 飽和。frozen iter0 相手は信号が枯れる → H2 (pool 周期更新) が必須と確認。
         ⚠️ rollout 2 倍重で 5.1h/$7.1 (cap 大幅超過、[[project_reinforce_self_snapshot_cost]])。
-- [ ] (P1, depends on H1) H2: K iter ごとに snapshot を opponent pool に追加し、
+- [x] (P1, depends on H1) H2: K iter ごとに snapshot を opponent pool に追加し、
       `baseline_jax_full` も curriculum late 相手に加える。pool 管理 (cap 付き) の基盤を作る。
       — pool 化で相手の多様性を確保し、単一 late 相手への過適合を防ぐ。
+      — **inconclusive (positive-leaning, iter2)**: H1 の飽和を解消 (win last10 0.988→0.661、
+        entropy 暴走 46→97 が有界 38→47 に)。decisive = baseline_jax_full 混合 (vs full 0.274、
+        vs pool snapshot 0.828)。**vs full が 0.138→0.359 と上昇** (+0.0027/it) = 強い相手に
+        勝てるよう学習進行。PFSP 前提が機能。$0.70 で完走 (H1 の 1/10)。n<300 で断定不可。
+        → H4 (f_hard 優先 sampling) で vs full の伸びしろを取りに行く。
 - [ ] (P2, depends on H1+H2) H4: PFSP `f_hard(x)=(1−x)^p` — 現 agent の各相手に対する勝率 x に
       反比例 (勝てない相手ほど高確率) して pool から相手を sampling。
       — AlphaStar 主手法。難敵に学習を集中させ最終強度を押し上げる (今回の主題)。
@@ -76,6 +81,7 @@
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
 | 1 | 2026-05-27 | H1 | iter1_plan.md | 20260527-145442__...__fb36504__seed0 | win last10=0.988 (飽和), iter6 dip 0.766, value_loss 0.104→0.052 | inconclusive | iter1_result.md / iter1_analysis.md |
+| 2 | 2026-05-28 | H2 | iter2_plan.md | 20260528-005806__...__36982a3__seed0 | win last10=0.661 (飽和解消), vs full 0.138→0.359 (+0.0027/it), entropy 有界 | inconclusive | iter2_result.md / iter2_analysis.md |
 
 ## 参考 (References)
 
