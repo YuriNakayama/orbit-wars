@@ -25,6 +25,8 @@ ships); a sentinel `from_planet_id == -1` suppresses the launch.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
@@ -47,7 +49,19 @@ from .missions_capture_jax import (
     build_snipe_grid,
 )
 from .scoring_jax import ModesArrays
-from .world_features import WorldFeatures
+from .world_features import WorldFeatures, build_world_features
+
+
+def _modes_from_features(features: WorldFeatures) -> ModesArrays:
+    """WorldFeatures already carries the build_modes scalars; repack as ModesArrays."""
+    return ModesArrays(
+        domination=features.domination,
+        is_behind=features.is_behind,
+        is_ahead=features.is_ahead,
+        is_dominating=features.is_dominating,
+        is_finishing=features.is_finishing,
+        attack_margin_mult=features.attack_margin_mult,
+    )
 
 
 def _combine_single_table(
@@ -162,8 +176,34 @@ def compute_actions_jit(features: WorldFeatures, modes: ModesArrays) -> jax.Arra
     return jnp.asarray(_jitted_compute(features, modes))
 
 
+def agent(obs: Any) -> list[list[int | float]]:
+    """Kaggle-style agent callable backed by the JAX pipeline.
+
+    Mirrors `baseline.agent.agent`'s contract: takes the kaggle observation dict
+    and returns `[[from_planet_id, angle, num_ships], ...]`. Resolves the obs into
+    `WorldFeatures` on the host, runs the jitted `compute_actions`, and unpacks
+    the `(MAX_LAUNCHES_PER_AGENT, 3)` tensor back into the move list (dropping
+    sentinel `from_planet_id == -1` rows). Lets the standard self-play /
+    evaluation harness drive the JAX agent.
+    """
+    features = build_world_features(obs)
+    modes = _modes_from_features(features)
+    act = compute_actions_jit(features, modes)
+    moves: list[list[int | float]] = []
+    for i in range(int(act.shape[0])):
+        from_pid = int(act[i, 0])
+        if from_pid < 0:
+            continue
+        ships = int(act[i, 2])
+        if ships < 1:
+            continue
+        moves.append([from_pid, float(act[i, 1]), ships])
+    return moves
+
+
 __all__ = [
     "MAX_MOVES",
+    "agent",
     "compute_actions",
     "compute_actions_jit",
 ]
