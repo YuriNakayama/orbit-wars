@@ -344,6 +344,31 @@ def _run_iter(
     )
 
 
+class _OpponentPool:
+    """H2 (PFSP): a host-side FIFO pool of frozen self snapshots.
+
+    Holds up to `cap` Equinox models (immutable pytrees). `push` adds the
+    latest snapshot (FIFO drop when full); `sample` returns one uniformly.
+    Selection happens host-side (Python), so the snapshot fed to
+    `collect_rollout_jax(opp_model=...)` is just a weights swap into a
+    structurally-identical pytree — the scan/vmap trace stays single.
+    """
+
+    def __init__(self, cap: int) -> None:
+        self._cap = max(1, cap)
+        self._models: list[ActorCriticJax] = []
+
+    def push(self, model: ActorCriticJax) -> None:
+        kept = self._models[-(self._cap - 1) :] if self._cap > 1 else []
+        self._models = [*kept, model]
+
+    def sample(self, rng: np.random.Generator) -> ActorCriticJax:
+        return self._models[int(rng.integers(len(self._models)))]
+
+    def __len__(self) -> int:
+        return len(self._models)
+
+
 app = typer.Typer(add_completion=False)
 
 _DEFAULT_CONFIG = typer.Option(
@@ -393,10 +418,22 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     curriculum_early = str(curriculum_cfg.get("early", "noop"))
     curriculum_late = str(curriculum_cfg.get("late", "baseline_jax_lite"))
 
+    # H2 (PFSP pool): when late == "pool", maintain a FIFO snapshot pool and,
+    # each late iter, play either a pooled snapshot or baseline_jax_full.
+    pool_cfg = t_cfg.get("opponent_pool", {}) or {}
+    pool_snapshot_every = int(pool_cfg.get("snapshot_every", 10))
+    pool_cap = int(pool_cfg.get("cap", 5))
+    pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
+    use_pool = opponent == "curriculum" and curriculum_late == "pool"
+
     def _opponent_for_iter(it: int) -> str:
         if opponent != "curriculum":
             return opponent
-        return curriculum_early if it < curriculum_switch_iter else curriculum_late
+        if it < curriculum_switch_iter:
+            return curriculum_early
+        # When late == "pool", the concrete opponent is decided in-loop
+        # (pool snapshot vs baseline_jax_full); return the base curriculum_late.
+        return curriculum_late
 
     ppo_cfg = _build_ppo_cfg(cfg_dict)
     model = _build_model(cfg_dict)
@@ -432,17 +469,28 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             horizon,
             opponent,
         )
-    # H1 (PFSP foundation): freeze the start-of-training model as the
-    # self-snapshot opponent. Equinox modules are immutable pytrees, so this
-    # binding keeps the iter0 parameters even as `model` is rebound each iter.
-    # Pool / periodic refresh / prioritized sampling are H2+.
+    # H1 (PFSP foundation): freeze the start-of-training model as the initial
+    # self-snapshot opponent. H2: also seed a FIFO snapshot pool with it so the
+    # pool is non-empty before the first periodic push.
     opp_snapshot = model
+    pool = _OpponentPool(pool_cap)
+    pool.push(model)
+    pool_rng = np.random.default_rng(seed)
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
     key = jax.random.PRNGKey(seed)
     best_win = 0.0
     for it in range(iterations):
         iter_opponent = _opponent_for_iter(it)
+        iter_opp_model = opp_snapshot
+        # H2: in the late phase with a pool, pick per-iter between a pooled
+        # snapshot (self_snapshot vs a refreshed past self) and baseline_jax_full.
+        if use_pool and it >= curriculum_switch_iter:
+            if pool_rng.random() < pool_late_full_prob:
+                iter_opponent = "baseline_jax_full"
+            else:
+                iter_opponent = "self_snapshot"
+                iter_opp_model = pool.sample(pool_rng)
         key, k_iter = jax.random.split(key)
         model, opt_state, row = _run_iter(
             model,
@@ -460,8 +508,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             seed,
             opponent=iter_opponent,
             shaping_mode=shaping_mode,
-            opp_model=opp_snapshot,
+            opp_model=iter_opp_model,
         )
+        # H2: refresh the pool with the just-updated model every K iters so the
+        # opponent distribution tracks the learner instead of staying frozen.
+        if use_pool and (it + 1) % pool_snapshot_every == 0:
+            pool.push(model)
         row["opponent"] = iter_opponent
         row["shaping_mode"] = shaping_mode
         history.append(row)

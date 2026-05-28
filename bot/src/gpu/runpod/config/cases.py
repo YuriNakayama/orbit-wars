@@ -435,6 +435,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 H2: PFSP snapshot pool (K=10 周期更新 + baseline_jax_full
+    # 混合 late)。H1 の飽和を解消する狙い。iterations 100 / episodes 64 に軽量化。
+    "reinforce_case6_kaggle_jax_train_h2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h2",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h2.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
     # the self_snapshot opponent path launches and collects artifacts on RunPod).
     "reinforce_case6_kaggle_jax_smoke": {

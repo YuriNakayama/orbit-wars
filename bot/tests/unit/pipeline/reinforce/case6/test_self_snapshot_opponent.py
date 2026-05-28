@@ -87,3 +87,45 @@ def test_non_snapshot_opponents_still_run(opponent: str) -> None:
     )
     assert batch.rewards.shape == (_EPISODES, _HORIZON)
     assert bool(jnp.all(jnp.isfinite(batch.rewards)))
+
+
+# --- H2: opponent pool ---
+
+
+def test_pool_fifo_cap_and_sample() -> None:
+    import numpy as np
+
+    from pipeline.reinforce.case6.training.train_jax import _OpponentPool
+
+    pool = _OpponentPool(cap=3)
+    assert len(pool) == 0
+    models = [_tiny_model() for _ in range(5)]
+    for m in models:
+        pool.push(m)
+    # FIFO: only the last 3 survive.
+    assert len(pool) == 3
+    # sample returns a usable model (forward runs).
+    rng = np.random.default_rng(0)
+    sampled = pool.sample(rng)
+    out = collect_rollout_jax(
+        _tiny_model(),
+        jax.random.PRNGKey(3),
+        episodes_per_iter=_EPISODES,
+        horizon=_HORIZON,
+        opponent="self_snapshot",
+        opp_model=sampled,
+    )
+    assert out.rewards.shape == (_EPISODES, _HORIZON)
+    assert bool(jnp.all(jnp.isfinite(out.rewards)))
+
+
+def test_pool_cap_one() -> None:
+    import numpy as np
+
+    from pipeline.reinforce.case6.training.train_jax import _OpponentPool
+
+    pool = _OpponentPool(cap=1)
+    pool.push(_tiny_model())
+    pool.push(_tiny_model())
+    assert len(pool) == 1
+    assert pool.sample(np.random.default_rng(0)) is not None
