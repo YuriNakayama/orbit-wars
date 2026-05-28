@@ -10,9 +10,12 @@ mirrors `baseline/strategy.plan_moves`:
     table -> argsort(-score) -> lax.scan greedy commit -> inventory cap ->
     (MAX_LAUNCHES_PER_AGENT, 3) action tensor.
 
-Currently wires the single-source mission family that dominates real play:
-capture "single" + snipe. The remaining families (reinforce / swarm / harass)
-and the movement emitters fold into the same candidate table / a sibling pass;
+Currently wires the single-source mission family that dominates real play
+(capture "single" + snipe + harass) followed by the FOLLOWUP movement pass — a
+second source-ordered scan that spends leftover attack ships on opportunistic
+captures, sharing the mission scan's ending carry (`run_mission_and_followup`).
+The remaining families (reinforce / swarm) and the other movement emitters
+(evacuation / rear_guard) fold into the same candidate table / sibling passes;
 they are layered in incrementally while this driver gives a runnable agent + the
 full `plan_moves` target-match measurement.
 
@@ -33,7 +36,7 @@ from .allocator_jax import (
     MAX_MOVES,
     AllocResult,
     SingleMissionTable,
-    run_single_source_allocator,
+    run_mission_and_followup,
 )
 from .missions_capture_jax import (
     CaptureGrid,
@@ -147,7 +150,7 @@ def compute_actions(features: WorldFeatures, modes: ModesArrays) -> jax.Array:
     snipe = build_snipe_grid(features, modes)
     harass = build_harass_grid(features, modes)
     table = _combine_single_table(capture, snipe, harass)
-    res = run_single_source_allocator(table, features, modes)
+    res = run_mission_and_followup(table, features, modes)
     return _alloc_to_action_tensor(res, features)
 
 
