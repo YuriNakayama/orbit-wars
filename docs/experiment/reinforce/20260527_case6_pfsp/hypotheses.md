@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case6 PFSP (Prioritized Fictitious Self-Play)
 
 > 作成日: 2026-05-27
-> 最終更新: 2026-05-27
+> 最終更新: 2026-05-28
 > 状態: in_progress
 > 最大 iteration: リスト消化まで
 > 主要メトリクス: ① 学習 reward trend / last-10 mean、② win rate vs 初期 snapshot (self-play 進歩)、③ ルールベース baseline_v1 との 20 戦ローカル対戦 (方向性確認)
@@ -44,10 +44,14 @@
 
 ## 仮説リスト (priority 順)
 
-- [ ] (P1) H1: self-snapshot を 4 つ目の opponent モード (`self_snapshot`=3) として追加し、frozen な
+- [x] (P1) H1: self-snapshot を 4 つ目の opponent モード (`self_snapshot`=3) として追加し、frozen な
       自 param pytree を scan に通して opponent 行を自 agent 推論で埋める。
       — **全 self-play 仮説の前提となる土台**。これ単体では「過去 snapshot との対戦が
       reward に悪影響を与えないか」を確認 (curriculum late を self_snapshot に差し替えて 1 点確認)。
+      — **inconclusive (iter1)**: 配線は完全成立 (200 iter 完走、unit test 5 + smoke pass)。
+        iter5 の switch で win 0.984→0.766 と一時下降し snapshot が短期的に学習信号を供給したが、
+        iter150 で ~1.0 飽和。frozen iter0 相手は信号が枯れる → H2 (pool 周期更新) が必須と確認。
+        ⚠️ rollout 2 倍重で 5.1h/$7.1 (cap 大幅超過、[[project_reinforce_self_snapshot_cost]])。
 - [ ] (P1, depends on H1) H2: K iter ごとに snapshot を opponent pool に追加し、
       `baseline_jax_full` も curriculum late 相手に加える。pool 管理 (cap 付き) の基盤を作る。
       — pool 化で相手の多様性を確保し、単一 late 相手への過適合を防ぐ。
@@ -71,6 +75,7 @@
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
+| 1 | 2026-05-27 | H1 | iter1_plan.md | 20260527-145442__...__fb36504__seed0 | win last10=0.988 (飽和), iter6 dip 0.766, value_loss 0.104→0.052 | inconclusive | iter1_result.md / iter1_analysis.md |
 
 ## 参考 (References)
 
