@@ -27,6 +27,7 @@ import jax.numpy as jnp
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
 from .allocator_jax import (
+    KIND_HARASS,
     KIND_SINGLE,
     KIND_SNIPE,
     MAX_MOVES,
@@ -36,44 +37,58 @@ from .allocator_jax import (
 )
 from .missions_capture_jax import (
     CaptureGrid,
+    HarassGrid,
     SnipeGrid,
     build_capture_grid,
+    build_harass_grid,
     build_snipe_grid,
 )
 from .scoring_jax import ModesArrays
 from .world_features import WorldFeatures
 
 
-def _combine_single_table(capture: CaptureGrid, snipe: SnipeGrid) -> SingleMissionTable:
-    """Flatten capture "single" + snipe cells into one (2*P*P,) candidate table.
+def _combine_single_table(
+    capture: CaptureGrid, snipe: SnipeGrid, harass: HarassGrid
+) -> SingleMissionTable:
+    """Flatten capture "single" + snipe + harass cells into one candidate table.
 
-    Capture rows are emitted where `is_single` (Python emits a "single" Mission);
-    snipe rows where the snipe grid is valid. `turns` is `option.turns` in both
-    (the arrival turn the greedy loop uses); `send_cap` is the per-option cap
-    (src_available for capture, `needed` for snipe — matching the Python builders).
+    Each family contributes a `(P*P,)` block. Capture rows where `is_single`
+    (Python emits a "single" Mission); snipe / harass rows where their grid is
+    valid. `turns` is the option arrival turn; `send_cap` is the per-option cap
+    (capture: src_available; snipe / harass option.send_cap == `needed`).
+    The greedy scan dispatches on `kind` (capture → preferred_send, snipe/harass
+    → exact `missing`).
     """
     p = capture.valid.shape[0]
     n = p * p
     src_idx = jnp.repeat(jnp.arange(p, dtype=jnp.int32), p)
     tgt_idx = jnp.tile(jnp.arange(p, dtype=jnp.int32), p)
 
-    def _cat(cap_field: jax.Array, sn_field: jax.Array) -> jax.Array:
-        return jnp.concatenate([cap_field.reshape(n), sn_field.reshape(n)])
-
-    valid = jnp.concatenate([capture.is_single.reshape(n), snipe.valid.reshape(n)])
-    score = _cat(capture.score, snipe.score)
+    valid = jnp.concatenate(
+        [capture.is_single.reshape(n), snipe.valid.reshape(n), harass.valid.reshape(n)]
+    )
+    score = jnp.concatenate(
+        [capture.score.reshape(n), snipe.score.reshape(n), harass.score.reshape(n)]
+    )
     kind = jnp.concatenate(
         [
             jnp.full((n,), KIND_SINGLE, dtype=jnp.int32),
             jnp.full((n,), KIND_SNIPE, dtype=jnp.int32),
+            jnp.full((n,), KIND_HARASS, dtype=jnp.int32),
         ]
     )
-    src_slot = jnp.concatenate([src_idx, src_idx])
-    target_slot = jnp.concatenate([tgt_idx, tgt_idx])
-    angle = _cat(capture.angle, snipe.angle)
-    turns = _cat(capture.turns, snipe.turns)
-    # capture send_cap is the source-available cap; snipe option.send_cap == needed.
-    send_cap = jnp.concatenate([capture.send_cap.reshape(n), snipe.needed.reshape(n)])
+    src_slot = jnp.concatenate([src_idx, src_idx, src_idx])
+    target_slot = jnp.concatenate([tgt_idx, tgt_idx, tgt_idx])
+    angle = jnp.concatenate(
+        [capture.angle.reshape(n), snipe.angle.reshape(n), harass.angle.reshape(n)]
+    )
+    turns = jnp.concatenate(
+        [capture.turns.reshape(n), snipe.turns.reshape(n), harass.turns.reshape(n)]
+    )
+    # capture send_cap is the source-available cap; snipe/harass send_cap == needed.
+    send_cap = jnp.concatenate(
+        [capture.send_cap.reshape(n), snipe.needed.reshape(n), harass.needed.reshape(n)]
+    )
 
     return SingleMissionTable(
         valid=valid,
@@ -130,7 +145,8 @@ def compute_actions(features: WorldFeatures, modes: ModesArrays) -> jax.Array:
     """
     capture = build_capture_grid(features, modes)
     snipe = build_snipe_grid(features, modes)
-    table = _combine_single_table(capture, snipe)
+    harass = build_harass_grid(features, modes)
+    table = _combine_single_table(capture, snipe, harass)
     res = run_single_source_allocator(table, features, modes)
     return _alloc_to_action_tensor(res, features)
 

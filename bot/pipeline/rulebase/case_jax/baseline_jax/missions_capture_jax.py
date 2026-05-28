@@ -46,6 +46,14 @@ from ..baseline.core.config import (
     FOUR_PLAYER_ROTATING_REACTION_GAP,
     FOUR_PLAYER_ROTATING_SEND_RATIO,
     FOUR_PLAYER_ROTATING_TURN_LIMIT,
+    HARASS_COST_TURN_WEIGHT,
+    HARASS_ENABLED,
+    HARASS_MAX_TRAVEL_TURNS,
+    HARASS_MIN_SRC_RESERVE,
+    HARASS_MIN_TARGET_PRODUCTION,
+    HARASS_MIN_TARGET_SHIPS,
+    HARASS_PRODUCTION_STEAL_TURNS,
+    HARASS_VALUE_MULT,
     HORIZON,
     PARTIAL_SOURCE_MIN_SHIPS,
     ROTATING_OPENING_LOW_PROD,
@@ -109,6 +117,26 @@ class SnipeGrid(NamedTuple):
     angle: jax.Array  # float32[P_src, P_tgt]
     turns: jax.Array  # int32[P_src, P_tgt] (aim turns)
     sync_turn: jax.Array  # int32[P_src, P_tgt] (mission turns)
+    needed: jax.Array  # int32[P_src, P_tgt]
+
+
+class HarassGrid(NamedTuple):
+    """Per-(P_src, P_tgt) harass-mission candidate fields.
+
+    Mirrors `build_harass_missions`: a one-shot capture of a high-production
+    ENEMY planet to briefly steal its production. Python keeps only the
+    best-scoring source per enemy target (a single Mission per target column),
+    so this grid marks only the per-target argmax-source cell `valid`; every
+    other cell in the same column is masked off (see `build_harass_grid`).
+
+    The allocator folds a valid cell in as `KIND_HARASS` with `send = needed`,
+    so the per-cell payload exposed is `valid / score / angle / turns / needed`.
+    """
+
+    valid: jax.Array  # bool[P_src, P_tgt]
+    score: jax.Array  # float32[P_src, P_tgt]
+    angle: jax.Array  # float32[P_src, P_tgt]
+    turns: jax.Array  # int32[P_src, P_tgt]
     needed: jax.Array  # int32[P_src, P_tgt]
 
 
@@ -570,10 +598,155 @@ def build_snipe_grid(features: WorldFeatures, modes: ModesArrays) -> SnipeGrid:
     return jax.vmap(per_src)(idx)
 
 
+def _harass_cell(
+    features: WorldFeatures,
+    owner_at: jax.Array,
+    ships_at: jax.Array,
+    src_idx: jax.Array,
+    tgt_idx: jax.Array,
+) -> HarassGrid:
+    """Mirror `build_harass_missions`'s inner (src, target) body for one cell.
+
+    Reproduces the Python loop body verbatim with maskable gates. `score` /
+    `angle` / `turns` / `needed` come from the SECOND `plan_shot` (`final`) and
+    the re-derived base `need`. Best-per-target deduplication is applied later in
+    `build_harass_grid`; here every individually-valid cell is emitted.
+    """
+    s = src_idx
+    t = tgt_idx
+    player = features.player
+
+    # --- global gates (HARASS_ENABLED & not very_late & enemy planets exist) ---
+    enemy_exists = jnp.any(
+        features.planet_valid & (features.owner != -1) & (features.owner != player)
+    )
+    global_ok = (
+        jnp.bool_(HARASS_ENABLED)
+        & jnp.logical_not(features.is_very_late)
+        & (enemy_exists)
+    )
+
+    # --- target gates: enemy, not comet, prod >= 2, ships >= 1 ---
+    tgt_valid = features.planet_valid[t]
+    tgt_is_enemy = (features.owner[t] != -1) & (features.owner[t] != player)
+    tgt_not_comet = jnp.logical_not(features.is_comet[t])
+    tgt_prod_ok = features.prod[t] >= HARASS_MIN_TARGET_PRODUCTION
+    tgt_ships_ok = features.ships[t] >= HARASS_MIN_TARGET_SHIPS
+    target_ok = tgt_valid & tgt_is_enemy & tgt_not_comet & tgt_prod_ok & tgt_ships_ok
+
+    # --- src gates: mine, distinct, ships >= HARASS_MIN_SRC_RESERVE ---
+    src_mine = features.planet_valid[s] & (features.owner[s] == player)
+    distinct = s != t
+    src_ships = features.ships[s]
+    src_reserve_ok = src_ships >= HARASS_MIN_SRC_RESERVE
+    src_ok = src_mine & distinct & src_reserve_ok
+
+    cell_ok = global_ok & target_ok & src_ok
+
+    # --- probe = max(target.ships + 2, HARASS_MIN_TARGET_SHIPS + 2) ---
+    probe = jnp.maximum(features.ships[t] + 2, jnp.int32(HARASS_MIN_TARGET_SHIPS + 2))
+    probe_ok = probe < src_ships
+
+    # --- aim1 = plan_shot(probe) ---
+    _a1, turns1, _ix1, _iy1, aim1_valid = _plan_shot_cell(features, s, t, probe)
+    remaining = features.remaining_steps
+    turns1_ok = (
+        aim1_valid
+        & (turns1 <= HARASS_MAX_TRAVEL_TURNS)
+        & (turns1 <= remaining - VERY_LATE_CAPTURE_BUFFER)
+    )
+
+    tgt_owner_at = owner_at[t]
+    tgt_ships_at = ships_at[t]
+
+    # --- need = base ships_needed_to_capture(target, aim1.turns) ---
+    need1 = _base_need(tgt_owner_at, tgt_ships_at, turns1, player)
+    need1_cap = src_ships - HARASS_MIN_SRC_RESERVE + probe
+    need1_ok = (need1 > 0) & (need1 <= need1_cap) & (need1 < src_ships)
+
+    stage1_ok = cell_ok & probe_ok & turns1_ok & need1_ok
+
+    # --- final = plan_shot(need) ---
+    angle, turns2, _ix2, _iy2, final_valid = _plan_shot_cell(
+        features, s, t, jnp.maximum(jnp.int32(1), need1)
+    )
+    turns2_ok = final_valid & (turns2 <= HARASS_MAX_TRAVEL_TURNS)
+
+    # --- need2 = base ships_needed_to_capture(target, final.turns) ---
+    need2 = _base_need(tgt_owner_at, tgt_ships_at, turns2, player)
+    need2_ok = (need2 > 0) & (need2 < src_ships)
+
+    # --- score (uses need2 / final.turns) ---
+    stolen = (
+        features.prod[t].astype(jnp.float32)
+        * jnp.float32(HARASS_PRODUCTION_STEAL_TURNS)
+        * jnp.float32(HARASS_VALUE_MULT)
+    )
+    score = stolen / (
+        need2.astype(jnp.float32)
+        + turns2.astype(jnp.float32) * jnp.float32(HARASS_COST_TURN_WEIGHT)
+        + 1.0
+    )
+
+    valid = stage1_ok & turns2_ok & need2_ok
+
+    return HarassGrid(
+        valid=valid,
+        score=jnp.where(valid, score, 0.0).astype(jnp.float32),
+        angle=jnp.where(valid, angle, 0.0).astype(jnp.float32),
+        turns=jnp.where(valid, turns2, 0).astype(jnp.int32),
+        needed=jnp.where(valid, need2, 0).astype(jnp.int32),
+    )
+
+
+def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` harass-mission candidate grid.
+
+    `modes` is unused (harass scores from raw production, no mode multiplier) but
+    kept in the signature so every mission grid builder shares one call shape.
+
+    The Python `build_harass_missions` keeps a single best-scoring source per
+    enemy target. We reproduce that AFTER assembling per-cell candidates: within
+    each target column (axis 0 = source), only the max-`score` valid cell stays
+    `valid`; all other sources for that target are masked off so the allocator
+    sees exactly one KIND_HARASS candidate per target, matching Python.
+    """
+    _ = modes
+    owner_at, ships_at = _base_timelines(features)
+    idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
+
+    def per_src(s: jax.Array) -> HarassGrid:
+        def per_tgt(t: jax.Array) -> HarassGrid:
+            return _harass_cell(features, owner_at, ships_at, s, t)
+
+        return jax.vmap(per_tgt)(idx)
+
+    cells: HarassGrid = jax.vmap(per_src)(idx)
+
+    # Best-per-target dedup: for each target column keep only the max-score valid
+    # source. Ties resolve to the lowest source index (Python's `>` keeps the
+    # first-seen best on equality, and my_planets preserves obs/slot order).
+    masked_score = jnp.where(cells.valid, cells.score, jnp.float32(-jnp.inf))
+    best_src = jnp.argmax(masked_score, axis=0)  # (P_tgt,)
+    src_axis = jnp.arange(MAX_PLANETS, dtype=jnp.int32)[:, None]  # (P_src, 1)
+    is_best = src_axis == best_src[None, :]  # (P_src, P_tgt)
+    keep = cells.valid & is_best
+
+    return HarassGrid(
+        valid=keep,
+        score=jnp.where(keep, cells.score, 0.0).astype(jnp.float32),
+        angle=jnp.where(keep, cells.angle, 0.0).astype(jnp.float32),
+        turns=jnp.where(keep, cells.turns, 0).astype(jnp.int32),
+        needed=jnp.where(keep, cells.needed, 0).astype(jnp.int32),
+    )
+
+
 __all__ = [
     "CaptureGrid",
+    "HarassGrid",
     "SnipeGrid",
     "build_capture_grid",
+    "build_harass_grid",
     "build_snipe_grid",
     "opening_filter_jax",
 ]
