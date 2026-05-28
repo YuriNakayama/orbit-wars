@@ -71,10 +71,13 @@ from ..baseline.core.config import (
     TOTAL_STEPS,
     VERY_LATE_REMAINING_TURNS,
 )
+from ..baseline.core.config import HORIZON as _HORIZON_INT
 from ..baseline.core.physics import comet_remaining_life
 from ..baseline.core.types import Fleet, Planet
 from ..baseline.core.world_model import build_arrival_ledger, normalize_arrivals
+from .aim_jax import MAX_COMET_PATH_LEN, resolve_comet_path
 from .physics_jax import is_static_planet_jax, travel_time_jax
+from .plan_shot_jax import MAX_OTHER_COMETS, _COMET_RADIUS_DEFAULT
 from .timeline_jax import (
     MAX_ARRIVALS_PER_TURN,
     MAX_PLANETS,
@@ -132,6 +135,18 @@ class WorldFeatures(NamedTuple):
     arr_owner: jax.Array  # int32
     arr_ships: jax.Array  # int32
     arr_valid: jax.Array  # bool
+
+    # Host-resolved comet-path inputs for plan_shot_jax (the §12c pattern).
+    # Per-planet target comet path + the shared other-comet sweep arrays.
+    comet_path: jax.Array  # float32[MAX_PLANETS, MAX_COMET_PATH_LEN, 2]
+    comet_path_index: jax.Array  # int32[MAX_PLANETS]
+    comet_path_len: jax.Array  # int32[MAX_PLANETS] (0 == non-comet)
+    plan_max_turns: jax.Array  # int32[MAX_PLANETS] (HORIZON, comet-life capped)
+    other_paths: jax.Array  # float32[MAX_OTHER_COMETS, MAX_COMET_PATH_LEN, 2]
+    other_path_index: jax.Array  # int32[MAX_OTHER_COMETS]
+    other_path_len: jax.Array  # int32[MAX_OTHER_COMETS]
+    other_planet_id: jax.Array  # int32[MAX_OTHER_COMETS]
+    comet_radius: jax.Array  # float32 (scalar, _COMET_RADIUS_DEFAULT)
 
     # Scalars
     step: jax.Array  # int32
@@ -223,6 +238,56 @@ def _count_players(planets: list[Planet], fleets: list[Fleet]) -> int:
     return max(2, len(owners))
 
 
+def _resolve_target_comet_paths(
+    planets: list[Planet],
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per-planet target comet path + the plan_shot `max_turns` cap.
+
+    Mirrors `aim_with_prediction`'s comet bracket: `max_turns = HORIZON`, and for
+    a comet `max_turns = min(HORIZON, max(0, comet_life - 1))`. Non-comet slots
+    get a zero path with `path_len == 0` (the orbital branch).
+    """
+    paths = np.zeros((MAX_PLANETS, MAX_COMET_PATH_LEN, 2), dtype=np.float32)
+    path_index = np.zeros(MAX_PLANETS, dtype=np.int32)
+    path_len = np.zeros(MAX_PLANETS, dtype=np.int32)
+    max_turns = np.full(MAX_PLANETS, _HORIZON_INT, dtype=np.int32)
+    for i, planet in enumerate(planets):
+        path, pidx, plen = resolve_comet_path(planet.id, comets, comet_ids)
+        paths[i] = np.asarray(path, dtype=np.float32)
+        path_index[i] = pidx
+        path_len[i] = plen
+        if planet.id in comet_ids:
+            life = comet_remaining_life(planet.id, comets)
+            max_turns[i] = min(_HORIZON_INT, max(0, life - 1))
+    return paths, path_index, path_len, max_turns
+
+
+def _resolve_other_comets(
+    comets: list[dict[str, Any]],
+    comet_ids: set[int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Host-resolve every active comet planet into fixed MAX_OTHER_COMETS slots.
+
+    Mirrors `fleet_crosses_other_comet`'s sweep set; empty slots get
+    `path_len == 0` and `planet_id == -1` (matches the test assembly pattern).
+    """
+    paths = np.zeros((MAX_OTHER_COMETS, MAX_COMET_PATH_LEN, 2), dtype=np.float32)
+    path_index = np.zeros(MAX_OTHER_COMETS, dtype=np.int32)
+    path_len = np.zeros(MAX_OTHER_COMETS, dtype=np.int32)
+    planet_id = np.full(MAX_OTHER_COMETS, -1, dtype=np.int32)
+    for slot, cid in enumerate(sorted(comet_ids)):
+        if slot >= MAX_OTHER_COMETS:
+            break
+        path, pidx, plen = resolve_comet_path(cid, comets, comet_ids)
+        paths[slot] = np.asarray(path, dtype=np.float32)
+        path_index[slot] = pidx
+        path_len[slot] = plen
+        planet_id[slot] = cid
+    return paths, path_index, path_len, planet_id
+
+
 def build_world_features(obs: Any) -> WorldFeatures:
     """Resolve the kaggle obs into fixed-shape `WorldFeatures` JAX arrays."""
     (
@@ -283,6 +348,20 @@ def build_world_features(obs: Any) -> WorldFeatures:
         arr_owner[i] = a_owner
         arr_ships[i] = a_ships
         arr_valid[i] = a_valid
+
+    # --- comet-path inputs for plan_shot_jax (host-resolved §12c pattern) ---
+    (
+        comet_path,
+        comet_path_index,
+        comet_path_len,
+        plan_max_turns,
+    ) = _resolve_target_comet_paths(planets, comets, comet_ids)
+    (
+        other_paths,
+        other_path_index,
+        other_path_len,
+        other_planet_id,
+    ) = _resolve_other_comets(comets, comet_ids)
 
     # --- owner strength / production (owners 0..3) ---
     owner_strength = np.zeros(NUM_OWNERS, dtype=np.int64)
@@ -409,6 +488,15 @@ def build_world_features(obs: Any) -> WorldFeatures:
         arr_owner=arr_owner_j,
         arr_ships=arr_ships_j,
         arr_valid=arr_valid_j,
+        comet_path=jnp.asarray(comet_path, dtype=jnp.float32),
+        comet_path_index=jnp.asarray(comet_path_index, dtype=jnp.int32),
+        comet_path_len=jnp.asarray(comet_path_len, dtype=jnp.int32),
+        plan_max_turns=jnp.asarray(plan_max_turns, dtype=jnp.int32),
+        other_paths=jnp.asarray(other_paths, dtype=jnp.float32),
+        other_path_index=jnp.asarray(other_path_index, dtype=jnp.int32),
+        other_path_len=jnp.asarray(other_path_len, dtype=jnp.int32),
+        other_planet_id=jnp.asarray(other_planet_id, dtype=jnp.int32),
+        comet_radius=jnp.float32(_COMET_RADIUS_DEFAULT),
         step=jnp.int32(step),
         player=jnp.int32(player),
         ang_vel=jnp.float32(ang_vel),
@@ -609,6 +697,8 @@ def _proactive_keep_grid(
 
 __all__ = [
     "BIG_REACTION",
+    "MAX_COMET_PATH_LEN",
+    "MAX_OTHER_COMETS",
     "NUM_OWNERS",
     "WorldFeatures",
     "build_world_features",
