@@ -365,8 +365,85 @@ class _OpponentPool:
     def sample(self, rng: np.random.Generator) -> ActorCriticJax:
         return self._models[int(rng.integers(len(self._models)))]
 
+    def models(self) -> list[ActorCriticJax]:
+        return list(self._models)
+
     def __len__(self) -> int:
         return len(self._models)
+
+
+@dataclass
+class _OpponentEntry:
+    """One selectable opponent: a rule mode name + optional self-snapshot model."""
+
+    opponent: str  # "baseline_jax_full" or "self_snapshot"
+    model: ActorCriticJax | None  # None for rule opponents
+    win_ema: float  # current agent's win-rate EMA vs this entry (x in f_hard)
+
+
+class _PrioritizedOpponentSelector:
+    """H4 (PFSP): pick opponents by f_hard(x) = (1 - x)^p.
+
+    Entries = [baseline_jax_full] + the current snapshot pool. `x` is the
+    learner's EMA win-rate vs each entry (init 0.5 = unknown). Harder
+    opponents (low win-rate) get higher selection weight, concentrating
+    learning on what the agent cannot yet beat (AlphaStar main-agent recipe).
+    Selection is host-side; only the chosen (opponent, model) is threaded into
+    `collect_rollout_jax`, so the scan/vmap trace stays single.
+    """
+
+    def __init__(self, p: float, ema: float, init_win: float = 0.5) -> None:
+        self._p = p
+        self._ema = ema
+        self._init_win = init_win
+        self._entries: list[_OpponentEntry] = []
+
+    def set_entries(
+        self, pool_models: list[ActorCriticJax], include_full: bool
+    ) -> None:
+        """Rebuild entries from the current pool (+ baseline_jax_full).
+
+        Preserves the win_ema of carried-over snapshot entries by index from
+        the tail (FIFO pool), and seeds new entries at init_win.
+        """
+        prev_snaps = [e for e in self._entries if e.opponent == "self_snapshot"]
+        new_entries: list[_OpponentEntry] = []
+        if include_full:
+            full_prev = next(
+                (e for e in self._entries if e.opponent == "baseline_jax_full"), None
+            )
+            new_entries.append(
+                _OpponentEntry(
+                    "baseline_jax_full",
+                    None,
+                    full_prev.win_ema if full_prev else self._init_win,
+                )
+            )
+        # Align pool models to the tail of prev snapshot EMAs (FIFO order).
+        carried = prev_snaps[-len(pool_models) :] if pool_models else []
+        pad = len(pool_models) - len(carried)
+        for i, m in enumerate(pool_models):
+            ema = carried[i - pad].win_ema if i >= pad else self._init_win
+            new_entries.append(_OpponentEntry("self_snapshot", m, ema))
+        self._entries = new_entries
+
+    def sample(self, rng: np.random.Generator) -> tuple[int, _OpponentEntry]:
+        weights = np.array([(1.0 - e.win_ema) ** self._p for e in self._entries])
+        total = weights.sum()
+        probs = (
+            weights / total
+            if total > 0
+            else np.ones(len(self._entries)) / len(self._entries)
+        )
+        idx = int(rng.choice(len(self._entries), p=probs))
+        return idx, self._entries[idx]
+
+    def update(self, idx: int, win_rate: float) -> None:
+        e = self._entries[idx]
+        e.win_ema = self._ema * e.win_ema + (1.0 - self._ema) * win_rate
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
 
 app = typer.Typer(add_completion=False)
@@ -425,6 +502,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_cap = int(pool_cfg.get("cap", 5))
     pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
+    # H4: when priority == "f_hard", pick the late opponent by (1-x)^p instead
+    # of the uniform pool/full mix. priority == "uniform" reproduces H2.
+    pool_priority = str(pool_cfg.get("priority", "uniform"))
+    pool_priority_p = float(pool_cfg.get("priority_p", 2.0))
+    pool_priority_ema = float(pool_cfg.get("priority_ema", 0.7))
+    use_priority = use_pool and pool_priority == "f_hard"
 
     def _opponent_for_iter(it: int) -> str:
         if opponent != "curriculum":
@@ -476,6 +559,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool = _OpponentPool(pool_cap)
     pool.push(model)
     pool_rng = np.random.default_rng(seed)
+    # H4: prioritized selector over [baseline_jax_full] + pool snapshots.
+    selector = _PrioritizedOpponentSelector(pool_priority_p, pool_priority_ema)
+    if use_priority:
+        selector.set_entries(pool.models(), include_full=True)
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
     key = jax.random.PRNGKey(seed)
@@ -483,10 +570,17 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     for it in range(iterations):
         iter_opponent = _opponent_for_iter(it)
         iter_opp_model = opp_snapshot
-        # H2: in the late phase with a pool, pick per-iter between a pooled
-        # snapshot (self_snapshot vs a refreshed past self) and baseline_jax_full.
+        sel_idx = -1
         if use_pool and it >= curriculum_switch_iter:
-            if pool_rng.random() < pool_late_full_prob:
+            if use_priority:
+                # H4: f_hard=(1-x)^p over full + pool snapshots.
+                sel_idx, entry = selector.sample(pool_rng)
+                iter_opponent = entry.opponent
+                iter_opp_model = (
+                    entry.model if entry.model is not None else opp_snapshot
+                )
+            elif pool_rng.random() < pool_late_full_prob:
+                # H2: uniform full/pool mix.
                 iter_opponent = "baseline_jax_full"
             else:
                 iter_opponent = "self_snapshot"
@@ -510,10 +604,15 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             shaping_mode=shaping_mode,
             opp_model=iter_opp_model,
         )
-        # H2: refresh the pool with the just-updated model every K iters so the
-        # opponent distribution tracks the learner instead of staying frozen.
+        # H4: update the selected entry's win-rate EMA with this iter's outcome.
+        if use_priority and sel_idx >= 0:
+            selector.update(sel_idx, row["win_rate"])
+        # H2/H4: refresh the pool with the just-updated model every K iters so
+        # the opponent distribution tracks the learner instead of staying frozen.
         if use_pool and (it + 1) % pool_snapshot_every == 0:
             pool.push(model)
+            if use_priority:
+                selector.set_entries(pool.models(), include_full=True)
         row["opponent"] = iter_opponent
         row["shaping_mode"] = shaping_mode
         history.append(row)

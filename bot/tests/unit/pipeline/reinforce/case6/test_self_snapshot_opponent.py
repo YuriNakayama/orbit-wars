@@ -129,3 +129,55 @@ def test_pool_cap_one() -> None:
     pool.push(_tiny_model())
     assert len(pool) == 1
     assert pool.sample(np.random.default_rng(0)) is not None
+
+
+# --- H4: prioritized opponent selector (f_hard) ---
+
+
+def test_prioritized_selector_favors_hard_opponents() -> None:
+    import numpy as np
+
+    from pipeline.reinforce.case6.training.train_jax import (
+        _PrioritizedOpponentSelector,
+    )
+
+    sel = _PrioritizedOpponentSelector(p=2.0, ema=0.7)
+    sel.set_entries([_tiny_model(), _tiny_model()], include_full=True)
+    assert len(sel) == 3  # full + 2 snapshots
+    # Make entry 0 (full) a hard opponent (low win), entry 1 easy (high win).
+    sel.update(0, 0.0)  # win_ema -> 0.7*0.5 + 0.3*0.0 = 0.35
+    sel.update(1, 1.0)  # win_ema -> 0.7*0.5 + 0.3*1.0 = 0.65
+    rng = np.random.default_rng(0)
+    counts = [0, 0, 0]
+    for _ in range(2000):
+        idx, _entry = sel.sample(rng)
+        counts[idx] += 1
+    # f_hard: (1-0.35)^2=0.42 vs (1-0.65)^2=0.12 → hard entry 0 sampled more.
+    assert counts[0] > counts[1]
+
+
+def test_prioritized_selector_ema_update() -> None:
+    from pipeline.reinforce.case6.training.train_jax import (
+        _PrioritizedOpponentSelector,
+    )
+
+    sel = _PrioritizedOpponentSelector(p=2.0, ema=0.7)
+    sel.set_entries([], include_full=True)
+    sel.update(0, 1.0)
+    # 0.7*0.5 + 0.3*1.0 = 0.65
+    assert abs(sel._entries[0].win_ema - 0.65) < 1e-9
+
+
+def test_prioritized_selector_carries_ema_on_pool_refresh() -> None:
+    from pipeline.reinforce.case6.training.train_jax import (
+        _PrioritizedOpponentSelector,
+    )
+
+    sel = _PrioritizedOpponentSelector(p=2.0, ema=0.7)
+    m1, m2 = _tiny_model(), _tiny_model()
+    sel.set_entries([m1], include_full=True)
+    sel.update(0, 0.0)  # full hard
+    full_ema = sel._entries[0].win_ema
+    # Pool refresh adds a new snapshot; full entry keeps its EMA.
+    sel.set_entries([m1, m2], include_full=True)
+    assert abs(sel._entries[0].win_ema - full_ema) < 1e-9

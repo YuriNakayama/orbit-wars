@@ -447,6 +447,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 H4: PFSP f_hard=(1−x)^p 優先 sampling。難敵 (full / 強い
+    # pool snapshot) を優先選択し vs full の伸びしろを取る。iter 100 / ep 64。
+    "reinforce_case6_kaggle_jax_train_h4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h4",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h4.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
     # the self_snapshot opponent path launches and collects artifacts on RunPod).
     "reinforce_case6_kaggle_jax_smoke": {
