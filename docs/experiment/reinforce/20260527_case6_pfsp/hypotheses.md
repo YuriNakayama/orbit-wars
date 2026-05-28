@@ -60,9 +60,13 @@
         vs pool snapshot 0.828)。**vs full が 0.138→0.359 と上昇** (+0.0027/it) = 強い相手に
         勝てるよう学習進行。PFSP 前提が機能。$0.70 で完走 (H1 の 1/10)。n<300 で断定不可。
         → H4 (f_hard 優先 sampling) で vs full の伸びしろを取りに行く。
-- [ ] (P2, depends on H1+H2) H4: PFSP `f_hard(x)=(1−x)^p` — 現 agent の各相手に対する勝率 x に
+- [x] (P2, depends on H1+H2) H4: PFSP `f_hard(x)=(1−x)^p` — 現 agent の各相手に対する勝率 x に
       反比例 (勝てない相手ほど高確率) して pool から相手を sampling。
       — AlphaStar 主手法。難敵に学習を集中させ最終強度を押し上げる (今回の主題)。
+      — **inconclusive (positive, iter3)**: f_hard が full を優先選択 (52 vs H2 40 回)、
+        **vs full last5 0.359→0.419 / slope +0.0027→+0.0035** と H2 (uniform) を改善。難敵集中
+        が機能。n<300 + 絶対勝率 0.42 で断定不可。⚠️ full 偏重で 92分/$2.1 (cap 超過、
+        [[project_reinforce_self_snapshot_cost]])。→ H5 (f_var) と A/B、コスト対策必須。
 - [ ] (P2, depends on H1+H2) H5: PFSP `f_var(x)=x(1−x)` — 勝率 0.5 付近の相手を優先 sampling。
       — over-strong 相手での勾配消失を避け curriculum を平滑化。H4 と A/B 比較。
 - [ ] (P3, depends on H1+H2) H6: rule (lite/full) と self-pool の混合比を検証
@@ -82,6 +86,7 @@
 |---|---|---|---|---|---|---|---|
 | 1 | 2026-05-27 | H1 | iter1_plan.md | 20260527-145442__...__fb36504__seed0 | win last10=0.988 (飽和), iter6 dip 0.766, value_loss 0.104→0.052 | inconclusive | iter1_result.md / iter1_analysis.md |
 | 2 | 2026-05-28 | H2 | iter2_plan.md | 20260528-005806__...__36982a3__seed0 | win last10=0.661 (飽和解消), vs full 0.138→0.359 (+0.0027/it), entropy 有界 | inconclusive | iter2_result.md / iter2_analysis.md |
+| 3 | 2026-05-28 | H4 | iter3_plan.md | 20260528-022303__...__510426e__seed0 | vs full last5 0.419 (>H2 0.359), slope +0.0035/it (>H2 +0.0027), $2.1 ⚠️ | inconclusive | iter3_result.md / iter3_analysis.md |
 
 ## 参考 (References)
 
