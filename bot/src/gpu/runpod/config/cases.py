@@ -518,6 +518,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # bench_selfplay_jax_gpu: GPU bench + win-rate sanity for the case_jax
+    # fully-JAX rulebase agent's vmapped self-play harness. Measures jax_v4
+    # self-play seat0 win-rate (symmetry ~50%) and per-game throughput / vmap
+    # batch-scaling at batch {1,16,64} horizon 500. family=reinforce reuses the
+    # jax[cuda12]-installing onstart; same bench_*_gpu shape so the artifacts
+    # uploader + dev/runpod pull work unchanged.
+    "bench_selfplay_jax_gpu": {
+        "family": "reinforce",
+        "stage": "bench_selfplay_jax_gpu",
+        "train_module": "pipeline.rulebase.case_jax._bench.selfplay_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
