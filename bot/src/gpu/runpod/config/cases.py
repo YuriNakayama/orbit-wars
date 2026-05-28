@@ -447,6 +447,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5 H4: ratio mode の shaping_coef sweep (0.50 → 1.0)。
+    "reinforce_case5_kaggle_jax_train_h4_ratio_coef1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h4_ratio_coef1",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h4_ratio_coef1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
