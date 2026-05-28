@@ -49,6 +49,7 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+from orbit_wars_jax.state import EnvState
 
 from ..baseline.core.config import (
     AHEAD_ATTACK_MARGIN_BONUS,
@@ -76,7 +77,7 @@ from ..baseline.core.physics import comet_remaining_life
 from ..baseline.core.types import Fleet, Planet
 from ..baseline.core.world_model import build_arrival_ledger, normalize_arrivals
 from .aim_jax import MAX_COMET_PATH_LEN, resolve_comet_path
-from .physics_jax import is_static_planet_jax, travel_time_jax
+from .physics_jax import fleet_speed_jax, is_static_planet_jax, travel_time_jax
 from .plan_shot_jax import MAX_OTHER_COMETS, _COMET_RADIUS_DEFAULT
 from .timeline_jax import (
     MAX_ARRIVALS_PER_TURN,
@@ -695,6 +696,534 @@ def _proactive_keep_grid(
     return jax.vmap(per_my_planet)(eta_my_by_enemy)
 
 
+# ---------------------------------------------------------------------------
+# Pure-JAX path: build_world_features_from_state(state, seat)
+#
+# Everything below computes the SAME WorldFeatures from a fixed-shape EnvState
+# with no host-side Python list parsing or arrival loop, so the whole function
+# is jax.jit-able and jax.vmap-able over a batch of EnvStates. The host path
+# above (`build_world_features(obs)`) is left untouched.
+#
+# Coordinate convention: `state_to_obs` emits a planet obs row as
+# `[id, owner, x=planet_xy[:, 0], y=planet_xy[:, 1], ...]`, so on the JAX side
+# `xs = state.planet_xy[:, 0]` and `ys = state.planet_xy[:, 1]`, matching what
+# the host featurizer reads as `planet.x` / `planet.y`.
+# ---------------------------------------------------------------------------
+
+# +inf-like sentinel for "no candidate planet" in the fleet-target argmin. Must
+# exceed HORIZON so masked planets never win the argmin, and stay finite so the
+# downstream `best_time <= HORIZON` test is exact.
+_NO_TARGET_TURNS: float = 1e18
+
+
+def _fleet_target_jax(
+    fx: jax.Array,
+    fy: jax.Array,
+    f_angle: jax.Array,
+    f_ships: jax.Array,
+    f_valid: jax.Array,
+    px: jax.Array,
+    py: jax.Array,
+    pradius: jax.Array,
+    p_valid: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Pure-JAX `fleet_target_planet` for one fleet over all planets.
+
+    Returns `(target_slot, eta, hit)`. `hit == False` mirrors the Python
+    `(None, None)`. The ray-vs-circle nearest-hit logic and the `turns <=
+    HORIZON` / strict-min tie-break (first planet in slot order) match
+    `world_model.fleet_target_planet` exactly; `argmin` returns the first
+    minimal index, matching the Python `turns < best_time` strict comparison.
+    """
+    dir_x = jnp.cos(f_angle)
+    dir_y = jnp.sin(f_angle)
+    speed = fleet_speed_jax(f_ships)
+
+    dx = px - fx
+    dy = py - fy
+    proj = dx * dir_x + dy * dir_y
+    perp_sq = dx * dx + dy * dy - proj * proj
+    radius_sq = pradius * pradius
+    hit_d = jnp.maximum(0.0, proj - jnp.sqrt(jnp.maximum(0.0, radius_sq - perp_sq)))
+    turns = hit_d / speed
+
+    eligible = (
+        p_valid
+        & f_valid
+        & (proj >= 0.0)
+        & (perp_sq < radius_sq)
+        & (turns <= float(_HORIZON_INT))
+    )
+    scored = jnp.where(eligible, turns, _NO_TARGET_TURNS)
+    best_slot = jnp.argmin(scored).astype(jnp.int32)
+    best_time = scored[best_slot]
+    hit = jnp.any(eligible)
+    eta = jnp.maximum(1, jnp.ceil(best_time)).astype(jnp.int32)
+    return best_slot, eta, hit
+
+
+def _arrival_ledger_jax(
+    fleet_xy: jax.Array,
+    fleet_angle: jax.Array,
+    fleet_ships: jax.Array,
+    fleet_owner: jax.Array,
+    fleet_valid: jax.Array,
+    px: jax.Array,
+    py: jax.Array,
+    pradius: jax.Array,
+    p_valid: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Build the per-(planet, turn) arrival tables in pure JAX.
+
+    Returns `(arr_owner, arr_ships, arr_valid)` of shape
+    `(MAX_PLANETS, HORIZON+1, MAX_ARRIVALS_PER_TURN)`, identical to the host
+    `_bucket_planet_arrivals` output. Fleets are scattered in slot order (which
+    equals obs order) with a per-(planet, turn) slot counter; overflow past
+    `MAX_ARRIVALS_PER_TURN` is dropped exactly as the host does.
+
+    Within-turn slot order: the host buckets `normalize_arrivals` (a stable sort
+    by eta), so within a fixed eta fleets keep obs/slot order. Scattering fleets
+    in slot order with a running counter reproduces that order bit-for-bit,
+    including which arrivals overflow.
+    """
+    horizon_plus = _HORIZON_INT + 1
+
+    # Per-fleet target slot + eta + hit (vmap over fleets).
+    target_slot, eta, hit = jax.vmap(
+        _fleet_target_jax, in_axes=(0, 0, 0, 0, 0, None, None, None, None)
+    )(
+        fleet_xy[:, 0],
+        fleet_xy[:, 1],
+        fleet_angle,
+        fleet_ships,
+        fleet_valid,
+        px,
+        py,
+        pradius,
+        p_valid,
+    )
+    # normalize_arrivals also drops ships <= 0; eta is already clamped >= 1 and
+    # only kept when turns <= HORIZON (so eta <= HORIZON). Fleet validity and a
+    # real hit gate the contribution.
+    contributes = hit & fleet_valid & (fleet_ships > 0)
+
+    init_owner = jnp.full(
+        (MAX_PLANETS, horizon_plus, MAX_ARRIVALS_PER_TURN), -1, dtype=jnp.int32
+    )
+    init_ships = jnp.zeros(
+        (MAX_PLANETS, horizon_plus, MAX_ARRIVALS_PER_TURN), dtype=jnp.int32
+    )
+    init_valid = jnp.zeros(
+        (MAX_PLANETS, horizon_plus, MAX_ARRIVALS_PER_TURN), dtype=jnp.bool_
+    )
+    init_counts = jnp.zeros((MAX_PLANETS, horizon_plus), dtype=jnp.int32)
+
+    Carry = tuple[jax.Array, jax.Array, jax.Array, jax.Array]
+    Xs = tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]
+
+    def body(carry: Carry, xs: Xs) -> tuple[Carry, None]:
+        owner_t, ships_t, valid_t, counts = carry
+        tgt, e, own, shp, ok = xs
+        slot = counts[tgt, e]
+        do = ok & (slot < MAX_ARRIVALS_PER_TURN)
+        s_slot = jnp.where(do, slot, jnp.int32(0))
+        new_owner = owner_t.at[tgt, e, s_slot].set(
+            jnp.where(do, own, owner_t[tgt, e, s_slot])
+        )
+        new_ships = ships_t.at[tgt, e, s_slot].set(
+            jnp.where(do, shp, ships_t[tgt, e, s_slot])
+        )
+        new_valid = valid_t.at[tgt, e, s_slot].set(
+            jnp.where(do, True, valid_t[tgt, e, s_slot])
+        )
+        new_counts = counts.at[tgt, e].add(jnp.where(do, jnp.int32(1), jnp.int32(0)))
+        return (new_owner, new_ships, new_valid, new_counts), None
+
+    (arr_owner, arr_ships, arr_valid, _counts), _ = jax.lax.scan(
+        body,
+        (init_owner, init_ships, init_valid, init_counts),
+        (target_slot, eta, fleet_owner, fleet_ships, contributes),
+    )
+    return arr_owner, arr_ships, arr_valid
+
+
+def _comet_fields_from_state(
+    state: EnvState,
+) -> tuple[
+    jax.Array,  # is_comet[P]
+    jax.Array,  # comet_life[P]
+    jax.Array,  # comet_path[P, L, 2]
+    jax.Array,  # comet_path_index[P]
+    jax.Array,  # comet_path_len[P]
+    jax.Array,  # plan_max_turns[P]
+    jax.Array,  # other_paths[MAX_OTHER_COMETS, L, 2]
+    jax.Array,  # other_path_index[MAX_OTHER_COMETS]
+    jax.Array,  # other_path_len[MAX_OTHER_COMETS]
+    jax.Array,  # other_planet_id[MAX_OTHER_COMETS]
+]:
+    """Resolve every comet-path field from EnvState's fixed comet arrays.
+
+    Replaces the host `resolve_comet_path` / `comet_remaining_life`: for each
+    `(comet c, quadrant q)` pair the planet slot is `comet_planet_slot[c, q]`,
+    its path is `comet_paths[c, q]` (already `(MAX_COMET_PATH_LEN, 2)`),
+    `path_index = comet_path_index[c]`, `path_len = comet_path_len[c]`. The
+    paths are emitted unswapped, matching `state_to_obs`'s comet `paths`.
+    """
+    max_comets = state.comet_planet_slot.shape[0]  # MAX_COMETS
+    quads = state.comet_planet_slot.shape[1]  # 4
+    flat_slot = state.comet_planet_slot.reshape(-1)  # (C*4,)
+    flat_path = state.comet_paths.reshape(
+        max_comets * quads, MAX_COMET_PATH_LEN, 2
+    )  # (C*4, L, 2)
+    comet_idx = jnp.repeat(jnp.arange(max_comets, dtype=jnp.int32), quads)  # (C*4,)
+    flat_index = state.comet_path_index[comet_idx]  # (C*4,)
+    flat_len = state.comet_path_len[comet_idx]  # (C*4,)
+    flat_active = state.comet_active[comet_idx]  # (C*4,)
+    flat_pid = state.planet_id[jnp.clip(flat_slot, 0, MAX_PLANETS - 1)]  # (C*4,)
+
+    # A comet planet is one whose slot is valid, the comet is active, and the
+    # path is non-empty. This mirrors `comet_planet_ids` in `state_to_obs`
+    # (planet_is_comet & valid), bridged through comet bookkeeping.
+    flat_is_comet = (flat_slot >= 0) & flat_active & (flat_len > 0)
+
+    planet_idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
+    # (P, C*4): does (c, q) entry k reference planet slot p?
+    match = (planet_idx[:, None] == flat_slot[None, :]) & flat_is_comet[None, :]
+    is_comet = jnp.any(match, axis=1)  # (P,)
+    pick = jnp.argmax(match.astype(jnp.int32), axis=1)  # (P,) first matching entry
+
+    comet_path = jnp.where(is_comet[:, None, None], flat_path[pick], 0.0)
+    comet_index_p = jnp.where(is_comet, flat_index[pick], jnp.int32(0))
+    comet_len_p = jnp.where(is_comet, flat_len[pick], jnp.int32(0))
+    # comet_remaining_life = max(0, path_len - path_index).
+    raw_life = flat_len[pick] - flat_index[pick]
+    comet_life = jnp.where(is_comet, jnp.maximum(0, raw_life), jnp.int32(0)).astype(
+        jnp.int32
+    )
+    # plan_max_turns: non-comet -> HORIZON; comet -> min(HORIZON, max(0, life-1)).
+    comet_cap = jnp.minimum(_HORIZON_INT, jnp.maximum(0, comet_life - 1))
+    plan_max_turns = jnp.where(is_comet, comet_cap, jnp.int32(_HORIZON_INT)).astype(
+        jnp.int32
+    )
+
+    # --- other comets: every active comet planet, by ascending planet id. ---
+    # Host `_resolve_other_comets` iterates `sorted(comet_ids)`; we mirror that
+    # ordering by sorting active comet-planet entries by their planet id.
+    cap = MAX_OTHER_COMETS
+    sort_key = jnp.where(flat_is_comet, flat_pid, jnp.int32(2**30))
+    order = jnp.argsort(sort_key)  # ascending pid; empties pushed to the back
+    sel = order[:cap]
+    sel_is_comet = flat_is_comet[sel]
+    other_paths = jnp.where(sel_is_comet[:, None, None], flat_path[sel], 0.0)
+    other_path_index = jnp.where(sel_is_comet, flat_index[sel], jnp.int32(0))
+    other_path_len = jnp.where(sel_is_comet, flat_len[sel], jnp.int32(0))
+    other_planet_id = jnp.where(sel_is_comet, flat_pid[sel], jnp.int32(-1))
+
+    return (
+        is_comet,
+        comet_life,
+        comet_path,
+        comet_index_p,
+        comet_len_p,
+        plan_max_turns,
+        other_paths,
+        other_path_index,
+        other_path_len,
+        other_planet_id,
+    )
+
+
+def _reaction_times_state(
+    xs: jax.Array,
+    ys: jax.Array,
+    radius: jax.Array,
+    owner: jax.Array,
+    ships: jax.Array,
+    valid: jax.Array,
+    player: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Pure-JAX `_reaction_times` (per-target min travel_time, BIG sentinel)."""
+    ships_clamped = jnp.maximum(1, ships).astype(jnp.int32)
+
+    def src_to_targets(
+        sx: jax.Array,
+        sy: jax.Array,
+        sr: jax.Array,
+        s_ships: jax.Array,
+        s_valid: jax.Array,
+    ) -> jax.Array:
+        tt = travel_time_jax(sx, sy, sr, xs, ys, radius, s_ships).astype(jnp.float32)
+        return jnp.where(s_valid, tt, BIG_REACTION)
+
+    grid = jax.vmap(src_to_targets, in_axes=(0, 0, 0, 0, 0))(
+        xs, ys, radius, ships_clamped, valid
+    )
+    is_mine = valid & (owner == player)
+    is_enemy = valid & (owner != -1) & (owner != player)
+    my_grid = jnp.where(is_mine[:, None], grid, BIG_REACTION)
+    enemy_grid = jnp.where(is_enemy[:, None], grid, BIG_REACTION)
+    return (
+        jnp.min(my_grid, axis=0).astype(jnp.float32),
+        jnp.min(enemy_grid, axis=0).astype(jnp.float32),
+    )
+
+
+def _proactive_keep_grid_state(
+    xs: jax.Array,
+    ys: jax.Array,
+    radius: jax.Array,
+    owner: jax.Array,
+    ships: jax.Array,
+    valid: jax.Array,
+    player: jax.Array,
+) -> jax.Array:
+    """Pure-JAX `_proactive_keep_grid` (takes a jnp ships array, not numpy)."""
+    enemy_ships_raw = ships.astype(jnp.int32)
+    enemy_ships_tt = jnp.maximum(1, ships).astype(jnp.int32)
+    is_enemy = valid & (owner != -1) & (owner != player)
+
+    def enemy_to_targets(
+        ex: jax.Array,
+        ey: jax.Array,
+        er: jax.Array,
+        e_ships: jax.Array,
+    ) -> jax.Array:
+        return travel_time_jax(ex, ey, er, xs, ys, radius, e_ships).astype(jnp.float32)
+
+    grid = jax.vmap(enemy_to_targets, in_axes=(0, 0, 0, 0))(
+        xs, ys, radius, enemy_ships_tt
+    )
+    eta_my_by_enemy = grid.T
+
+    def per_my_planet(eta_row: jax.Array) -> jax.Array:
+        return _proactive_keep_one(eta_row, enemy_ships_raw, is_enemy)
+
+    return jax.vmap(per_my_planet)(eta_my_by_enemy)
+
+
+def _count_players_jax(
+    owner: jax.Array,
+    valid: jax.Array,
+    fleet_owner: jax.Array,
+    fleet_valid: jax.Array,
+) -> jax.Array:
+    """Pure-JAX `count_players`: distinct owners over planets (!= -1) + fleets."""
+    owners = jnp.arange(NUM_OWNERS, dtype=jnp.int32)
+    planet_present = jax.vmap(lambda o: jnp.any(valid & (owner != -1) & (owner == o)))(
+        owners
+    )
+    fleet_present = jax.vmap(lambda o: jnp.any(fleet_valid & (fleet_owner == o)))(
+        owners
+    )
+    present = planet_present | fleet_present
+    return jnp.maximum(2, jnp.sum(present.astype(jnp.int32))).astype(jnp.int32)
+
+
+def build_world_features_from_state(state: EnvState, seat: int) -> WorldFeatures:
+    """Pure-JAX `WorldFeatures` from an `EnvState` (jit- and vmap-able).
+
+    Same output contract as `build_world_features(obs)`, computed entirely from
+    fixed-shape EnvState arrays with no host-side parsing. `seat` is the player
+    perspective (a static Python int; do not trace over it).
+    """
+    player = jnp.int32(seat)
+    xs = state.planet_xy[:, 0]
+    ys = state.planet_xy[:, 1]
+    radius = state.planet_radius
+    owner = state.planet_owner.astype(jnp.int32)
+    valid = state.planet_valid
+    ships = state.planet_ships.astype(jnp.int32)
+    prod = state.planet_prod.astype(jnp.int32)
+    pid = jnp.where(valid, state.planet_id, jnp.int32(0)).astype(jnp.int32)
+    owner = jnp.where(valid, owner, jnp.int32(-1))
+
+    # initial position: `state_to_obs` feeds `initial_planets` from
+    # `planet_initial_xy` (x = [:, 0], y = [:, 1]); the host featurizer reads
+    # init.x / init.y from that. For comet planets these are -99.0, matching.
+    init_x = state.planet_initial_xy[:, 0]
+    init_y = state.planet_initial_xy[:, 1]
+    init_r = jnp.where(valid, radius, 0.0)
+
+    is_static = jnp.where(valid, is_static_planet_jax(xs, ys, radius), False)
+
+    wealth = jax.vmap(
+        indirect_wealth_jax, in_axes=(0, None, None, None, None, None, None)
+    )(
+        jnp.arange(MAX_PLANETS, dtype=jnp.int32),
+        xs,
+        ys,
+        owner,
+        prod.astype(jnp.float32),
+        valid,
+        player,
+    )
+    wealth = jnp.where(valid, wealth, 0.0).astype(jnp.float32)
+
+    reaction_my, reaction_enemy = _reaction_times_state(
+        xs, ys, radius, owner, ships, valid, player
+    )
+
+    arr_owner, arr_ships, arr_valid = _arrival_ledger_jax(
+        state.fleet_xy,
+        state.fleet_angle,
+        state.fleet_ships.astype(jnp.int32),
+        state.fleet_owner.astype(jnp.int32),
+        state.fleet_valid,
+        xs,
+        ys,
+        radius,
+        valid,
+    )
+
+    keep_needed = _keep_needed_grid(
+        owner, ships, prod, arr_owner, arr_ships, arr_valid, seat
+    )
+    proactive_keep = _proactive_keep_grid_state(
+        xs, ys, radius, owner, ships, valid, player
+    )
+    is_mine = valid & (owner == player)
+    reserve = jnp.where(
+        is_mine, jnp.minimum(ships, jnp.maximum(keep_needed, proactive_keep)), 0
+    ).astype(jnp.int32)
+    available = jnp.where(is_mine, jnp.maximum(0, ships - reserve), 0).astype(jnp.int32)
+
+    (
+        is_comet,
+        comet_life,
+        comet_path,
+        comet_path_index,
+        comet_path_len,
+        plan_max_turns,
+        other_paths,
+        other_path_index,
+        other_path_len,
+        other_planet_id,
+    ) = _comet_fields_from_state(state)
+
+    # --- owner strength / production (owners 0..3) ---
+    owners = jnp.arange(NUM_OWNERS, dtype=jnp.int32)
+    planet_owned = valid & (owner != -1)
+
+    def strength_for(o: jax.Array) -> jax.Array:
+        p_ships = jnp.sum(jnp.where(planet_owned & (owner == o), ships, 0))
+        f_ships = jnp.sum(
+            jnp.where(
+                state.fleet_valid & (state.fleet_owner == o), state.fleet_ships, 0
+            )
+        )
+        return (p_ships + f_ships).astype(jnp.int32)
+
+    def production_for(o: jax.Array) -> jax.Array:
+        return jnp.sum(jnp.where(planet_owned & (owner == o), prod, 0)).astype(
+            jnp.int32
+        )
+
+    owner_strength = jax.vmap(strength_for)(owners)
+    owner_production = jax.vmap(production_for)(owners)
+
+    my_total = owner_strength[player]
+    enemy_total = jnp.sum(owner_strength) - my_total
+    enemy_mask = owners != player
+    max_enemy_strength = jnp.max(jnp.where(enemy_mask, owner_strength, 0))
+    my_prod = owner_production[player]
+    enemy_prod = jnp.sum(owner_production) - my_prod
+
+    num_players = _count_players_jax(
+        owner, valid, state.fleet_owner.astype(jnp.int32), state.fleet_valid
+    )
+    step = state.step.astype(jnp.int32)
+    remaining_steps = jnp.maximum(1, TOTAL_STEPS - step)
+    static_neutral_count = jnp.sum(
+        (valid & (owner == -1) & is_static).astype(jnp.int32)
+    ).astype(jnp.int32)
+
+    is_early = step < EARLY_TURN_LIMIT
+    is_opening = step < OPENING_TURN_LIMIT
+    is_late = remaining_steps < LATE_REMAINING_TURNS
+    is_very_late = remaining_steps < VERY_LATE_REMAINING_TURNS
+    is_four_player = num_players >= 4
+
+    # --- modes (build_modes), pure JAX ---
+    denom = jnp.maximum(1, my_total + enemy_total).astype(jnp.float32)
+    domination = (my_total - enemy_total).astype(jnp.float32) / denom
+    is_behind = domination < BEHIND_DOMINATION
+    is_ahead = domination > AHEAD_DOMINATION
+    is_dominating = is_ahead | (
+        (max_enemy_strength > 0)
+        & (my_total > max_enemy_strength.astype(jnp.float32) * 1.25)
+    )
+    is_finishing = (
+        (domination > FINISHING_DOMINATION)
+        & (
+            my_prod.astype(jnp.float32)
+            > enemy_prod.astype(jnp.float32) * FINISHING_PROD_RATIO
+        )
+        & (step > 100)
+    )
+    attack_margin_mult = (
+        jnp.float32(1.0)
+        + jnp.where(is_ahead, jnp.float32(AHEAD_ATTACK_MARGIN_BONUS), 0.0)
+        - jnp.where(is_behind, jnp.float32(BEHIND_ATTACK_MARGIN_PENALTY), 0.0)
+        + jnp.where(is_finishing, jnp.float32(FINISHING_ATTACK_MARGIN_BONUS), 0.0)
+    )
+
+    return WorldFeatures(
+        planet_id=pid,
+        owner=owner,
+        xy=jnp.stack([xs, ys], axis=1),
+        radius=radius,
+        ships=ships,
+        prod=prod,
+        planet_valid=valid,
+        is_static=is_static,
+        is_comet=is_comet,
+        comet_life=comet_life,
+        indirect_wealth=wealth,
+        initial_xy=jnp.stack([init_x, init_y], axis=1),
+        initial_radius=init_r,
+        reaction_my_t=reaction_my,
+        reaction_enemy_t=reaction_enemy,
+        reserve=reserve,
+        available=available,
+        arr_owner=arr_owner,
+        arr_ships=arr_ships,
+        arr_valid=arr_valid,
+        comet_path=comet_path,
+        comet_path_index=comet_path_index,
+        comet_path_len=comet_path_len,
+        plan_max_turns=plan_max_turns,
+        other_paths=other_paths,
+        other_path_index=other_path_index,
+        other_path_len=other_path_len,
+        other_planet_id=other_planet_id,
+        comet_radius=jnp.float32(_COMET_RADIUS_DEFAULT),
+        step=step,
+        player=player,
+        ang_vel=state.angular_velocity.astype(jnp.float32),
+        num_players=num_players,
+        remaining_steps=remaining_steps,
+        is_early=is_early,
+        is_opening=is_opening,
+        is_late=is_late,
+        is_very_late=is_very_late,
+        is_four_player=is_four_player,
+        my_total=my_total.astype(jnp.int32),
+        enemy_total=enemy_total.astype(jnp.int32),
+        max_enemy_strength=max_enemy_strength.astype(jnp.int32),
+        my_prod=my_prod.astype(jnp.int32),
+        enemy_prod=enemy_prod.astype(jnp.int32),
+        static_neutral_count=static_neutral_count,
+        owner_strength=owner_strength.astype(jnp.int32),
+        horizon=jnp.int32(HORIZON),
+        domination=domination.astype(jnp.float32),
+        is_behind=is_behind,
+        is_ahead=is_ahead,
+        is_dominating=is_dominating,
+        is_finishing=is_finishing,
+        attack_margin_mult=attack_margin_mult.astype(jnp.float32),
+    )
+
+
 __all__ = [
     "BIG_REACTION",
     "MAX_COMET_PATH_LEN",
@@ -702,4 +1231,5 @@ __all__ = [
     "NUM_OWNERS",
     "WorldFeatures",
     "build_world_features",
+    "build_world_features_from_state",
 ]
