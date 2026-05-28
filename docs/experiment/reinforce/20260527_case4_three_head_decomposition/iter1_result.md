@@ -51,15 +51,48 @@ warmup の dip (chunk 2) 以降、全 chunk で 2-head がリード。差は中�
 
 ## Diagnosis
 
-- **3-head は 2-head の劣化** で、機能しなかった。head 構造以外は同一なので、
-  差分は分解構造そのものに帰属できる。
-- 仮説の前提「launch 決定の明示分離で学習信号がクリーンになる」は否定。
-  むしろ **2-head の (P+1) categorical が、行動有無と行動先を 1 つの softmax
-  competition に統合する点で PPO と相性が良い**ことを示唆。3-head では launch
-  Bernoulli と target softmax が別勾配になり、探索初期に launch head が早期
-  飽和すると target head へ流れる勾配が痩せる経路が考えられる。
-- best=0.99/1.0 は両者とも curriculum 序盤 (vs noop opponent) の勝利体験に
-  由来する fluke で、head 構造の優劣を測る指標にならない。last-10 が本指標。
+head 構造以外は完全同一なので差分は分解構造に帰属できるが、補助指標を読むと
+「3-head 化そのものが原理的に劣る」というより **2-head 用にチューニングした
+`no_op_bias` / `entropy_coef` を 3-head にそのまま流用したミスマッチ** が支配的
+と判断する。
+
+### 補助指標 (train.log)
+
+| 区間 | 3-head win / ploss / approx_kl | 2-head win / ploss / approx_kl |
+|---|---|---|
+| early 0–30 | 0.231 / **+0.0047** / **0.0222** | 0.281 / −0.0005 / 0.0019 |
+| mid 60–120 | 0.241 / +0.0005 / 0.0048 | 0.359 / −0.0003 / 0.0042 |
+| late 156–185 | 0.394 / −0.0004 / 0.0039 | 0.455 / −0.0004 / 0.0033 |
+
+3-head は **early の approx_kl が 2-head の約12倍 (0.022 vs 0.0019)** かつ
+policy_loss が正 — 序盤に方策が大きく暴れたのに勝率に結びついていない。
+
+### 主因 1: `no_op_bias=8.0` の意味が 2 head 間でズレた (最有力)
+
+- 2-head: `(P+1)` softmax の NO_OP slot を −8 → **P 個の発射先との相対競合**の
+  中の 1 票。有望 target が複数あれば自然に発射が選ばれ、P が大きいほど NO_OP
+  確率は薄まる。
+- 3-head: launch logit を単独で −8 → `sigmoid(−8) ≈ 0.0003`。**target 数と
+  無関係に P(撃つ) が固定的に潰れる**。探索初期に「ほぼ何も撃たない」状態へ強く
+  張り付き、PPO がそれを引き上げようとして early kl=0.022 の暴れを生んだと見る。
+  同じ `8.0` でも 2 head で意味が全く違うのに値を流用したのが効いた。
+
+### 主因 2: 勾配経路の分離で target head の信号が枯渇
+
+`logP = logP(Z) + Z·(logP(Y|Z)+logP(X))` のため **Z=0 サンプルは target/ship
+head に勾配を流さない**。主因 1 で序盤の大半が Z=0 になり、target head の有効
+データが激減。2-head は NO_OP 込みで全 source の softmax が毎回更新されるので
+target 表現の学習効率で差がつく。mid で勝率差が最大 −0.12 に開くのと整合。
+
+### 主因 3: credit assignment / 探索の二重減衰
+
+発射が悪手のとき 2-head は「その target logit を下げる」1 経路。3-head は
+launch を下げるか target を変えるかに advantage が按分され帰責が曖昧。entropy も
+`H(Z)+P(Z=1)·(H(Y)+H(X))` の積構造で、launch 飽和時に target の探索 bonus まで
+`P(Z=1)≈0` で減衰し、探索が二重に細る。
+
+> best=0.99/1.0 は両者とも curriculum 序盤 (vs noop opponent) の勝利体験に
+> 由来する fluke で、head 構造の優劣を測る指標にならない。last-10 が本指標。
 
 ## Decision
 
@@ -69,9 +102,10 @@ warmup の dip (chunk 2) 以降、全 chunk で 2-head がリード。差は中�
 - **次の一手**:
   - case4 (3-head) は採用しない。canonical の reinforce head は case3 系
     (2-head) を維持。
-  - 追検証するなら: (a) launch head に entropy bonus を別係数で与え早期飽和を
-    抑える、(b) target を NO_OP 込み (P+1) のまま launch head を**補助**
-    (auxiliary) として足す hybrid、等。ただし 2-head が既に健全に右肩上がり
+  - 追検証するなら主因 1–3 への直接対処: (a) launch bias を −8 でなく
+    −2〜−3 に緩め初期 P(撃つ)≈10% を狙う、(b) launch head に専用 entropy 係数を
+    与え早期飽和を抑える、(c) target を NO_OP 込み (P+1) のまま launch head を
+    **補助** (auxiliary) として足す hybrid。ただし 2-head が既に健全に右肩上がり
     (last-10 0.49) なので ROI は低い。
   - `dev/runpod promote` / Kaggle submit は本 case では不要 (要承認、対象外)。
 
