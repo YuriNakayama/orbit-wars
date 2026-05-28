@@ -55,13 +55,19 @@ from ..baseline.core.config import (
     AHEAD_DOMINATION,
     BEHIND_ATTACK_MARGIN_PENALTY,
     BEHIND_DOMINATION,
+    DYNAMIC_PROACTIVE_HORIZON_ENABLED,
     EARLY_TURN_LIMIT,
     FINISHING_ATTACK_MARGIN_BONUS,
     FINISHING_DOMINATION,
     FINISHING_PROD_RATIO,
     HORIZON,
     LATE_REMAINING_TURNS,
+    MULTI_ENEMY_PROACTIVE_HORIZON,
+    MULTI_ENEMY_PROACTIVE_RATIO,
+    MULTI_ENEMY_STACK_WINDOW,
     OPENING_TURN_LIMIT,
+    PROACTIVE_DEFENSE_HORIZON,
+    PROACTIVE_DEFENSE_RATIO,
     TOTAL_STEPS,
     VERY_LATE_REMAINING_TURNS,
 )
@@ -73,6 +79,7 @@ from .timeline_jax import (
     MAX_ARRIVALS_PER_TURN,
     MAX_PLANETS,
     indirect_wealth_jax,
+    simulate_planet_timeline_jax,
 )
 
 # Sentinel for "no planet of this owner" reaction time. Mirrors the Python
@@ -81,6 +88,15 @@ BIG_REACTION: float = 1e9
 
 # Owners are exactly {0, 1, 2, 3}; owner_strength is keyed on these.
 NUM_OWNERS: int = 4
+
+# Defense-buffer port relies on the static-horizon branch of
+# `_dynamic_proactive_horizon`. The dynamic branch is NOT ported; assert the
+# flag is disabled at import so re-enabling it fails loud instead of silently
+# diverging from the Python oracle.
+assert not DYNAMIC_PROACTIVE_HORIZON_ENABLED, (
+    "DYNAMIC_PROACTIVE_HORIZON_ENABLED is True; the dynamic-horizon branch of "
+    "_multi_enemy_proactive_keep is not ported to baseline_jax/world_features.py"
+)
 
 
 class WorldFeatures(NamedTuple):
@@ -106,6 +122,11 @@ class WorldFeatures(NamedTuple):
     initial_radius: jax.Array  # float32
     reaction_my_t: jax.Array  # float32 (BIG_REACTION sentinel)
     reaction_enemy_t: jax.Array  # float32 (BIG_REACTION sentinel)
+
+    # Defense buffers (WorldModel._compute_defense_buffers). My planets only;
+    # non-mine slots are 0.
+    reserve: jax.Array  # int32 min(ships, max(keep_needed, proactive_keep))
+    available: jax.Array  # int32 max(0, ships - reserve)
 
     # Per-planet arrival ledger (MAX_PLANETS, HORIZON+1, MAX_ARRIVALS_PER_TURN)
     arr_owner: jax.Array  # int32
@@ -310,6 +331,33 @@ def build_world_features(obs: Any) -> WorldFeatures:
         xs_j, ys_j, radius_j, owner_j, ships, valid_j, player
     )
 
+    # --- defense buffers (WorldModel._compute_defense_buffers) ---
+    ships_j = jnp.asarray(ships)
+    arr_owner_j = jnp.asarray(arr_owner)
+    arr_ships_j = jnp.asarray(arr_ships)
+    arr_valid_j = jnp.asarray(arr_valid)
+    keep_needed = _keep_needed_grid(
+        owner_j,
+        ships_j,
+        jnp.asarray(prod),
+        arr_owner_j,
+        arr_ships_j,
+        arr_valid_j,
+        player,
+    )
+    proactive_keep = _proactive_keep_grid(
+        xs_j, ys_j, radius_j, owner_j, ships, valid_j, player
+    )
+    is_mine_j = valid_j & (owner_j == player)
+    reserve = jnp.where(
+        is_mine_j,
+        jnp.minimum(ships_j, jnp.maximum(keep_needed, proactive_keep)),
+        jnp.int32(0),
+    ).astype(jnp.int32)
+    available = jnp.where(
+        is_mine_j, jnp.maximum(0, ships_j - reserve), jnp.int32(0)
+    ).astype(jnp.int32)
+
     static_neutral_count = int(np.sum(valid & (owner == -1) & np.asarray(is_static_j)))
 
     # --- scalars / modes (host floats; matches build_modes exactly) ---
@@ -345,7 +393,7 @@ def build_world_features(obs: Any) -> WorldFeatures:
         owner=owner_j,
         xy=jnp.stack([xs_j, ys_j], axis=1),
         radius=radius_j,
-        ships=jnp.asarray(ships),
+        ships=ships_j,
         prod=jnp.asarray(prod),
         planet_valid=valid_j,
         is_static=is_static_j,
@@ -356,9 +404,11 @@ def build_world_features(obs: Any) -> WorldFeatures:
         initial_radius=jnp.asarray(init_r),
         reaction_my_t=reaction_my,
         reaction_enemy_t=reaction_enemy,
-        arr_owner=jnp.asarray(arr_owner),
-        arr_ships=jnp.asarray(arr_ships),
-        arr_valid=jnp.asarray(arr_valid),
+        reserve=reserve,
+        available=available,
+        arr_owner=arr_owner_j,
+        arr_ships=arr_ships_j,
+        arr_valid=arr_valid_j,
         step=jnp.int32(step),
         player=jnp.int32(player),
         ang_vel=jnp.float32(ang_vel),
@@ -428,6 +478,133 @@ def _reaction_times(
     reaction_my = jnp.min(my_grid, axis=0)
     reaction_enemy = jnp.min(enemy_grid, axis=0)
     return reaction_my.astype(jnp.float32), reaction_enemy.astype(jnp.float32)
+
+
+def _keep_needed_grid(
+    owner: jax.Array,
+    ships: jax.Array,
+    prod: jax.Array,
+    arr_owner: jax.Array,
+    arr_ships: jax.Array,
+    arr_valid: jax.Array,
+    player: int,
+) -> jax.Array:
+    """Per-planet `keep_needed` via `simulate_planet_timeline_jax` vmap.
+
+    Mirrors the `timeline["keep_needed"]` the Python `_compute_defense_buffers`
+    reads from `base_timeline[planet.id]`. Returns int32[MAX_PLANETS]; non-owned
+    planets get 0 (the timeline already zeroes them), padded slots included.
+    """
+
+    def one(
+        p_owner: jax.Array,
+        p_ships: jax.Array,
+        p_prod: jax.Array,
+        t_owner: jax.Array,
+        t_ships: jax.Array,
+        t_valid: jax.Array,
+    ) -> jax.Array:
+        tl = simulate_planet_timeline_jax(
+            p_owner,
+            p_ships.astype(jnp.float32),
+            p_prod.astype(jnp.float32),
+            t_owner,
+            t_ships,
+            t_valid,
+            jnp.int32(player),
+            HORIZON,
+        )
+        return tl.keep_needed
+
+    return jax.vmap(one, in_axes=(0, 0, 0, 0, 0, 0))(
+        owner, ships, prod, arr_owner, arr_ships, arr_valid
+    ).astype(jnp.int32)
+
+
+def _proactive_keep_one(
+    eta_row: jax.Array,
+    enemy_ships: jax.Array,
+    enemy_is_threat: jax.Array,
+) -> jax.Array:
+    """Mirror `_multi_enemy_proactive_keep` for a single my-planet.
+
+    `eta_row[P]` is `travel_time(enemy->this_planet)` for every enemy planet,
+    `enemy_ships[P]` the raw `int(enemy.ships)` contribution, and
+    `enemy_is_threat[P]` selects valid enemy planets whose `eta <= stack_horizon`
+    (== MULTI_ENEMY_PROACTIVE_HORIZON, the static branch). Returns
+    `max(proactive, legacy)` as an int32.
+
+    The Python two-pointer keeps a contiguous eta-window of width
+    `MULTI_ENEMY_STACK_WINDOW` on the sorted threat list, tracking the max
+    running ship-sum. Because every maximal window is anchored at some left edge
+    present in the list, the max equals the per-anchor sum
+    `sum{ships[j] : 0 <= eta[j]-eta[i] <= WINDOW}` maximised over anchors `i`.
+    We compute that O(P^2) masked form directly (P<=48), so no sort is needed.
+    """
+    stack_horizon = MULTI_ENEMY_PROACTIVE_HORIZON
+    legacy_horizon = PROACTIVE_DEFENSE_HORIZON
+
+    threat = enemy_is_threat & (eta_row <= stack_horizon)
+    ships_i = jnp.where(threat, enemy_ships, 0).astype(jnp.int32)
+    eta_i = eta_row.astype(jnp.float32)
+
+    # window[a, j]: threat j lies in the eta-window anchored at threat a, i.e.
+    # both are threats and 0 <= eta[j]-eta[a] <= WINDOW.
+    delta = eta_i[None, :] - eta_i[:, None]
+    in_window = (delta >= 0) & (delta <= MULTI_ENEMY_STACK_WINDOW)
+    pair = in_window & threat[:, None] & threat[None, :]
+    anchor_sums = jnp.sum(jnp.where(pair, ships_i[None, :], 0), axis=1)
+    best_stacked = jnp.max(jnp.where(threat, anchor_sums, 0))
+    proactive = jnp.floor(best_stacked * MULTI_ENEMY_PROACTIVE_RATIO).astype(jnp.int32)
+
+    legacy_threat = threat & (eta_row <= legacy_horizon)
+    legacy_each = jnp.floor(ships_i * PROACTIVE_DEFENSE_RATIO).astype(jnp.int32)
+    legacy = jnp.max(jnp.where(legacy_threat, legacy_each, 0))
+
+    has_threat = jnp.any(threat)
+    return jnp.where(has_threat, jnp.maximum(proactive, legacy), jnp.int32(0))
+
+
+def _proactive_keep_grid(
+    xs: jax.Array,
+    ys: jax.Array,
+    radius: jax.Array,
+    owner: jax.Array,
+    ships_np: np.ndarray,
+    valid: jax.Array,
+    player: int,
+) -> jax.Array:
+    """Per-MY-planet `_multi_enemy_proactive_keep` over the enemy-planet grid.
+
+    Builds the `(P_my, P_enemy)` eta grid `travel_time(enemy->my, ships=max(1,
+    enemy.ships))` then reduces each row via `_proactive_keep_one`. Enemy planets
+    are `owner not in (-1, player)`; sun-blocked etas come back as `BIG_TURNS`
+    (1e9) and are filtered by the `eta <= 14` threat test.
+    """
+    enemy_ships_raw = jnp.asarray(ships_np.astype(np.int32))
+    enemy_ships_tt = jnp.asarray(np.maximum(1, ships_np).astype(np.int32))
+    is_enemy = valid & (owner != -1) & (owner != player)
+
+    def enemy_to_targets(
+        ex: jax.Array,
+        ey: jax.Array,
+        er: jax.Array,
+        e_ships: jax.Array,
+    ) -> jax.Array:
+        # travel_time from one enemy to every my-planet (vector over targets).
+        return travel_time_jax(ex, ey, er, xs, ys, radius, e_ships).astype(jnp.float32)
+
+    # (P_enemy, P_my): row e = enemy e's eta to every planet.
+    grid = jax.vmap(enemy_to_targets, in_axes=(0, 0, 0, 0))(
+        xs, ys, radius, enemy_ships_tt
+    )
+    # Transpose to (P_my, P_enemy): row m = every enemy's eta to my-planet m.
+    eta_my_by_enemy = grid.T
+
+    def per_my_planet(eta_row: jax.Array) -> jax.Array:
+        return _proactive_keep_one(eta_row, enemy_ships_raw, is_enemy)
+
+    return jax.vmap(per_my_planet)(eta_my_by_enemy)
 
 
 __all__ = [

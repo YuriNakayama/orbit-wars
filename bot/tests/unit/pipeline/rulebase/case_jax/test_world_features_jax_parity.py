@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -35,6 +36,7 @@ from pipeline.rulebase.case_jax.baseline_jax.timeline_jax import (
 )
 from pipeline.rulebase.case_jax.baseline_jax.world_features import (
     WorldFeatures,
+    _proactive_keep_one,
     build_world_features,
 )
 
@@ -235,3 +237,72 @@ def test_world_features_arrival_table_parity() -> None:
                 assert int(g_o) == ref_o, f"state owner {planet.id}@{at}"
                 max_div = max(max_div, abs(float(g_s) - ref_s))
     assert max_div < PARITY_TOL, f"arrival-table ships divergence {max_div}"
+
+
+def test_world_features_defense_buffer_parity() -> None:
+    """`reserve` / `available` match `WorldModel.reserve` / `.available` EXACTLY.
+
+    These are integers, so any mismatch fails loud with the per-planet
+    (ships, keep_needed, proactive_keep) breakdown for debugging.
+    """
+    for obs, _seed in _boards():
+        world, _modes = _build_py(obs)
+        feats = build_world_features(obs)
+        idx_map = _id_to_idx(feats)
+
+        reserve_a = np.asarray(feats.reserve)
+        available_a = np.asarray(feats.available)
+        owner_a = np.asarray(feats.owner)
+
+        # Non-mine planets must be exactly 0 in both buffers.
+        for planet in world.planets:
+            i = idx_map[planet.id]
+            if planet.owner != world.player:
+                assert int(reserve_a[i]) == 0, f"reserve non-mine {planet.id}"
+                assert int(available_a[i]) == 0, f"available non-mine {planet.id}"
+
+        for planet in world.my_planets:
+            i = idx_map[planet.id]
+            ref_reserve = world.reserve[planet.id]
+            ref_available = world.available[planet.id]
+            keep_needed = world.base_timeline[planet.id]["keep_needed"]
+            proactive = world._multi_enemy_proactive_keep(planet)
+            assert int(reserve_a[i]) == ref_reserve, (
+                f"reserve {planet.id}: jax={int(reserve_a[i])} py={ref_reserve} "
+                f"ships={int(planet.ships)} keep_needed={keep_needed} "
+                f"proactive_keep={proactive}"
+            )
+            assert int(available_a[i]) == ref_available, (
+                f"available {planet.id}: jax={int(available_a[i])} "
+                f"py={ref_available} ships={int(planet.ships)} "
+                f"keep_needed={keep_needed} proactive_keep={proactive}"
+            )
+            assert int(owner_a[i]) == world.player
+
+
+def test_proactive_keep_one_vmaps() -> None:
+    """`_proactive_keep_one` is vmappable over a batch of my-planets."""
+    # 3 my-planets, 4 enemy planets. Row = eta of each enemy to that my-planet.
+    eta_rows = jnp.asarray(
+        [
+            [2.0, 5.0, 8.0, 1e9],  # cluster {2,5} within window 3, plus {8}
+            [13.0, 14.0, 15.0, 16.0],  # 15/16 exceed horizon 14
+            [1e9, 1e9, 1e9, 1e9],  # no reachable enemy
+        ],
+        dtype=jnp.float32,
+    )
+    enemy_ships = jnp.asarray([10, 20, 30, 40], dtype=jnp.int32)
+    enemy_is_threat = jnp.asarray([True, True, True, True])
+
+    vmapped = jax.vmap(_proactive_keep_one, in_axes=(0, None, None))(
+        eta_rows, enemy_ships, enemy_is_threat
+    )
+    singles = jnp.stack(
+        [
+            _proactive_keep_one(eta_rows[k], enemy_ships, enemy_is_threat)
+            for k in range(3)
+        ]
+    )
+    assert np.array_equal(np.asarray(vmapped), np.asarray(singles))
+    # Last row has no reachable enemy -> 0.
+    assert int(vmapped[2]) == 0
