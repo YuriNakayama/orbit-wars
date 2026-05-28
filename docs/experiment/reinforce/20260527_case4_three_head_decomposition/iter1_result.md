@@ -21,6 +21,11 @@ seed・SHA を完全に揃えた head-only ablation で、収束曲線のほぼ�
 (softmax) の勾配が分離し、launch head の sigmoid 飽和が target 学習へ波及
 しにくくなった可能性。
 
+## 可視化
+
+収束曲線 (10-iter 移動平均) と chunk 平均の比較図:
+`data/output/experiment/reinforce_case4_3head_vs_2head.png`
+
 ## Numbers
 
 学習ログ (`train.log`) の `iter=N ... win=X` 系列ベース。case4 の pod は
