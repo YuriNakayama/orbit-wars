@@ -23,6 +23,7 @@ from pipeline.reinforce.case5.training.rollout_jax import (
     SHAPING_MODE_COMBINED,
     SHAPING_MODE_PLANETS,
     SHAPING_MODE_RATIO,
+    SHAPING_MODE_RATIO_PROD,
     SHAPING_MODE_SHIPS,
     _shaping_coefs,
     collect_rollout_jax,
@@ -61,6 +62,13 @@ def test_shaping_coefs_ratio_mode_uses_shaping_coef_for_both() -> None:
     c_ship, c_planet = _coefs(SHAPING_MODE_RATIO, 0.5, 0.001, 0.5)
     np.testing.assert_allclose(c_ship, 0.5, rtol=1e-6)
     np.testing.assert_allclose(c_planet, 0.5, rtol=1e-6)
+
+
+def test_shaping_coefs_ratio_prod_mode_uses_shaping_coef_for_both() -> None:
+    """H5: ratio_prod applies shaping_coef equally (ship ratio + prod-weighted ratio)."""
+    c_ship, c_planet = _coefs(SHAPING_MODE_RATIO_PROD, 1.0, 0.001, 0.5)
+    np.testing.assert_allclose(c_ship, 1.0, rtol=1e-6)
+    np.testing.assert_allclose(c_planet, 1.0, rtol=1e-6)
 
 
 def _tiny_model() -> ActorCriticJax:
@@ -110,6 +118,27 @@ def test_ratio_rollout_rewards_are_finite() -> None:
     )
     rewards = np.asarray(batch.rewards)
     assert np.all(np.isfinite(rewards)), "ratio shaping produced non-finite reward"
+
+
+def test_ratio_prod_rollout_rewards_are_finite() -> None:
+    """H5 end-to-end smoke: ratio_prod (production-weighted) must stay finite.
+
+    Both ship ratio and production-weighted planet ratio are in [0,1], so the
+    per-turn shaping term is bounded; the rollout must not emit NaN/inf.
+    """
+    model = _tiny_model()
+    batch = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(4),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio_prod",
+        shaping_coef=1.0,
+    )
+    rewards = np.asarray(batch.rewards)
+    assert np.all(np.isfinite(rewards)), "ratio_prod shaping produced non-finite reward"
 
 
 def test_combined_with_zero_ship_coef_matches_planets_mode() -> None:

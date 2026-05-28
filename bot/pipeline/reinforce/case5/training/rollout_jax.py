@@ -125,15 +125,34 @@ def _planet_count_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.A
     return jnp.sum(is_mine.astype(jnp.float32)), jnp.sum(is_enemy.astype(jnp.float32))
 
 
+def _production_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
+    """Sum (own, enemy) planet production across the current planet table.
+
+    Production-weighted territorial signal (H5): instead of counting planets
+    equally, weight each by its production so holding a high-prod planet is
+    rewarded more than holding a low-prod one.
+    """
+    owner = state.planet_owner
+    valid = state.planet_valid
+    prod = state.planet_prod.astype(jnp.float32)
+    is_mine = valid & (owner == player)
+    is_enemy = valid & (owner != player) & (owner != -1)
+    return jnp.sum(jnp.where(is_mine, prod, 0.0)), jnp.sum(
+        jnp.where(is_enemy, prod, 0.0)
+    )
+
+
 SHAPING_MODE_SHIPS: int = 0
 SHAPING_MODE_PLANETS: int = 1
 SHAPING_MODE_COMBINED: int = 2  # H1: ship Δ と planet Δ を個別係数で同時加算
 SHAPING_MODE_RATIO: int = 3  # H2: 保持割合 mine/(mine+enemy) の Δ を shaping
+SHAPING_MODE_RATIO_PROD: int = 4  # H5: planet 信号を production 加重保持割合に
 SHAPING_MODE_NAME_TO_INT: dict[str, int] = {
     "ships": SHAPING_MODE_SHIPS,
     "planets": SHAPING_MODE_PLANETS,
     "combined": SHAPING_MODE_COMBINED,
     "ratio": SHAPING_MODE_RATIO,
+    "ratio_prod": SHAPING_MODE_RATIO_PROD,
 }
 
 _RATIO_EPS: float = 1e-6
@@ -145,7 +164,9 @@ def _shaping_potentials(
     """Return (Φ_ship, Φ_planet) potentials for the configured mode.
 
     - ships / planets / combined → diff potential (mine - enemy)
-    - ratio (H2)                 → retention ratio mine/(mine+enemy)
+    - ratio (H2)                 → retention ratio mine/(mine+enemy) (planet = count)
+    - ratio_prod (H5)            → ship retention ratio + production-weighted
+                                   planet ratio prod_mine/(prod_mine+prod_en)
 
     Both signals are computed unconditionally (cheap) and carried
     independently so each mode keeps two separate potentials → the
@@ -155,14 +176,21 @@ def _shaping_potentials(
     """
     ship_my, ship_en = _ship_totals(state, seat)
     plt_my, plt_en = _planet_count_totals(state, seat)
+    prod_my, prod_en = _production_totals(state, seat)
     diff_ship = ship_my - ship_en
     diff_plt = plt_my - plt_en
     ratio_ship = ship_my / (ship_my + ship_en + _RATIO_EPS)
     ratio_plt = plt_my / (plt_my + plt_en + _RATIO_EPS)
-    out: tuple[jax.Array, jax.Array] = jax.lax.cond(
-        shaping_mode == SHAPING_MODE_RATIO,
-        lambda: (ratio_ship, ratio_plt),
-        lambda: (diff_ship, diff_plt),
+    ratio_prod = prod_my / (prod_my + prod_en + _RATIO_EPS)
+    # branch index: modes 0-2 (ships/planets/combined) → 0 (diff),
+    # mode 3 (ratio) → 1, mode 4 (ratio_prod) → 2.
+    out: tuple[jax.Array, jax.Array] = jax.lax.switch(
+        jnp.clip(shaping_mode - (SHAPING_MODE_RATIO - 1), 0, 2),
+        [
+            lambda: (diff_ship, diff_plt),  # ships/planets/combined → diff
+            lambda: (ratio_ship, ratio_plt),  # ratio (count-based planet)
+            lambda: (ratio_ship, ratio_prod),  # ratio_prod (production-weighted)
+        ],
     )
     return out
 
@@ -175,10 +203,11 @@ def _shaping_coefs(
 ) -> tuple[jax.Array, jax.Array]:
     """Resolve (c_ship, c_planet) so reward = c_ship·ΔΦ_ship + c_planet·ΔΦ_planet.
 
-    - ships    → (shaping_coef, 0)            (legacy: only ship diff)
-    - planets  → (0, shaping_coef)            (legacy: only planet diff)
-    - combined → (coef_ship, coef_planet)     (H1: both diff signals)
-    - ratio    → (shaping_coef, shaping_coef) (H2: both ratio signals, equal weight)
+    - ships      → (shaping_coef, 0)            (legacy: only ship diff)
+    - planets    → (0, shaping_coef)            (legacy: only planet diff)
+    - combined   → (coef_ship, coef_planet)     (H1: both diff signals)
+    - ratio      → (shaping_coef, shaping_coef) (H2: both ratio signals, equal weight)
+    - ratio_prod → (shaping_coef, shaping_coef) (H5: ship ratio + prod-weighted ratio)
 
     Unifying all modes into one additive form keeps the scan body a single
     trace and makes the legacy modes provably equivalent.
@@ -188,12 +217,13 @@ def _shaping_coefs(
     c_coef = jnp.float32(shaping_coef)
     zero = jnp.float32(0.0)
     out: tuple[jax.Array, jax.Array] = jax.lax.switch(
-        jnp.clip(shaping_mode, 0, 3),
+        jnp.clip(shaping_mode, 0, 4),
         [
             lambda: (c_coef, zero),  # ships
             lambda: (zero, c_coef),  # planets
             lambda: (c_ship, c_planet),  # combined
             lambda: (c_coef, c_coef),  # ratio
+            lambda: (c_coef, c_coef),  # ratio_prod
         ],
     )
     return out

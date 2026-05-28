@@ -459,6 +459,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5 H5: planet 信号を production 加重保持割合に (ratio_prod mode)。
+    "reinforce_case5_kaggle_jax_train_h5_ratio_prod": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h5_ratio_prod",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h5_ratio_prod.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
