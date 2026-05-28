@@ -141,6 +141,70 @@ def test_ratio_prod_rollout_rewards_are_finite() -> None:
     assert np.all(np.isfinite(rewards)), "ratio_prod shaping produced non-finite reward"
 
 
+def test_ratio_clip_bounds_per_turn_shaping_reward() -> None:
+    """H7: shaping_clip caps the per-turn shaping reward to [-clip, +clip].
+
+    The terminal ±1 is added after the clip, so a finished episode's final
+    step can exceed clip; we therefore bound only the pre-terminal steps
+    (done_mask True) which carry shaping alone. With coef=1.0 and ratio∈[0,1]
+    the unclipped per-turn ΔΦ can reach ~±2 (ship+planet), so a 0.1 clip is
+    a strict bound that must hold.
+    """
+    model = _tiny_model()
+    clip = 0.1
+    batch = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(7),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        shaping_clip=clip,
+    )
+    rewards = np.asarray(batch.rewards)
+    done_mask = np.asarray(batch.done_mask)
+    # Pre-terminal steps with no terminal reward must lie within [-clip, clip].
+    pre_terminal = rewards[done_mask]
+    assert np.all(np.isfinite(pre_terminal))
+    assert np.all(np.abs(pre_terminal) <= clip + 1e-5), (
+        "ratio clip failed to bound the per-turn shaping reward"
+    )
+
+
+def test_ratio_clip_zero_matches_unclipped_ratio() -> None:
+    """shaping_clip=0 must reproduce the plain ratio reward bit-for-bit."""
+    model = _tiny_model()
+    unclipped = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(8),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+    )
+    clip_zero = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(8),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        shaping_clip=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(unclipped.rewards),
+        np.asarray(clip_zero.rewards),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
 def test_combined_with_zero_ship_coef_matches_planets_mode() -> None:
     """coef_ship=0 + coef_planet=c must equal planets mode (shaping_coef=c)."""
     model = _tiny_model()

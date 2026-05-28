@@ -240,6 +240,7 @@ def _rollout_one_env(
     shaping_mode: int,
     coef_ship: float,
     coef_planet: float,
+    shaping_clip: float,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -372,6 +373,15 @@ def _rollout_one_env(
         shaping = c_ship * (ship_diff - prev_ship_diff) + c_planet * (
             plt_diff - prev_plt_diff
         )
+        # H7: band-clip the per-turn shaping reward to [-clip, +clip] so the
+        # early-game ratio spikes (when totals are tiny, ΔΦ swings ~±1) are
+        # capped while the steady-state signal passes through. clip<=0 is a
+        # no-op so every existing mode stays bit-identical.
+        shaping = jnp.where(
+            shaping_clip > 0.0,
+            jnp.clip(shaping, -shaping_clip, shaping_clip),
+            shaping,
+        )
 
         # Terminal reward: env emits rewards on termination; turn into
         # ±1/0 by comparing the env's rewards for both seats.
@@ -499,6 +509,7 @@ def collect_rollout_jax(
     shaping_mode: str = "ships",
     coef_ship: float = 0.0,
     coef_planet: float = 0.0,
+    shaping_clip: float = 0.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -534,7 +545,7 @@ def collect_rollout_jax(
     # vmap over (key, init_state); model + scalar args broadcast.
     vmapped = jax.vmap(
         _rollout_one_env,
-        in_axes=(None, 0, 0, None, None, None, None, None, None, None),
+        in_axes=(None, 0, 0, None, None, None, None, None, None, None, None),
     )
     return vmapped(
         model,
@@ -547,6 +558,7 @@ def collect_rollout_jax(
         shaping_mode_int,
         coef_ship,
         coef_planet,
+        shaping_clip,
     )
 
 

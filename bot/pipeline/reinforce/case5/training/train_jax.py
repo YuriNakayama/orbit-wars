@@ -295,6 +295,7 @@ def _run_iter(
     shaping_mode: str = "ships",
     coef_ship: float = 0.0,
     coef_planet: float = 0.0,
+    shaping_clip: float = 0.0,
 ) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -311,6 +312,7 @@ def _run_iter(
         shaping_mode=shaping_mode,
         coef_ship=coef_ship,
         coef_planet=coef_planet,
+        shaping_clip=shaping_clip,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -388,6 +390,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     shaping_mode = str(t_cfg.get("shaping_mode", "ships"))
     coef_ship = float(t_cfg.get("coef_ship", 0.0))
     coef_planet = float(t_cfg.get("coef_planet", 0.0))
+    shaping_clip = float(t_cfg.get("shaping_clip", 0.0))
 
     # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
     # `late` opponent afterwards. When `opponent` is not "curriculum" the
@@ -461,11 +464,13 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             shaping_mode=shaping_mode,
             coef_ship=coef_ship,
             coef_planet=coef_planet,
+            shaping_clip=shaping_clip,
         )
         row["opponent"] = iter_opponent
         row["shaping_mode"] = shaping_mode
         row["coef_ship"] = coef_ship
         row["coef_planet"] = coef_planet
+        row["shaping_clip"] = shaping_clip
         history.append(row)
         logger.info(
             (

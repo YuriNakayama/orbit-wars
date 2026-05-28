@@ -471,6 +471,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5 H7: ratio per-turn shaping を band clip (序盤 spike 抑制)。
+    "reinforce_case5_kaggle_jax_train_h7_ratio_clip": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h7_ratio_clip",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h7_ratio_clip.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.
