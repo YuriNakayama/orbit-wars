@@ -107,6 +107,39 @@ def _bench_batch(batch: int) -> BenchResult:
     )
 
 
+def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
+    """jax_v4 self-play win-rate over `games` (short horizon) — non-degenerate check.
+
+    Confirms the agent plays to a spread of outcomes (not all-draw / degenerate)
+    and is ~50% by symmetry. NOT a vs-Python-v8 eval (that needs a hybrid harness
+    with v8 in the opponent seat — a follow-up). The game-loop compile is heavy
+    but tractable on GPU at modest horizon.
+    """
+    from pipeline.rulebase.case_jax.baseline_jax.selfplay_jax import (
+        OUTCOME_DRAW,
+        OUTCOME_SEAT0_WIN,
+        OUTCOME_SEAT1_WIN,
+        run_selfplay_batch,
+    )
+
+    seeds = list(range(games))
+    t0 = time.perf_counter()
+    out = run_selfplay_batch(seeds, horizon=horizon)
+    out.outcome.block_until_ready()
+    wall = time.perf_counter() - t0
+    oc = [int(x) for x in out.outcome]
+    return {
+        "games": games,
+        "horizon": horizon,
+        "seat0_win": oc.count(OUTCOME_SEAT0_WIN),
+        "seat1_win": oc.count(OUTCOME_SEAT1_WIN),
+        "draw": oc.count(OUTCOME_DRAW),
+        "terminated": int(sum(bool(x) for x in out.terminated)),
+        "wall_seconds": round(wall, 1),
+        "outcomes": oc,
+    }
+
+
 def _bench_full(batches: list[int]) -> list[BenchResult]:
     results: list[BenchResult] = []
 
@@ -139,6 +172,12 @@ def main(
     batches: str = typer.Option(
         "1,16,64,256", help="comma-separated batch sizes to bench"
     ),
+    winrate_games: int = typer.Option(
+        16, help="jax_v4 self-play games for the non-degenerate win-rate check"
+    ),
+    winrate_horizon: int = typer.Option(
+        500, help="horizon for the self-play win-rate games"
+    ),
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -151,6 +190,20 @@ def main(
     batch_list = [int(b) for b in batches.split(",") if b.strip()]
     started = time.perf_counter()
     results = _bench_full(batches=batch_list)
+
+    # Non-degenerate self-play win-rate check (RunPod GPU only; game-loop compile
+    # is intractable on CPU). Confirms jax_v4 plays to a spread of outcomes
+    # (not all-draw / degenerate) and is ~50% by symmetry.
+    winrate: dict[str, Any] | None = None
+    if os.environ.get("RUNPOD_POD_ID") and results:
+        logger.info(
+            "=== self-play win-rate games=%d horizon=%d ===",
+            winrate_games,
+            winrate_horizon,
+        )
+        winrate = _selfplay_winrate(winrate_games, winrate_horizon)
+        logger.info("winrate: %s", winrate)
+
     runtime = time.perf_counter() - started
 
     payload: dict[str, Any] = {
@@ -162,6 +215,7 @@ def main(
         "python_version": sys.version.split()[0],
         "runpod_pod_id": os.environ.get("RUNPOD_POD_ID"),
         "results": [asdict(r) for r in results],
+        "selfplay_winrate": winrate,
         "runtime_seconds": round(runtime, 3),
     }
     out_path = run_path / "bench_results.json"
