@@ -48,60 +48,73 @@ app = typer.Typer(add_completion=False)
 class BenchResult:
     variant: str
     batch: int
-    horizon: int
-    wall_seconds: float
-    per_game_seconds: float
-    games_per_second: float
-    seat0_win_rate: float
-    draw_rate: float
+    warm_seconds: float
+    per_turn_ms: float
+    turns_per_second: float
+    compile_seconds: float
     device: str
 
 
-def _bench_batch(batch: int, horizon: int) -> BenchResult:
+def _stack_states(batch: int) -> Any:
+    import jax
+    import jax.numpy as jnp
+    from orbit_wars_jax.reset import reset
+
+    states = [reset(seed=s, num_agents=2) for s in range(batch)]
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *states)
+
+
+def _bench_batch(batch: int) -> BenchResult:
+    """Single-turn throughput: one `compute_actions` per game, vmapped over batch.
+
+    This is the GPU-speed unit. The full game-loop `lax.scan` is intractable to
+    compile (the per-turn graph is huge), but a single vmapped turn compiles
+    (~82s CPU) and directly measures parallel agent-turn throughput — the "GPU
+    で最大速度" metric.
+    """
     import jax
 
     from pipeline.rulebase.case_jax.baseline_jax.selfplay_jax import (
-        OUTCOME_DRAW,
-        OUTCOME_SEAT0_WIN,
-        run_selfplay_batch,
+        batched_turn_actions,
     )
 
-    seeds = list(range(batch))
+    batched = _stack_states(batch)
+    fn = jax.jit(batched_turn_actions)
 
     # Warmup (compile cost paid here).
-    out = run_selfplay_batch(seeds, horizon=horizon)
-    out.outcome.block_until_ready()
-
     t0 = time.perf_counter()
-    out = run_selfplay_batch(seeds, horizon=horizon)
-    out.outcome.block_until_ready()
-    wall = time.perf_counter() - t0
+    out = fn(batched)
+    out.block_until_ready()
+    compile_s = time.perf_counter() - t0
 
-    outcome = out.outcome
-    seat0_wins = int((outcome == OUTCOME_SEAT0_WIN).sum())
-    draws = int((outcome == OUTCOME_DRAW).sum())
+    # Warm timing: average a few calls.
+    reps = 5
+    t0 = time.perf_counter()
+    for _ in range(reps):
+        out = fn(batched)
+        out.block_until_ready()
+    warm = (time.perf_counter() - t0) / reps
+
     device = str(jax.devices()[0].platform)
     return BenchResult(
         variant="jax",
         batch=batch,
-        horizon=horizon,
-        wall_seconds=wall,
-        per_game_seconds=wall / max(1, batch),
-        games_per_second=batch / max(1e-9, wall),
-        seat0_win_rate=seat0_wins / max(1, batch),
-        draw_rate=draws / max(1, batch),
+        warm_seconds=warm,
+        per_turn_ms=warm / max(1, batch) * 1000.0,
+        turns_per_second=batch / max(1e-9, warm),
+        compile_seconds=compile_s,
         device=device,
     )
 
 
-def _bench_full(batches: list[int], horizon: int) -> list[BenchResult]:
+def _bench_full(batches: list[int]) -> list[BenchResult]:
     results: list[BenchResult] = []
 
-    if not os.environ.get("RUNPOD_POD_ID"):
-        # CPU smoke only — a single tiny batch to validate wiring without
-        # paying the full compile/run cost (compute_actions is ~24s/call).
-        logger.info("not on RunPod; CPU smoke (batch=2 horizon=8) only")
-        results.append(_bench_batch(batch=2, horizon=8))
+    on_runpod = bool(os.environ.get("RUNPOD_POD_ID"))
+    if not on_runpod:
+        # CPU smoke only — smallest batch to validate wiring (compile ~82s).
+        logger.info("not on RunPod; CPU smoke (batch=1) only")
+        results.append(_bench_batch(batch=1))
         return results
 
     import jax
@@ -113,8 +126,8 @@ def _bench_full(batches: list[int], horizon: int) -> list[BenchResult]:
         return results
 
     for batch in batches:
-        logger.info("=== jax gpu batch=%d horizon=%d ===", batch, horizon)
-        r = _bench_batch(batch=batch, horizon=horizon)
+        logger.info("=== jax gpu single-turn batch=%d ===", batch)
+        r = _bench_batch(batch=batch)
         results.append(r)
         logger.info("result: %s", asdict(r))
 
@@ -123,7 +136,9 @@ def _bench_full(batches: list[int], horizon: int) -> list[BenchResult]:
 
 @app.command()
 def main(
-    horizon: int = typer.Option(500, help="game horizon (turns)"),
+    batches: str = typer.Option(
+        "1,16,64,256", help="comma-separated batch sizes to bench"
+    ),
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -133,8 +148,9 @@ def main(
     run_path = run_dir()
     logger.info("run_dir=%s", run_path)
 
+    batch_list = [int(b) for b in batches.split(",") if b.strip()]
     started = time.perf_counter()
-    results = _bench_full(batches=[1, 16, 64], horizon=horizon)
+    results = _bench_full(batches=batch_list)
     runtime = time.perf_counter() - started
 
     payload: dict[str, Any] = {
@@ -157,7 +173,9 @@ def main(
         json.dumps(
             {
                 "iterations_run": len(results),
-                "best_win_rate": (results[-1].seat0_win_rate if results else 0.0),
+                "best_turns_per_second": (
+                    max((r.turns_per_second for r in results), default=0.0)
+                ),
                 "runtime_seconds": runtime,
                 "results": [asdict(r) for r in results],
             },

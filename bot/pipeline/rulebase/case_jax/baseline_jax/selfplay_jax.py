@@ -84,6 +84,21 @@ def jax_v4_action_fn(seat: int) -> ActionFn:
     return _fn
 
 
+def batched_turn_actions(batched_state: EnvState, seat: int = 0) -> jax.Array:
+    """`vmap(_seat_action)` over a batched EnvState → `(B, MAX_LAUNCHES, 3)`.
+
+    The single-turn throughput unit: one `compute_actions` per game, vmapped
+    across the batch. This is what the GPU speed bench measures — it compiles
+    once (the per-turn graph, ~82s CPU) and avoids the intractable game-loop
+    `lax.scan` compile. `seat` is static.
+    """
+
+    def turn(state: EnvState) -> jax.Array:
+        return _seat_action(state, seat)
+
+    return jax.vmap(turn)(batched_state)
+
+
 def _empty_env_actions() -> jax.Array:
     """No-op action tensor (all seats suppressed via -1 sentinel)."""
     return jnp.full(
