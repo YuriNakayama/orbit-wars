@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case5 support_reward
 
 > 作成日: 2026-05-27
-> 最終更新: 2026-05-28 (iter4 analysis 完了、H5 production 加重 rejected。H4 ratio coef=1.0 が現行最良 0.820)
+> 最終更新: 2026-05-30 (iter5 完了、H7 ratio_clip は inconclusive [0.8234 vs H4 0.820 = +0.34pp]。clip 不要を確認、H4 維持)
 > 状態: in_progress
 > 最大 iteration: リスト消化まで (deepen も許可)
 > 主要メトリクス: 合成指標 — vs `baseline_jax_lite` の **last-10 iter 平均 win_rate** と 学習 **reward trend (右肩上がり度)** を同時評価 (収束速度 + 最終性能)
@@ -54,7 +54,7 @@ report shaping 以外の変更は本 case では行わない。
 - [x] (P1) H2: 保持「**割合**」差分 shaping (potential = `mine/(mine+enemy)` を ship・planet で算出し、その turn 差分を報酬) — 絶対数の production スケール依存を排し [0,1] 正規化で係数調整が容易。 — **adopted** (iter2: lite last-10 **0.763** / trend +0.651, H1 比 **+21pp**。割合正規化で value_loss 0.43→0.005 が決定打。max approx_kl 0.0047 で安定。n<300 で確定保留だが noise floor 大幅超過)
 - [x] (P2, depends on H1) H4: 併用時の `coef_ship : coef_planet` **比率 sweep** → ratio 文脈に再定義し ratio mode の shaping_coef sweep (0.50→1.0) で実施 — **adopted** (iter3: lite last-10 **0.820** / trend +0.668, H2(coef=0.50) 比 **+5.6pp**。ratio [0,1] 正規化で coef 倍増でも over-shaping なし (value_loss 0.0066, approx_kl 0.005)。現行最良構成。coef さらに上げる余地あり)
 - [x] (P2) H5: **production potential** 補助 (保有惑星の production 合計の差分を shaping) → ratio coef=1.0 base に重畳 (ratio_prod: planet を production 加重保持割合に) で実施 — **rejected** (iter4: lite last-10 **0.771**, H4 count-based 0.820 比 **-4.9pp**。高 prod 惑星 (home 等) に報酬偏重し惑星数=領域の広さ確保を軽視する副作用。count ベース H4 が最良維持。production 系は打ち切り)
-- [ ] (P2, depends on H2) H7: 保持割合差分の **clip / 正規化** で報酬スケール安定化 (H2 派生) — 序盤の割合急変による spike を抑え value_loss を安定化。H2 採用が前提。
+- [x] (P2, depends on H2) H7: 保持割合差分の **clip / 正規化** で報酬スケール安定化 (H2 派生) — **inconclusive (clip 不要を確認)** (iter5: lite last-10 **0.8234** / trend +0.585, H4 比 **+0.34pp** で seed variance 域、trend/max は H4 比劣後、value_loss 0.0066→0.0080 微増。H4 で既に value/KL 安定のため clip 改善余地なし。H4 維持推奨)
 - [ ] (P3, 対照) H3: **絶対保持数の非差分 dense 加算** (`coef · (mine_ships or mine_planets)` を毎 turn) — 生存・拡張の直接報酬。⚠️ 非 potential-based で最適方策をバイアス (貯め込み/引き伸ばしリスク)。potential-based 系との性能差を見る対照群。
 - [ ] (P3, pair with H3) H6: 勝ちターン短縮 **time bonus** (早期勝利に terminal bonus / 引き伸ばしに小ペナルティ) — dense 保持報酬の「引き伸ばし」副作用への対策。H3 と pair で効果を見る。
 
@@ -68,6 +68,7 @@ report shaping 以外の変更は本 case では行わない。
 | 2 | 2026-05-27T18:23Z | H2 | iter2_plan.md | 20260527-182312__feature-support-reward__c359b68__seed0 | last-10 0.763 / trend +0.651 (lite phase, H1 比 +21pp) | adopted | iter2_result.md (analysis: 学習ログ baseで実施、replay skip) |
 | 3 | 2026-05-28T00:48Z | H4 | iter3_plan.md | 20260528-004854__feature-support-reward__8e2e4a3__seed0 | last-10 0.820 / trend +0.668 (lite, H2 比 +5.6pp, coef 0.50→1.0) | adopted | iter3_result.md (analysis: 学習ログ baseで実施、replay skip) |
 | 4 | 2026-05-28T05:01Z | H5 | iter4_plan.md | 20260528-050116__feature-support-reward__531f725__seed0 | last-10 0.771 / trend +0.601 (lite, H4 比 -4.9pp) | rejected | iter4_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 5 | 2026-05-29T23:13Z | H7 | iter5_plan.md | 20260529-231332__feature-support-reward__7da3e2c__seed0 | last-10 0.8234 / trend +0.585 (lite, H4 比 +0.34pp seed variance 域) | inconclusive (clip 不要を確認、H4 維持) | iter5_result.md (analysis: 学習ログ baseで実施、replay skip。A100 one-off: RunPod consumer 全 phantom 障害のため) |
 
 ## 参考 (References)
 
