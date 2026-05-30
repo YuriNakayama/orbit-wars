@@ -241,6 +241,8 @@ def _rollout_one_env(
     coef_ship: float,
     coef_planet: float,
     shaping_clip: float,
+    dense_coef_ship: float,
+    dense_coef_planet: float,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -373,6 +375,16 @@ def _rollout_one_env(
         shaping = c_ship * (ship_diff - prev_ship_diff) + c_planet * (
             plt_diff - prev_plt_diff
         )
+        # H3: non-PBRS dense addition `c·mine_count` per turn. ⚠️ violates
+        # Ng et al. 1999 (biases the optimal policy toward hoarding/stalling)
+        # — used as a CONTROL group to confirm PBRS necessity. dense_coef=0
+        # is a no-op so every existing mode stays bit-identical.
+        ship_mine_count, _ = _ship_totals(state_for_next, seat)
+        plt_mine_count, _ = _planet_count_totals(state_for_next, seat)
+        dense_addition = (
+            dense_coef_ship * ship_mine_count + dense_coef_planet * plt_mine_count
+        )
+        shaping = shaping + dense_addition
         # H7: band-clip the per-turn shaping reward to [-clip, +clip] so the
         # early-game ratio spikes (when totals are tiny, ΔΦ swings ~±1) are
         # capped while the steady-state signal passes through. clip<=0 is a
@@ -510,6 +522,8 @@ def collect_rollout_jax(
     coef_ship: float = 0.0,
     coef_planet: float = 0.0,
     shaping_clip: float = 0.0,
+    dense_coef_ship: float = 0.0,
+    dense_coef_planet: float = 0.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -545,7 +559,21 @@ def collect_rollout_jax(
     # vmap over (key, init_state); model + scalar args broadcast.
     vmapped = jax.vmap(
         _rollout_one_env,
-        in_axes=(None, 0, 0, None, None, None, None, None, None, None, None),
+        in_axes=(
+            None,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
     )
     return vmapped(
         model,
@@ -559,6 +587,8 @@ def collect_rollout_jax(
         coef_ship,
         coef_planet,
         shaping_clip,
+        dense_coef_ship,
+        dense_coef_planet,
     )
 
 

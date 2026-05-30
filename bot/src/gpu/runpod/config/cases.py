@@ -483,6 +483,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5 H3: 絶対保持数の非差分 dense 加算 (非 PBRS 対照群)。
+    "reinforce_case5_kaggle_jax_train_h3_dense": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h3_dense",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h3_dense.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.

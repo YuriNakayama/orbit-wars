@@ -173,6 +173,82 @@ def test_ratio_clip_bounds_per_turn_shaping_reward() -> None:
     )
 
 
+def test_dense_zero_matches_plain_ratio() -> None:
+    """H3 control: dense_coef=0 must reproduce plain ratio reward bit-for-bit."""
+    model = _tiny_model()
+    plain = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(11),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+    )
+    dense_zero = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(11),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        dense_coef_ship=0.0,
+        dense_coef_planet=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(plain.rewards),
+        np.asarray(dense_zero.rewards),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_dense_positive_produces_higher_cumulative_reward() -> None:
+    """H3 control: dense>0 inflates per-turn reward (mine_count is non-negative).
+
+    The dense addition is `c_ship·ship_mine + c_planet·plt_mine`, both of which
+    are ≥ 0 for an active player. So the cumulative reward over pre-terminal
+    steps must be strictly higher with dense>0 than with dense=0.
+    """
+    model = _tiny_model()
+    plain = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(12),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+    )
+    dense = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(12),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        dense_coef_ship=0.01,
+        dense_coef_planet=0.1,
+    )
+    # Compare cumulative shaping (pre-terminal steps via done_mask).
+    plain_sum = float(
+        jnp.sum(jnp.where(plain.done_mask, plain.rewards, jnp.float32(0.0)))
+    )
+    dense_sum = float(
+        jnp.sum(jnp.where(dense.done_mask, dense.rewards, jnp.float32(0.0)))
+    )
+    assert dense_sum > plain_sum, (
+        f"dense addition expected to inflate reward (mine_count ≥ 0): "
+        f"dense_sum={dense_sum} vs plain_sum={plain_sum}"
+    )
+
+
 def test_ratio_clip_zero_matches_unclipped_ratio() -> None:
     """shaping_clip=0 must reproduce the plain ratio reward bit-for-bit."""
     model = _tiny_model()
