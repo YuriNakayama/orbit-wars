@@ -176,7 +176,11 @@ def main(
         16, help="jax_v4 self-play games for the non-degenerate win-rate check"
     ),
     winrate_horizon: int = typer.Option(
-        500, help="horizon for the self-play win-rate games"
+        50,
+        help=(
+            "horizon for the self-play win-rate games (full 500 hangs in compile; "
+            "50 is enough to detect a degenerate / all-draw agent)"
+        ),
     ),
 ) -> None:
     logging.basicConfig(
