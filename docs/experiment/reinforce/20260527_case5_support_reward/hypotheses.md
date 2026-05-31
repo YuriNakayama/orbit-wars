@@ -1,7 +1,7 @@
 # Hypotheses — reinforce/case5 support_reward
 
 > 作成日: 2026-05-27
-> 最終更新: 2026-05-30 (iter5 完了、H7 ratio_clip は inconclusive [0.8234 vs H4 0.820 = +0.34pp]。clip 不要を確認、H4 維持)
+> 最終更新: 2026-05-31 (iter6 完了、H3 dense rejected [PBRS必要性実証])。残 H6 のみ
 > 状態: in_progress
 > 最大 iteration: リスト消化まで (deepen も許可)
 > 主要メトリクス: 合成指標 — vs `baseline_jax_lite` の **last-10 iter 平均 win_rate** と 学習 **reward trend (右肩上がり度)** を同時評価 (収束速度 + 最終性能)
@@ -55,7 +55,7 @@ report shaping 以外の変更は本 case では行わない。
 - [x] (P2, depends on H1) H4: 併用時の `coef_ship : coef_planet` **比率 sweep** → ratio 文脈に再定義し ratio mode の shaping_coef sweep (0.50→1.0) で実施 — **adopted** (iter3: lite last-10 **0.820** / trend +0.668, H2(coef=0.50) 比 **+5.6pp**。ratio [0,1] 正規化で coef 倍増でも over-shaping なし (value_loss 0.0066, approx_kl 0.005)。現行最良構成。coef さらに上げる余地あり)
 - [x] (P2) H5: **production potential** 補助 (保有惑星の production 合計の差分を shaping) → ratio coef=1.0 base に重畳 (ratio_prod: planet を production 加重保持割合に) で実施 — **rejected** (iter4: lite last-10 **0.771**, H4 count-based 0.820 比 **-4.9pp**。高 prod 惑星 (home 等) に報酬偏重し惑星数=領域の広さ確保を軽視する副作用。count ベース H4 が最良維持。production 系は打ち切り)
 - [x] (P2, depends on H2) H7: 保持割合差分の **clip / 正規化** で報酬スケール安定化 (H2 派生) — **inconclusive (clip 不要を確認)** (iter5: lite last-10 **0.8234** / trend +0.585, H4 比 **+0.34pp** で seed variance 域、trend/max は H4 比劣後、value_loss 0.0066→0.0080 微増。H4 で既に value/KL 安定のため clip 改善余地なし。H4 維持推奨)
-- [ ] (P3, 対照) H3: **絶対保持数の非差分 dense 加算** (`coef · (mine_ships or mine_planets)` を毎 turn) — 生存・拡張の直接報酬。⚠️ 非 potential-based で最適方策をバイアス (貯め込み/引き伸ばしリスク)。potential-based 系との性能差を見る対照群。
+- [x] (P3, 対照) H3: **絶対保持数の非差分 dense 加算** (`coef · (mine_ships or mine_planets)` を毎 turn) — **rejected (PBRS必要性実証)** (iter6: lite last-10 1.0000 だが win_rate **inflation**, value_loss 7163 で value 学習破綻。Ng 1999 教科書通りの非PBRS加算バイアス。H4 PBRS 維持確定。例外条件適用で deepen なし)
 - [ ] (P3, pair with H3) H6: 勝ちターン短縮 **time bonus** (早期勝利に terminal bonus / 引き伸ばしに小ペナルティ) — dense 保持報酬の「引き伸ばし」副作用への対策。H3 と pair で効果を見る。
 
 ## Iteration log
@@ -69,6 +69,7 @@ report shaping 以外の変更は本 case では行わない。
 | 3 | 2026-05-28T00:48Z | H4 | iter3_plan.md | 20260528-004854__feature-support-reward__8e2e4a3__seed0 | last-10 0.820 / trend +0.668 (lite, H2 比 +5.6pp, coef 0.50→1.0) | adopted | iter3_result.md (analysis: 学習ログ baseで実施、replay skip) |
 | 4 | 2026-05-28T05:01Z | H5 | iter4_plan.md | 20260528-050116__feature-support-reward__531f725__seed0 | last-10 0.771 / trend +0.601 (lite, H4 比 -4.9pp) | rejected | iter4_result.md (analysis: 学習ログ baseで実施、replay skip) |
 | 5 | 2026-05-29T23:13Z | H7 | iter5_plan.md | 20260529-231332__feature-support-reward__7da3e2c__seed0 | last-10 0.8234 / trend +0.585 (lite, H4 比 +0.34pp seed variance 域) | inconclusive (clip 不要を確認、H4 維持) | iter5_result.md (analysis: 学習ログ baseで実施、replay skip。A100 one-off: RunPod consumer 全 phantom 障害のため) |
+| 6 | 2026-05-31T02:19Z | H3 | iter6_plan.md | 20260531-021927__feature-support-reward__dc1fa41__seed0 | last-10 1.0000 (inflation!) / value_loss 7163 (H4 比 ~1M×) | rejected (PBRS必要性実証、win_rate inflation で実力向上ではない) | iter6_result.md (analysis: 学習ログ baseで実施、replay skip。RTX 4090 SECURE, ~$1.8) |
 
 ## 参考 (References)
 
