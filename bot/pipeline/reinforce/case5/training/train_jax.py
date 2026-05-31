@@ -298,6 +298,8 @@ def _run_iter(
     shaping_clip: float = 0.0,
     dense_coef_ship: float = 0.0,
     dense_coef_planet: float = 0.0,
+    time_bonus_coef: float = 0.0,
+    time_penalty_coef: float = 0.0,
 ) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -317,6 +319,8 @@ def _run_iter(
         shaping_clip=shaping_clip,
         dense_coef_ship=dense_coef_ship,
         dense_coef_planet=dense_coef_planet,
+        time_bonus_coef=time_bonus_coef,
+        time_penalty_coef=time_penalty_coef,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -397,6 +401,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     shaping_clip = float(t_cfg.get("shaping_clip", 0.0))
     dense_coef_ship = float(t_cfg.get("dense_coef_ship", 0.0))
     dense_coef_planet = float(t_cfg.get("dense_coef_planet", 0.0))
+    time_bonus_coef = float(t_cfg.get("time_bonus_coef", 0.0))
+    time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
 
     # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
     # `late` opponent afterwards. When `opponent` is not "curriculum" the
@@ -473,6 +479,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             shaping_clip=shaping_clip,
             dense_coef_ship=dense_coef_ship,
             dense_coef_planet=dense_coef_planet,
+            time_bonus_coef=time_bonus_coef,
+            time_penalty_coef=time_penalty_coef,
         )
         row["opponent"] = iter_opponent
         row["shaping_mode"] = shaping_mode
@@ -481,6 +489,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         row["shaping_clip"] = shaping_clip
         row["dense_coef_ship"] = dense_coef_ship
         row["dense_coef_planet"] = dense_coef_planet
+        row["time_bonus_coef"] = time_bonus_coef
+        row["time_penalty_coef"] = time_penalty_coef
         history.append(row)
         logger.info(
             (

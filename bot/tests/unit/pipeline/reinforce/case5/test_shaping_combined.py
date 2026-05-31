@@ -281,6 +281,80 @@ def test_ratio_clip_zero_matches_unclipped_ratio() -> None:
     )
 
 
+def test_time_bonus_zero_matches_plain_ratio() -> None:
+    """H6 control: time_bonus=0 and time_penalty=0 must match plain ratio."""
+    model = _tiny_model()
+    plain = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(21),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+    )
+    time_zero = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(21),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        time_bonus_coef=0.0,
+        time_penalty_coef=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(plain.rewards),
+        np.asarray(time_zero.rewards),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_time_penalty_lowers_cumulative_reward() -> None:
+    """H6: positive time_penalty must lower the cumulative pre-terminal reward.
+
+    Each pre-terminal step has `-time_penalty_coef` added to shaping, so the
+    cumulative reward over done_mask=True steps must be strictly lower with
+    penalty > 0.
+    """
+    model = _tiny_model()
+    plain = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(22),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+    )
+    penalised = collect_rollout_jax(
+        model,
+        jax.random.PRNGKey(22),
+        episodes_per_iter=2,
+        horizon=8,
+        seed=0,
+        opponent="noop",
+        shaping_mode="ratio",
+        shaping_coef=1.0,
+        time_penalty_coef=0.01,
+    )
+    plain_sum = float(
+        jnp.sum(jnp.where(plain.done_mask, plain.rewards, jnp.float32(0.0)))
+    )
+    penalised_sum = float(
+        jnp.sum(jnp.where(penalised.done_mask, penalised.rewards, jnp.float32(0.0)))
+    )
+    assert penalised_sum < plain_sum, (
+        f"time penalty expected to lower cumulative reward: "
+        f"penalised={penalised_sum} vs plain={plain_sum}"
+    )
+
+
 def test_combined_with_zero_ship_coef_matches_planets_mode() -> None:
     """coef_ship=0 + coef_planet=c must equal planets mode (shaping_coef=c)."""
     model = _tiny_model()

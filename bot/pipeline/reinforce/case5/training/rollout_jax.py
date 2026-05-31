@@ -243,6 +243,8 @@ def _rollout_one_env(
     shaping_clip: float,
     dense_coef_ship: float,
     dense_coef_planet: float,
+    time_bonus_coef: float,
+    time_penalty_coef: float,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -394,15 +396,27 @@ def _rollout_one_env(
             jnp.clip(shaping, -shaping_clip, shaping_clip),
             shaping,
         )
+        # H6: per-turn time penalty to discourage stalling. coef=0 is no-op so
+        # every existing mode stays bit-identical. Applied AFTER clip so the
+        # clip bounds only the PBRS+dense signal, not the linear time pressure.
+        shaping = shaping - time_penalty_coef
 
         # Terminal reward: env emits rewards on termination; turn into
         # ±1/0 by comparing the env's rewards for both seats.
         rewards_arr = state_for_next.rewards
         r_self = rewards_arr[seat]
         r_opp = rewards_arr[1 - seat]
-        terminal_reward = jnp.where(
-            term, jnp.sign(r_self - r_opp).astype(jnp.float32), jnp.float32(0.0)
+        terminal_sign = jnp.sign(r_self - r_opp).astype(jnp.float32)
+        # H6: time bonus on winning terminal — reward early victories. coef=0
+        # is no-op. Win → `coef · (1 - t/horizon)`; loss/draw → 0 (only positive
+        # sign adds bonus). `_t` is the scan index, horizon is captured above.
+        win_mask = (terminal_sign > 0.0).astype(jnp.float32)
+        time_bonus = (
+            time_bonus_coef
+            * win_mask
+            * (1.0 - _t.astype(jnp.float32) / jnp.float32(horizon))
         )
+        terminal_reward = jnp.where(term, terminal_sign + time_bonus, jnp.float32(0.0))
         step_reward = jnp.where(
             done_already, jnp.float32(0.0), shaping + terminal_reward
         )
@@ -524,6 +538,8 @@ def collect_rollout_jax(
     shaping_clip: float = 0.0,
     dense_coef_ship: float = 0.0,
     dense_coef_planet: float = 0.0,
+    time_bonus_coef: float = 0.0,
+    time_penalty_coef: float = 0.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -573,6 +589,8 @@ def collect_rollout_jax(
             None,
             None,
             None,
+            None,
+            None,
         ),
     )
     return vmapped(
@@ -589,6 +607,8 @@ def collect_rollout_jax(
         shaping_clip,
         dense_coef_ship,
         dense_coef_planet,
+        time_bonus_coef,
+        time_penalty_coef,
     )
 
 
