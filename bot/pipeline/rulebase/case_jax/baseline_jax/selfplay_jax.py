@@ -37,6 +37,7 @@ from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from orbit_wars_jax.constants import EPISODE_STEPS
 from orbit_wars_jax.reset import reset
 from orbit_wars_jax.state import EnvState
@@ -91,6 +92,45 @@ def jax_v4_action_fn(seat: int) -> ActionFn:
 
     def _fn(state: EnvState) -> jax.Array:
         return _seat_action(state, seat)
+
+    return _fn
+
+
+def python_v8_action_fn(seat: int) -> ActionFn:
+    """ActionFn that calls the Python case8 `baseline_v8.agent` via host callback.
+
+    Converts the JAX `EnvState` into a kaggle obs dict (via `state_to_obs`) on
+    the host, invokes the Python `baseline.agent.agent(obs)`, packs the move list
+    into a `(MAX_LAUNCHES_PER_AGENT, 3)` tensor, returns it as a device array.
+    The callback runs on host (CPU) so vmap parallelism is reduced to a host
+    loop for this seat — acceptable for win-rate eval, not for throughput.
+    """
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case8.baseline.agent import agent as _v8_agent
+    from pipeline.rulebase.case8.baseline.core.physics import (
+        reset_predict_cache as _reset_cache,
+    )
+
+    seat_i = int(seat)
+
+    def _host_v8(state: EnvState) -> np.ndarray:
+        # State arrives as numpy via pure_callback. Build the obs and call v8.
+        obs = _state_to_obs(state, player=seat_i)
+        _reset_cache()
+        moves = _v8_agent(obs)
+        out = np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=np.float32)
+        out[:, 1:] = 0.0
+        for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+            out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+        return out
+
+    # Prototype array tells pure_callback the result's shape and dtype without
+    # constructing an untyped jax.ShapeDtypeStruct (mypy-safe).
+    _proto = jnp.zeros((MAX_LAUNCHES_PER_AGENT, 3), dtype=jnp.float32)
+
+    def _fn(state: EnvState) -> jax.Array:
+        return jnp.asarray(jax.pure_callback(_host_v8, _proto, state))
 
     return _fn
 

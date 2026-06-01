@@ -107,6 +107,60 @@ def _bench_batch(batch: int) -> BenchResult:
     )
 
 
+def _vs_v8_winrate(games: int, horizon: int) -> dict[str, Any]:
+    """jax_v4 (seat0) vs Python case8.baseline.agent (seat1) via host callback.
+
+    The gold-standard "is jax_v4 losing to the original v8" check. Uses
+    `jax.pure_callback` to invoke the Python v8 agent for seat 1 each turn;
+    this forces a host roundtrip per game per turn so vmap parallelism is
+    largely lost, but per-game throughput stays acceptable for win-rate eval.
+    """
+    from pipeline.rulebase.case_jax.baseline_jax.selfplay_jax import (
+        OUTCOME_DRAW,
+        OUTCOME_SEAT0_WIN,
+        OUTCOME_SEAT1_WIN,
+        jax_v4_action_fn,
+        python_v8_action_fn,
+        run_selfplay_batch,
+    )
+
+    seeds = list(range(games))
+    a0 = jax_v4_action_fn(0)
+    a1 = python_v8_action_fn(1)
+    t0 = time.perf_counter()
+    out = run_selfplay_batch(seeds, horizon=horizon, agent0_fn=a0, agent1_fn=a1)
+    out.outcome.block_until_ready()
+    wall = time.perf_counter() - t0
+    oc = [int(x) for x in out.outcome]
+    s0p = [int(x) for x in out.seat0_planets]
+    s1p = [int(x) for x in out.seat1_planets]
+    s0s = [int(x) for x in out.seat0_ships]
+    s1s = [int(x) for x in out.seat1_ships]
+    planets_jax_ahead = sum(1 for a, b in zip(s0p, s1p, strict=True) if a > b)
+    planets_v8_ahead = sum(1 for a, b in zip(s0p, s1p, strict=True) if a < b)
+    ships_jax_ahead = sum(1 for a, b in zip(s0s, s1s, strict=True) if a > b)
+    ships_v8_ahead = sum(1 for a, b in zip(s0s, s1s, strict=True) if a < b)
+    return {
+        "match": "jax_v4 (seat0) vs python_v8 (seat1)",
+        "games": games,
+        "horizon": horizon,
+        "jax_win": oc.count(OUTCOME_SEAT0_WIN),
+        "v8_win": oc.count(OUTCOME_SEAT1_WIN),
+        "draw": oc.count(OUTCOME_DRAW),
+        "terminated": int(sum(bool(x) for x in out.terminated)),
+        "wall_seconds": round(wall, 1),
+        "outcomes": oc,
+        "planets_jax_ahead": planets_jax_ahead,
+        "planets_v8_ahead": planets_v8_ahead,
+        "ships_jax_ahead": ships_jax_ahead,
+        "ships_v8_ahead": ships_v8_ahead,
+        "jax_planets": s0p,
+        "v8_planets": s1p,
+        "jax_ships": s0s,
+        "v8_ships": s1s,
+    }
+
+
 def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
     """jax_v4 self-play win-rate over `games` (short horizon) — non-degenerate check.
 
@@ -219,7 +273,18 @@ def main(
         ),
     ),
     skip_winrate: bool = typer.Option(
-        False, help="skip the self-play win-rate stage"
+        True,
+        help=(
+            "skip the jax_v4 self-play win-rate stage (already captured: "
+            "non-degenerate, planets/ships ~50/50, see prior run 20260601-075234)"
+        ),
+    ),
+    vs_v8: bool = typer.Option(
+        True,
+        help=(
+            "run jax_v4 vs Python case8 baseline (hybrid host callback for "
+            "seat1). The gold-standard 'is jax_v4 losing to the original' check"
+        ),
     ),
 ) -> None:
     logging.basicConfig(
@@ -238,6 +303,7 @@ def main(
     # is intractable on CPU). Confirms jax_v4 plays to a spread of outcomes
     # (not all-draw / degenerate) and is ~50% by symmetry.
     winrate: dict[str, Any] | None = None
+    vs_v8_result: dict[str, Any] | None = None
     if os.environ.get("RUNPOD_POD_ID") and not skip_winrate:
         logger.info(
             "=== self-play win-rate games=%d horizon=%d ===",
@@ -246,6 +312,15 @@ def main(
         )
         winrate = _selfplay_winrate(winrate_games, winrate_horizon)
         logger.info("winrate: %s", winrate)
+
+    if os.environ.get("RUNPOD_POD_ID") and vs_v8:
+        logger.info(
+            "=== jax_v4 vs python_v8 games=%d horizon=%d ===",
+            winrate_games,
+            winrate_horizon,
+        )
+        vs_v8_result = _vs_v8_winrate(winrate_games, winrate_horizon)
+        logger.info("vs_v8: %s", vs_v8_result)
 
     runtime = time.perf_counter() - started
 
@@ -259,6 +334,7 @@ def main(
         "runpod_pod_id": os.environ.get("RUNPOD_POD_ID"),
         "results": [asdict(r) for r in results],
         "selfplay_winrate": winrate,
+        "vs_v8_winrate": vs_v8_result,
         "runtime_seconds": round(runtime, 3),
     }
     out_path = run_path / "bench_results.json"
