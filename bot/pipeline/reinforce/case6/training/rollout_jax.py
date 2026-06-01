@@ -27,6 +27,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as _np
 from orbit_wars_jax.reset import reset
 from orbit_wars_jax.state import EnvState
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
@@ -58,12 +59,18 @@ OPPONENT_NOOP: int = 0
 OPPONENT_BASELINE_JAX_LITE: int = 1
 OPPONENT_BASELINE_JAX_FULL: int = 2
 OPPONENT_SELF_SNAPSHOT: int = 3
+OPPONENT_PYTHON_V1: int = 4
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
     "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
     "baseline_jax_full": OPPONENT_BASELINE_JAX_FULL,
     "self_snapshot": OPPONENT_SELF_SNAPSHOT,
+    # Real Python baseline_v1 via pure_callback host roundtrip. Closes the
+    # train/eval gap (memory: case6 PFSP was 0/30 vs live v1 because the in-JAX
+    # baseline_jax_lite/full approximate but don't match the real rule). Cost:
+    # vmap forces sequential per-game host calls so rollout throughput drops.
+    "python_v1": OPPONENT_PYTHON_V1,
 }
 
 
@@ -181,6 +188,52 @@ def _self_snapshot_opponent_actions(
     )[player]
 
 
+# ---- Real Python baseline_v1 opponent via host callback. ---------------------
+# Lazy import so importing this module on a vendored Kaggle runtime (which has
+# no `pipeline.rulebase.case1.baseline`) doesn't crash; the callback only fires
+# when the opponent is actually selected.
+def _host_python_v1_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case1.baseline.agent import agent as _v1_agent
+
+    # case1 baseline has no module-level predict cache (it's a port of the
+    # sigmaborov LB897 notebook, the predict-position cache is a case8 addition).
+    # So nothing to reset here.
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v1_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+# Prototype tells pure_callback the result's shape/dtype without an untyped
+# `jax.ShapeDtypeStruct` constructor.
+_PYTHON_V1_PROTO = jnp.zeros((MAX_LAUNCHES_PER_AGENT, 3), dtype=jnp.float32)
+
+
+def _python_v1_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    """Call the real Python baseline_v1 agent for one seat via host callback.
+
+    `vmap_method='sequential'` so that when the rollout is vmapped over a batch
+    of games, each game's seat-1 obs is dispatched to the host one at a time
+    (the Python agent is not vectorizable). This is the gold-standard opponent:
+    closes the train/eval gap that the in-JAX `baseline_jax_lite/full`
+    approximations leave open (case6 was 0/30 vs live v1 with them).
+    """
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v1_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -278,14 +331,18 @@ def _rollout_one_env(
         opp_snapshot_actions = _self_snapshot_opponent_actions(
             opp_model, state, 1 - seat
         )  # (L, 3)
-        # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot.
+        opp_python_v1_actions = _python_v1_opponent_actions(
+            state, 1 - seat
+        )  # (L, 3) via pure_callback to real Python baseline_v1
+        # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot, 4 → python_v1.
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 3),
+            jnp.clip(opponent_mode, 0, 4),
             [
                 lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
                 lambda: opp_lite_actions,
                 lambda: opp_full_actions,
                 lambda: opp_snapshot_actions,
+                lambda: opp_python_v1_actions,
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
