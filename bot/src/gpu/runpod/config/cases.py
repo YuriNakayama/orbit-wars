@@ -459,6 +459,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 python_v1: 本物 baseline_v1 を pure_callback で seat1 に
+    # 注入 (opponent=python_v1, sha dc13a25)。train/eval gap を原理的に消す試行。
+    # H4 (近似 rule 相手) が live v1 戦で 0/30 だった現状を打開する狙い。
+    "reinforce_case6_kaggle_jax_train_python_v1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_python_v1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_python_v1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
     # the self_snapshot opponent path launches and collects artifacts on RunPod).
     "reinforce_case6_kaggle_jax_smoke": {
