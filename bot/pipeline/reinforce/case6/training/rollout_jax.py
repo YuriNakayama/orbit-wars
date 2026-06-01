@@ -60,17 +60,23 @@ OPPONENT_BASELINE_JAX_LITE: int = 1
 OPPONENT_BASELINE_JAX_FULL: int = 2
 OPPONENT_SELF_SNAPSHOT: int = 3
 OPPONENT_PYTHON_V1: int = 4
+OPPONENT_PYTHON_V4: int = 5
+OPPONENT_PYTHON_V8: int = 6
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
     "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
     "baseline_jax_full": OPPONENT_BASELINE_JAX_FULL,
     "self_snapshot": OPPONENT_SELF_SNAPSHOT,
-    # Real Python baseline_v1 via pure_callback host roundtrip. Closes the
+    # Real Python baseline_v{1,4,8} via pure_callback host roundtrip. Closes the
     # train/eval gap (memory: case6 PFSP was 0/30 vs live v1 because the in-JAX
     # baseline_jax_lite/full approximate but don't match the real rule). Cost:
     # vmap forces sequential per-game host calls so rollout throughput drops.
+    # v1=sigmaborov LB897, v4=phase C champion (winrate 70.3%), v8=case8 predict
+    # cache + LB1224 strategy.
     "python_v1": OPPONENT_PYTHON_V1,
+    "python_v4": OPPONENT_PYTHON_V4,
+    "python_v8": OPPONENT_PYTHON_V8,
 }
 
 
@@ -234,6 +240,65 @@ def _python_v1_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
+# v4 / v8: case4 / case8 baseline. PFSP pool diversity. v8 has predict cache
+# (case8 addition) — reset before each oracle call to avoid `id(initial_by_id)`
+# collision in tight loops (project_case_jax_phase0 memory).
+def _host_python_v4_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case4.baseline.agent import agent as _v4_agent
+
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v4_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+def _host_python_v8_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case8.baseline.agent import agent as _v8_agent
+    from pipeline.rulebase.case8.baseline.core.physics import (
+        reset_predict_cache as _reset_v8_cache,
+    )
+
+    _reset_v8_cache()
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v8_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+def _python_v4_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v4_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
+def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v8_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -334,15 +399,20 @@ def _rollout_one_env(
         opp_python_v1_actions = _python_v1_opponent_actions(
             state, 1 - seat
         )  # (L, 3) via pure_callback to real Python baseline_v1
-        # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot, 4 → python_v1.
+        opp_python_v4_actions = _python_v4_opponent_actions(state, 1 - seat)  # (L, 3)
+        opp_python_v8_actions = _python_v8_opponent_actions(state, 1 - seat)  # (L, 3)
+        # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 4),
+            jnp.clip(opponent_mode, 0, 6),
             [
                 lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
                 lambda: opp_lite_actions,
                 lambda: opp_full_actions,
                 lambda: opp_snapshot_actions,
                 lambda: opp_python_v1_actions,
+                lambda: opp_python_v4_actions,
+                lambda: opp_python_v8_actions,
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
