@@ -1,0 +1,61 @@
+# RunPod JAX training config — pool curriculum: noop → python_v1。
+#
+# 背景 (2026-06-02):
+# - python_v1 単独学習は iter=0 rollout=383s + win=0.000 (全敗) で学習信号薄。
+# - 現状 case6 weights は live v1 30戦 0/30 = 完全敗北。
+# - 戦略: early=noop で free action 空間を探索学習 → late=python_v1 で本物 v1 戦
+#   の経験を積む。noop は host callback なしなので rollout 軽い (~50s/iter 想定)、
+#   後半 python_v1 のみ host call で重くなる。
+#
+# curriculum config: switch_iter=5 → iter 0-4 は noop、iter 5+ は python_v1。
+# cost 想定: noop 5 iter (~5min) + python_v1 15 iter × 7.4min = ~115min ≈ $2.7。
+# python_v1 単独 50 iter ($8.6) よりは安いが cap $1.5 超過。要 episodes 8 制約継続。
+#
+# 注: case6 train_jax の "curriculum" mode は late=pool 以外も対応 (pool/snapshot
+# 拡張は別腰)。新 mode 不要、既存 wiring の opponent_curriculum.early/late に
+# python_v1 が入る (rollout_jax dispatch は OPPONENT_NAME_TO_MODE 経由で OK)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 8
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 10000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case6_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

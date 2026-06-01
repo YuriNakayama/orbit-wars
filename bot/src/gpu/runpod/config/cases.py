@@ -472,6 +472,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 pool_v1: noop → python_v1 curriculum (5c8725cd)。
+    # iter 0-4 noop で free 学習開始 → iter 5+ で本物 v1 戦。
+    # python_v1 単独より cost は嵩むが、学習信号薄問題を回避する狙い。
+    "reinforce_case6_kaggle_jax_train_pool_v1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
     # the self_snapshot opponent path launches and collects artifacts on RunPod).
     "reinforce_case6_kaggle_jax_smoke": {
