@@ -130,7 +130,13 @@ def python_v8_action_fn(seat: int) -> ActionFn:
     _proto = jnp.zeros((MAX_LAUNCHES_PER_AGENT, 3), dtype=jnp.float32)
 
     def _fn(state: EnvState) -> jax.Array:
-        return jnp.asarray(jax.pure_callback(_host_v8, _proto, state))
+        # vmap_method='sequential' = call _host_v8 once per game in the batch,
+        # then stack results. Host callbacks can't truly parallelize on GPU; this
+        # makes the (otherwise unsupported) vmap legal. Throughput drops to per-
+        # call rate, but win-rate eval just needs each game's outcome.
+        return jnp.asarray(
+            jax.pure_callback(_host_v8, _proto, state, vmap_method="sequential")
+        )
 
     return _fn
 
