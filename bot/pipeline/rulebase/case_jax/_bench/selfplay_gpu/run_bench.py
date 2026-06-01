@@ -132,12 +132,19 @@ def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
     out.outcome.block_until_ready()
     wall = time.perf_counter() - t0
     oc = [int(x) for x in out.outcome]
-    # final_rewards: (games, num_agents=2) — sign indicates seat0 vs seat1
-    # advantage at horizon cutoff (or terminal reward if terminated).
-    rewards = [[float(r) for r in row] for row in out.final_rewards]
-    seat0_better = sum(1 for row in rewards if row[0] > row[1])
-    seat1_better = sum(1 for row in rewards if row[1] > row[0])
-    seat_equal = games - seat0_better - seat1_better
+    # Per-game board summary at end of scan — useful when horizon cuts off
+    # before termination (env reward is 0 unless terminated).
+    s0p = [int(x) for x in out.seat0_planets]
+    s1p = [int(x) for x in out.seat1_planets]
+    s0s = [int(x) for x in out.seat0_ships]
+    s1s = [int(x) for x in out.seat1_ships]
+    s0r = [int(x) for x in out.seat0_prod]
+    s1r = [int(x) for x in out.seat1_prod]
+    # "Advantage" = more planets at the cutoff; tie-break on ships.
+    planets_seat0_ahead = sum(1 for a, b in zip(s0p, s1p, strict=True) if a > b)
+    planets_seat1_ahead = sum(1 for a, b in zip(s0p, s1p, strict=True) if a < b)
+    ships_seat0_ahead = sum(1 for a, b in zip(s0s, s1s, strict=True) if a > b)
+    ships_seat1_ahead = sum(1 for a, b in zip(s0s, s1s, strict=True) if a < b)
     return {
         "games": games,
         "horizon": horizon,
@@ -147,12 +154,18 @@ def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
         "terminated": int(sum(bool(x) for x in out.terminated)),
         "wall_seconds": round(wall, 1),
         "outcomes": oc,
-        # Reward-sign advantage at cutoff — useful when horizon cuts off before
-        # termination so all `outcomes` are DRAW.
-        "seat0_advantage": seat0_better,
-        "seat1_advantage": seat1_better,
-        "tied": seat_equal,
-        "final_rewards": rewards,
+        # Board-state advantage at cutoff (= the meaningful "is jax_v4 losing
+        # everywhere" check when reward is 0).
+        "planets_seat0_ahead": planets_seat0_ahead,
+        "planets_seat1_ahead": planets_seat1_ahead,
+        "ships_seat0_ahead": ships_seat0_ahead,
+        "ships_seat1_ahead": ships_seat1_ahead,
+        "seat0_planets": s0p,
+        "seat1_planets": s1p,
+        "seat0_ships": s0s,
+        "seat1_ships": s1s,
+        "seat0_prod": s0r,
+        "seat1_prod": s1r,
     }
 
 

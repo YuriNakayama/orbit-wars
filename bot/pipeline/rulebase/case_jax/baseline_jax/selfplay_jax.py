@@ -60,12 +60,23 @@ class SelfPlayResult(NamedTuple):
 
     Leading axis B = len(seeds). All arrays are device arrays returned by the
     single vmapped call (no host loop over games).
+
+    `seat_*_planets/ships/prod` summarize the final board state for seat 0 and
+    seat 1. When `horizon` cuts off before termination (`terminated == False`,
+    `final_rewards` is all zeros), these board summaries are the only signal
+    available for "is jax_v4 losing degenerate" — compare seat0 vs seat1 totals.
     """
 
     outcome: jax.Array  # (B,) int32 in {OUTCOME_SEAT0_WIN, SEAT1_WIN, DRAW}
     final_rewards: jax.Array  # (B, NUM_AGENTS_MAX) float32 frozen terminal rewards
     terminated: jax.Array  # (B,) bool — game reached env termination within horizon
     turns_played: jax.Array  # (B,) int32 — turns until termination (== horizon if not)
+    seat0_planets: jax.Array  # (B,) int32 — # planets owned by seat 0 at end
+    seat1_planets: jax.Array  # (B,) int32
+    seat0_ships: jax.Array  # (B,) int32 — total ships on seat-0 planets at end
+    seat1_ships: jax.Array  # (B,) int32
+    seat0_prod: jax.Array  # (B,) int32 — total production on seat-0 planets
+    seat1_prod: jax.Array  # (B,) int32
 
 
 def _seat_action(state: EnvState, seat: int) -> jax.Array:
@@ -120,7 +131,10 @@ def _play_one(
     horizon: int,
     agent0_fn: ActionFn,
     agent1_fn: ActionFn,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> tuple[
+    jax.Array, jax.Array, jax.Array, jax.Array,
+    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
+]:
     """Run one self-play game via `lax.scan` over `horizon` turns.
 
     Returns `(outcome, final_rewards, terminated, turns_played)`. Both seats run
@@ -173,7 +187,31 @@ def _play_one(
         jnp.int32(OUTCOME_SEAT0_WIN),
         jnp.where(r1 > r0, jnp.int32(OUTCOME_SEAT1_WIN), jnp.int32(OUTCOME_DRAW)),
     )
-    return outcome, final_carry.final_rewards, final_carry.done, final_carry.turns
+
+    # Per-seat board summary at the end of the scan (whether terminated or not).
+    # Lets the bench compare seat0 vs seat1 totals when reward is 0 (horizon cut).
+    fs = final_carry.state
+    seat0_mask = fs.planet_valid & (fs.planet_owner == jnp.int32(0))
+    seat1_mask = fs.planet_valid & (fs.planet_owner == jnp.int32(1))
+    seat0_planets = jnp.sum(seat0_mask.astype(jnp.int32))
+    seat1_planets = jnp.sum(seat1_mask.astype(jnp.int32))
+    seat0_ships = jnp.sum(jnp.where(seat0_mask, fs.planet_ships, 0))
+    seat1_ships = jnp.sum(jnp.where(seat1_mask, fs.planet_ships, 0))
+    seat0_prod = jnp.sum(jnp.where(seat0_mask, fs.planet_prod, 0))
+    seat1_prod = jnp.sum(jnp.where(seat1_mask, fs.planet_prod, 0))
+
+    return (
+        outcome,
+        final_carry.final_rewards,
+        final_carry.done,
+        final_carry.turns,
+        seat0_planets,
+        seat1_planets,
+        seat0_ships,
+        seat1_ships,
+        seat0_prod,
+        seat1_prod,
+    )
 
 
 def _stack_states(states: list[EnvState]) -> EnvState:
@@ -203,15 +241,35 @@ def run_selfplay_batch(
     init_states = [reset(seed=s, num_agents=2) for s in seeds]
     batched_state = _stack_states(init_states)
 
-    def play(state: EnvState) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    def play(state: EnvState) -> tuple[
+        jax.Array, jax.Array, jax.Array, jax.Array,
+        jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
+    ]:
         return _play_one(state, horizon, a0, a1)
 
-    outcome, final_rewards, terminated, turns = jax.vmap(play)(batched_state)
+    (
+        outcome,
+        final_rewards,
+        terminated,
+        turns,
+        seat0_planets,
+        seat1_planets,
+        seat0_ships,
+        seat1_ships,
+        seat0_prod,
+        seat1_prod,
+    ) = jax.vmap(play)(batched_state)
     return SelfPlayResult(
         outcome=outcome,
         final_rewards=final_rewards,
         terminated=terminated,
         turns_played=turns,
+        seat0_planets=seat0_planets,
+        seat1_planets=seat1_planets,
+        seat0_ships=seat0_ships,
+        seat1_ships=seat1_ships,
+        seat0_prod=seat0_prod,
+        seat1_prod=seat1_prod,
     )
 
 
