@@ -472,6 +472,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 pool_v8: noop → python_v8 curriculum (case8 production champion)。
+    # pool_v1 の v8 版。最強 baseline で学習し v1/v4 への汎化を試す。
+    "reinforce_case6_kaggle_jax_train_pool_v8": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v8",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v8.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6 pool_v1: noop → python_v1 curriculum (5c8725cd)。
     # iter 0-4 noop で free 学習開始 → iter 5+ で本物 v1 戦。
     # python_v1 単独より cost は嵩むが、学習信号薄問題を回避する狙い。
