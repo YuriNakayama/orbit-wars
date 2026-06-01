@@ -46,6 +46,8 @@ INCLUDE_RELATIVE_PATHS: tuple[str, ...] = (
     "bot/uv.lock",
     "bot/.python-version",
     "simulator/python",
+    "simulator/jax",
+    "simulator/adapter",
     "simulator/rust/src",
     "simulator/rust/Cargo.toml",
     "simulator/rust/pyproject.toml",
