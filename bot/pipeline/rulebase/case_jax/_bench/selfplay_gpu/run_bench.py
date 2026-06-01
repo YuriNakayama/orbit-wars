@@ -170,17 +170,21 @@ def _bench_full(batches: list[int]) -> list[BenchResult]:
 @app.command()
 def main(
     batches: str = typer.Option(
-        "1,16,64,256", help="comma-separated batch sizes to bench"
+        "1,16,64,256",
+        help="comma-separated batch sizes to bench (empty = skip throughput)",
     ),
     winrate_games: int = typer.Option(
         16, help="jax_v4 self-play games for the non-degenerate win-rate check"
     ),
     winrate_horizon: int = typer.Option(
-        50,
+        200,
         help=(
-            "horizon for the self-play win-rate games (full 500 hangs in compile; "
-            "50 is enough to detect a degenerate / all-draw agent)"
+            "horizon for the self-play win-rate games (kaggle env typically needs "
+            "≥200 turns to reach termination; full 500 hangs in compile)"
         ),
+    ),
+    skip_winrate: bool = typer.Option(
+        False, help="skip the self-play win-rate stage"
     ),
 ) -> None:
     logging.basicConfig(
@@ -193,13 +197,13 @@ def main(
 
     batch_list = [int(b) for b in batches.split(",") if b.strip()]
     started = time.perf_counter()
-    results = _bench_full(batches=batch_list)
+    results = _bench_full(batches=batch_list) if batch_list else []
 
     # Non-degenerate self-play win-rate check (RunPod GPU only; game-loop compile
     # is intractable on CPU). Confirms jax_v4 plays to a spread of outcomes
     # (not all-draw / degenerate) and is ~50% by symmetry.
     winrate: dict[str, Any] | None = None
-    if os.environ.get("RUNPOD_POD_ID") and results:
+    if os.environ.get("RUNPOD_POD_ID") and not skip_winrate:
         logger.info(
             "=== self-play win-rate games=%d horizon=%d ===",
             winrate_games,
