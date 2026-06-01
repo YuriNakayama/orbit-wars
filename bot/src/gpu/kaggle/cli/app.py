@@ -354,6 +354,10 @@ def train(
     kernel_basename = "".join(
         c if c.isalnum() or c == "-" else "-" for c in kernel_basename
     ).lower()[:50]
+    # Kaggle drops the trailing '-' when materializing slugs from titles. So
+    # our launch.json must store the normalized (rstrip-) form to keep
+    # `dev/kaggle status/pull` lookups correct.
+    kernel_basename = kernel_basename.rstrip("-")
     kernel_slug = f"{creds.username}/{kernel_basename}"
     kernel_title = kernel_basename
     kernel_slug = _normalize_kernel_slug(kernel_slug)
