@@ -114,6 +114,10 @@ def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
     and is ~50% by symmetry. NOT a vs-Python-v8 eval (that needs a hybrid harness
     with v8 in the opponent seat — a follow-up). The game-loop compile is heavy
     but tractable on GPU at modest horizon.
+
+    Also reports per-game final_rewards so that even when horizon is too short to
+    reach termination (all DRAW outcomes), the reward sign indicates which seat
+    was advantaged at the cutoff — the "全敗してないか" check.
     """
     from pipeline.rulebase.case_jax.baseline_jax.selfplay_jax import (
         OUTCOME_DRAW,
@@ -128,6 +132,12 @@ def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
     out.outcome.block_until_ready()
     wall = time.perf_counter() - t0
     oc = [int(x) for x in out.outcome]
+    # final_rewards: (games, num_agents=2) — sign indicates seat0 vs seat1
+    # advantage at horizon cutoff (or terminal reward if terminated).
+    rewards = [[float(r) for r in row] for row in out.final_rewards]
+    seat0_better = sum(1 for row in rewards if row[0] > row[1])
+    seat1_better = sum(1 for row in rewards if row[1] > row[0])
+    seat_equal = games - seat0_better - seat1_better
     return {
         "games": games,
         "horizon": horizon,
@@ -137,6 +147,12 @@ def _selfplay_winrate(games: int, horizon: int) -> dict[str, Any]:
         "terminated": int(sum(bool(x) for x in out.terminated)),
         "wall_seconds": round(wall, 1),
         "outcomes": oc,
+        # Reward-sign advantage at cutoff — useful when horizon cuts off before
+        # termination so all `outcomes` are DRAW.
+        "seat0_advantage": seat0_better,
+        "seat1_advantage": seat1_better,
+        "tied": seat_equal,
+        "final_rewards": rewards,
     }
 
 
@@ -181,10 +197,12 @@ def main(
         16, help="jax_v4 self-play games for the non-degenerate win-rate check"
     ),
     winrate_horizon: int = typer.Option(
-        200,
+        50,
         help=(
-            "horizon for the self-play win-rate games (kaggle env typically needs "
-            "≥200 turns to reach termination; full 500 hangs in compile)"
+            "horizon for the self-play win-rate games. 50 compiles in ~50min on "
+            "RTX 4090; 200+ hangs in XLA compile. The bench reports per-game "
+            "final_rewards so the seat0/seat1 advantage is observable even when "
+            "horizon cuts off before termination."
         ),
     ),
     skip_winrate: bool = typer.Option(
