@@ -170,8 +170,12 @@ def _bench_full(batches: list[int]) -> list[BenchResult]:
 @app.command()
 def main(
     batches: str = typer.Option(
-        "1,16,64,256",
-        help="comma-separated batch sizes to bench (empty = skip throughput)",
+        "",
+        help=(
+            "comma-separated batch sizes for the throughput stage; empty (default) "
+            "skips it. Throughput numbers are already on file (RTX 4090: batch=256 "
+            "→ 120ms/turn, 8.3 turns/s, 267x scaling). Override to re-measure."
+        ),
     ),
     winrate_games: int = typer.Option(
         16, help="jax_v4 self-play games for the non-degenerate win-rate check"

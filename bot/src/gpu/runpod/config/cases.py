@@ -528,11 +528,11 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "family": "reinforce",
         "stage": "bench_selfplay_jax_gpu",
         "train_module": "pipeline.rulebase.case_jax._bench.selfplay_gpu.run_bench",
-        # Throughput numbers were captured on a prior run (RTX 4090: batch=256
-        # → 120ms/turn, 8.3 turns/s, 267x scaling vs batch=1). Default focus is
-        # now the self-play win-rate stage at a horizon long enough for kaggle
-        # env to reach termination (~200 turns), with throughput skipped.
-        "config_arg": "--batches '' --winrate-horizon 200",
+        # bench defaults are baked into the script: throughput stage skipped
+        # (already captured on a prior run: RTX 4090 batch=256 → 120ms/turn,
+        # 8.3 turns/s, 267x scaling vs batch=1), win-rate runs at horizon 200
+        # (kaggle env needs ≥200 turns to reach termination).
+        "config_arg": "",
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
