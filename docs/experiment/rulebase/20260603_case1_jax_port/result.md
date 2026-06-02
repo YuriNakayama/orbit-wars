@@ -39,3 +39,31 @@
 
 ## 切り戻し点
 - commit `014bcb9` (計画のみ) / `cfbfb86d` (core_jax 完成) が安全点。
+
+---
+
+# 経過 2 (2026-06-03 ~02:00)
+
+## core_jax 全部品 parity 完成 + 初の agent 統合
+
+- featurize_jax (reaction_times 7/7) + missions_jax (score chain 10/10) 追加 → **core_jax 全 68 parity GREEN**。
+  parity test が定数 2 件の写し間違いを検出 (TDD 奏功)。
+- **agent_full_jax** (capture-single-source slice) を core_jax 部品から統合:
+  - **turn0: 20/20 match** (本物と launch/hold+target+send 完全一致) ← 初の full pipeline 一致
+  - **full-game: 3.8%** (19/498, seed0) ← capture-only のため中盤で乖離
+
+## 重要な所見 (正直な評価)
+
+turn0 が 20/20 でも full-game は 3.8%。これは capture-single-source slice が
+**reinforce / swarm / crash / followup / evac + commitments 累積 + keep_needed
+reserve** を未実装のため。lite port (full-game 20.9%) を一時下回るのは、lite の
+reserve ヒューリスティックが中盤を粗く拾っていた分。**full-game 一致には全 mission
+種 + mission_resolver 固定長 scan の統合が必須**と実測で確認。
+
+## NEXT ACTION
+
+1. **available に keep_needed reserve を wire** (arrivals を EnvState fleets から構築)
+2. **commitments 累積** を mission_resolver 固定長 scan で実装 (PoC2 構造)
+3. reinforce / swarm / crash / followup / evac mission を順次追加
+4. 各追加ごとに full-game 一致率の上昇を結合テストで実測 (3.8% → 100% を目指す)
+5. dtype: jnp.float_ の x64 警告は無害 (float32 truncation) だが production では float32 明示推奨
