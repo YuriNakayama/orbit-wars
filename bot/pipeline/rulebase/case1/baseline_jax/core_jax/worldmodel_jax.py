@@ -189,6 +189,71 @@ def keep_needed(
     return jnp.where(full_holds, first, planet_ships).astype(jnp.int32)
 
 
+def projected_state_at(
+    planet_owner: Arr,
+    planet_ships: Arr,
+    production: Arr,
+    arr_eta: Arr,
+    arr_owner: Arr,
+    arr_ships: Arr,
+    cutoff: Arr,
+    horizon: int,
+) -> tuple[Arr, Arr]:
+    """Owner/ships at turn `cutoff`, simulating in-flight arrivals from turn 1.
+
+    Mirrors WorldModel.projected_state → state_at_timeline: fold turns 1..cutoff
+    (production each turn if owned, then resolve arrivals), return owner/ships at
+    cutoff. cutoff is clamped to [0, horizon].
+    """
+
+    def step(carry: tuple[Arr, Arr], turn: Arr) -> tuple[tuple[Arr, Arr], None]:
+        owner, garrison = carry
+        active = turn <= cutoff
+        g2 = jnp.where(active & (owner != -1), garrison + production, garrison)
+        by_owner = _per_turn_owner_ships(arr_eta, arr_owner, arr_ships, turn)
+        no, ng = resolve_arrival_event(owner, g2, by_owner)
+        return (jnp.where(active, no, owner), jnp.where(active, ng, garrison)), None
+
+    turns = jnp.arange(1, horizon + 1, dtype=jnp.int32)
+    (fowner, fg), _ = jax.lax.scan(
+        step, (planet_owner, planet_ships.astype(jnp.float_)), turns
+    )
+    return fowner, jnp.maximum(0.0, fg)
+
+
+def ships_needed_to_capture(
+    target_owner: Arr,
+    target_ships: Arr,
+    production: Arr,
+    player: Arr,
+    arr_eta: Arr,
+    arr_owner: Arr,
+    arr_ships: Arr,
+    arrival_turn: Arr,
+    horizon: int,
+) -> Arr:
+    """need = 0 if projected owner==player at arrival, else ceil(proj_ships)+1.
+
+    Mirrors WorldModel.ships_needed_to_capture (no extra commitments): projects
+    the target accounting for IN-FLIGHT fleets. This is the fix for JAX over-fire
+    (re-attacking a target a friendly fleet is already capturing).
+    """
+    cutoff = jnp.maximum(1, arrival_turn)
+    owner_t, ships_t = projected_state_at(
+        target_owner,
+        target_ships,
+        production,
+        arr_eta,
+        arr_owner,
+        arr_ships,
+        cutoff,
+        horizon,
+    )
+    return jnp.where(
+        owner_t == player, 0, jnp.ceil(ships_t).astype(jnp.int32) + 1
+    ).astype(jnp.int32)
+
+
 def compute_reserve_per_planet(
     planet_owner: Arr,
     planet_ships: Arr,

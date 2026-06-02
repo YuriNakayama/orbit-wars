@@ -132,3 +132,36 @@ commitments 累積** (sorted-mission loop で need/target が変わる) と判�
 2. **reinforce mission** 追加 (自陣防衛の launch、勝率に直結)。
 3. 各段で tripwire (4game) と full-game 一致を実測。tripwire ≥1勝 = 劣化解消の最小到達。
 4. parity 73/73 GREEN 維持。core_jax 部品は揃ったので残りは「組み上げ」。
+
+---
+
+# 経過 5 (2026-06-03 ~02:55) — 乖離原因を特定 (over-fire bug)
+
+## resolver scan 実装 → full-game 4.0% 変わらず。診断で原因特定
+
+mismatch を分類 (seed0, 本物プレイ 498 turn):
+| 種別 | 件数 |
+|------|------|
+| agree | 20 |
+| **py_hold / jax_fire (JAX が余計に撃つ)** | **230** |
+| py_fire / jax_hold | 0 |
+| both_fire_diff | 248 |
+
+→ **JAX agent は過剰発射 (over-fire)**。Python が hold する 230 turn で JAX は launch。
+JAX が誤って hold することは皆無 (0)。これが低一致率 + 0勝 (ship 過剰投入で自陣手薄) の根本原因。
+
+## 原因の仮説 (高確度)
+
+JAX の `need = ceil(target.ships)+1` は **in-flight 友軍 fleet を無視**。本物は
+`ships_needed_to_capture` → `projected_state` → `base_timeline[target]` (=
+`arrivals_by_planet` 由来、在空 fleet 込み) で投影するため、既に友軍 fleet が捕獲に
+向かっている target は need=0 → hold。JAX はこれを見ず再発射 → over-fire。
+
+## NEXT ACTION (precise fix)
+
+1. **need に in-flight 投影を wire**: build_arrival_ledger (実装済) で各 target の
+   到達 fleet を集計し、keep_needed/timeline と同じ simulate で projected owner/ships を
+   出す。owner==me なら need=0。これが over-fire の直接修正。
+2. 修正後に mismatch 分類を再測 (py_hold/jax_fire が減るか)。
+3. tripwire も再測 (over-fire 解消で 0勝脱出を期待)。
+4. これが効けば「劣化なし」に最短到達。reinforce 等はその後。

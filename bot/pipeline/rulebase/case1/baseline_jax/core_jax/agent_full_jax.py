@@ -129,8 +129,15 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         t_owner = owner[tgt_i]
         t_prod = prod[tgt_i]
         t_ships = ships[tgt_i]
-        # need = ceil(target ships)+1 (no-commitment projection at this slice)
-        need = jnp.where(t_owner == seat_i, 0, jnp.ceil(t_ships).astype(jnp.int32) + 1)
+        # arrivals targeting THIS planet (in-flight fleets), for projection.
+        tgt_arr = led_slot == tgt_i
+        a_eta = jnp.where(tgt_arr, led_eta, 10**9)
+        a_own = jnp.clip(led_owner, 0, wm.NUM_PLAYERS - 1)
+        a_shp = jnp.where(tgt_arr, led_ships, 0.0)
+        # rough aim first (need a turns estimate to project to arrival)
+        rough_ships = jnp.maximum(
+            1.0, jnp.minimum(avail, jnp.maximum(PARTIAL_SOURCE_MIN_SHIPS, t_ships + 1))
+        )
         angle, turns, _ix, _iy, aim_ok = aim_with_prediction(
             sx,
             sy,
@@ -141,11 +148,21 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             toy,
             radius[tgt_i],
             tr,
-            jnp.maximum(
-                1.0,
-                jnp.minimum(avail, jnp.maximum(PARTIAL_SOURCE_MIN_SHIPS, t_ships + 1)),
-            ),
+            rough_ships,
             ang_vel,
+        )
+        # need projects the target to `turns` accounting for in-flight fleets.
+        # owner==me at arrival → need 0 (don't re-attack what's already inbound).
+        need = wm.ships_needed_to_capture(
+            t_owner.astype(jnp.int32),
+            t_ships,
+            t_prod,
+            seat_i,
+            a_eta,
+            a_own,
+            a_shp,
+            turns,
+            _RESERVE_HORIZON,
         )
         veto = mj.opening_filter(
             t_owner,
