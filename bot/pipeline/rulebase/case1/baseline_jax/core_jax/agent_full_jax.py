@@ -37,6 +37,7 @@ _REINFORCE_MAX_SOURCE_FRACTION = 0.75
 _REINFORCE_SAFETY_MARGIN = 2
 _REINFORCE_VALUE_MULT = 1.35
 _ATTACK_COST_TURN_WEIGHT = 0.55
+_FOLLOWUP_MIN_SHIPS = 8
 
 
 def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
@@ -366,7 +367,6 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     f_reinf = is_reinf_g.reshape(flat)
     f_src = src_grid.reshape(flat)
     f_tgt = tgt_grid.reshape(flat)
-    f_pid = pid[f_src]
 
     keyed = jnp.where(f_elig, f_score, -jnp.inf)
     order = jnp.argsort(-keyed)  # descending score
@@ -394,56 +394,67 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         need_now = f_need[oi]
         already = committed[tgt] >= need_now
         send = jnp.minimum(f_sendcap[oi], avail_now.astype(jnp.int32))
-        fire = f_elig[oi] & (need_now > 0) & (send >= need_now) & (send >= 1) & ~already
+        # `out` now counts launches already emitted by this source (0/1/2).
+        # 1st launch = main mission; 2nd = followup (allowed only if the source
+        # still has >= FOLLOWUP_MIN_SHIPS attack budget left, mirroring
+        # emit_followup_moves). Capture-only for the 2nd (reinforce stays 1st).
+        count = out[src]
+        is_followup = count >= 1
+        followup_ok = (~is_followup) | (
+            (available[src] - spent[src]) >= _FOLLOWUP_MIN_SHIPS
+        )
+        fire = (
+            f_elig[oi]
+            & (need_now > 0)
+            & (send >= need_now)
+            & (send >= 1)
+            & ~already
+            & (count < 2)
+            & followup_ok
+            & ~(is_followup & f_reinf[oi])  # followup is capture-only
+        )
         send = jnp.where(fire, send, 0)
         spent = spent.at[src].add(jnp.where(fire, send, 0))
         committed = committed.at[tgt].add(jnp.where(fire, send, 0))
-        # record one launch per source: only emit if this source hasn't fired.
-        emit = fire & (out[src] < 0)
-        new_out_pid = jnp.where(emit, f_pid[oi], out[src])
-        out = out.at[src].set(new_out_pid)
+        out = out.at[src].add(jnp.where(fire, 1, 0))
         return (spent, committed, out), (
-            jnp.where(emit, src, -1),
-            jnp.where(emit, f_angle[oi], 0.0),
-            jnp.where(emit, send, 0),
+            jnp.where(fire, src, -1),
+            jnp.where(fire, f_angle[oi], 0.0),
+            jnp.where(fire, send, 0),
         )
 
     init = (
-        jnp.zeros(MAX_PLANETS, jnp.float_),
-        jnp.zeros(MAX_PLANETS, jnp.float_),
-        jnp.full(MAX_PLANETS, -1.0),
+        jnp.zeros(MAX_PLANETS, jnp.float_),  # spent[src]
+        jnp.zeros(MAX_PLANETS, jnp.float_),  # committed[tgt]
+        jnp.zeros(MAX_PLANETS, jnp.int32),  # out[src] = launch count
     )
     (_spent, _committed, _out), (emit_src, emit_angle, emit_send) = jax.lax.scan(
         resolve_step, init, order
     )
 
-    # Collapse per-source emissions (one per source) into the action rows.
-    # For each source slot, find its emitted angle/send (last emit wins, but
-    # emit only fires once per source so it's unique).
-    src_fired = jnp.zeros(MAX_PLANETS, jnp.bool_)
-    src_angle = jnp.zeros(MAX_PLANETS, jnp.float_)
-    src_send = jnp.zeros(MAX_PLANETS, jnp.float_)
+    # Pack all fired emissions (a source may fire twice: main + followup) into
+    # the first free action slots, in score order.
+    out_pid = jnp.full(MAX_LAUNCHES_PER_AGENT, -1.0)
+    out_ang = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
+    out_snd = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
 
-    def collapse(
-        carry: tuple[jax.Array, jax.Array, jax.Array], k: jax.Array
-    ) -> tuple[tuple[jax.Array, jax.Array, jax.Array], None]:
-        fired, ang, snd = carry
+    def pack(
+        carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array], k: jax.Array
+    ) -> tuple[tuple[jax.Array, jax.Array, jax.Array, jax.Array], None]:
+        op, oa, os, slot = carry
         s = emit_src[k]
-        valid_emit = s >= 0
-        fired = jnp.where(valid_emit, fired.at[s].set(True), fired)
-        ang = jnp.where(valid_emit, ang.at[s].set(emit_angle[k]), ang)
-        snd = jnp.where(valid_emit, snd.at[s].set(emit_send[k].astype(jnp.float_)), snd)
-        return (fired, ang, snd), None
+        fired = (s >= 0) & (slot < MAX_LAUNCHES_PER_AGENT)
+        wslot = jnp.clip(slot, 0, MAX_LAUNCHES_PER_AGENT - 1)
+        op = jnp.where(fired, op.at[wslot].set(pid[s].astype(jnp.float_)), op)
+        oa = jnp.where(fired, oa.at[wslot].set(emit_angle[k]), oa)
+        os = jnp.where(fired, os.at[wslot].set(emit_send[k].astype(jnp.float_)), os)
+        return (op, oa, os, slot + jnp.where(fired, 1, 0)), None
 
-    (src_fired, src_angle, src_send), _ = jax.lax.scan(
-        collapse, (src_fired, src_angle, src_send), jnp.arange(flat)
+    (out_pid, out_ang, out_snd, _slot), _ = jax.lax.scan(
+        pack, (out_pid, out_ang, out_snd, jnp.int32(0)), jnp.arange(flat)
     )
 
-    can_fire = is_mine & src_fired & (src_send >= 1)
-    from_pid = jnp.where(can_fire, pid, -1).astype(jnp.float_)
-    angle_col = jnp.where(can_fire, src_angle, 0.0)
-    ships_col = jnp.where(can_fire, src_send, 0.0)
-    actions = jnp.stack([from_pid, angle_col, ships_col], axis=-1)
+    actions = jnp.stack([out_pid, out_ang, out_snd], axis=-1)
     assert actions.shape == (MAX_LAUNCHES_PER_AGENT, 3)
     return actions
 

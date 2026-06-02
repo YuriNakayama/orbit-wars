@@ -405,3 +405,30 @@ resolver は (1) 1 source=1 launch (out[src]<0) + (2) target=enemy/neutral の�
 1. followup port: resolver で 1 source 2 launch 許可 (FOLLOWUP_MIN_SHIPS gate)。
 2. rear_guard port: own→own ferry。
 3. 各 port 後 full-match/pf_jh/tripwire 実測 (劣化なし維持)。
+
+---
+
+# 経過 15 (2026-06-03 ~06:15) — followup infra + pf_jh の真の正体
+
+## resolver を 1 source 2 launch 対応に (followup infra)
+
+- out[src] を count 化 (0/1/2)、2nd launch は available-spent>=FOLLOWUP_MIN_SHIPS(8) gate
+  かつ capture-only。emission を per-source collapse → 全 fire を slot 詰めに変更。
+- turn0 20/20 + tripwire 2/4 維持。だが full-match 49.6%/pf_jh 154 不変 = followup も
+  発火せず。
+
+## pf_jh の真の正体 (直接 dump で確定)
+
+pf_jh turn の Python move を dump (t46/t71/t72):
+- t46: src12 が **26 ships 全部** (available=26)、src24 が 20 全部。**JAX は hold**。
+- これは followup でも reinforce でもなく **main capture**。Python は full-commit で撃つが
+  JAX は同 target を reject。
+→ **pf_jh の主因 = JAX が full-commitment capture を過剰 reject している**
+  (followup/reinforce 不足ではない)。over-fire 修正 (plan_shot guards) が over-correct
+  したか、need/value/opening_filter のいずれかが本物より厳しい。
+
+## NEXT ACTION
+1. t46 src12→target を直接トレースし、どの check (aim_ok/need/value/opening_filter) で
+   JAX が reject するか特定 (経過9 と同じ手法を pf_jh 側に適用)。
+2. 過剰 reject を修正。followup/reinforce infra は保持 (無害、将来効く)。
+3. 劣化なし維持。
