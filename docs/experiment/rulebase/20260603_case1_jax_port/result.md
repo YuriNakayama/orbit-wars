@@ -536,3 +536,28 @@ agent には未 wire (stable 2/4 維持)。次イテレーションで:
 1. swarm を主 resolver の score sort に interleave (atomic 2-source commit) で厳密 port。
 2. gate は 10-game tripwire (8/10 維持) + full-match 向上の両立を条件に。
 3. 又は現状を opponent として確定し GPU vmap 速度 bench へ進む選択肢も。
+
+---
+
+# 経過 20 (2026-06-03 ~07:55) — 重大発見: 結合テストが lite port を見ていた
+
+## test import bug
+
+結合テスト `test_agent_jax_identity.py` は
+`from pipeline.rulebase.case1.baseline_jax import compute_actions_jax` で
+**旧 lite port (baseline_jax/agent_jax.py)** を import していた。私の 8/10・49.6%・
+turn0 20/20 は全て `core_jax.agent_full_jax` を直接呼んだ standalone script の結果で、
+**結合テスト自体は full port を一度も検証していなかった**。
+
+→ 修正: test を `core_jax.agent_full_jax` import に変更。これで結合テストが実際に開発中の
+agent を gate する。
+
+## anti-degradation gate も改善 (4→10 game)
+
+経過19 の学び (4-game は near-mirror で分散大) を反映: tripwire を 10 game
+(5 seed × 2 seat)、閾値 >=3/10 に変更。0勝 catastrophic のみ弾き、faithful/competitive
+は通す。ユーザーの「数十対戦は避け最小限」に沿う最小の信頼サイズ。
+
+## NEXT
+1. 修正後の gate (10-game, full port) が GREEN か確認 (standalone では 8/10)。
+2. 以降 swarm 等の byte-parity 改修は「test 経由の full port」で gate。

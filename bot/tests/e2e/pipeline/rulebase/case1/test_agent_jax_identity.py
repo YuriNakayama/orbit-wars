@@ -27,7 +27,13 @@ from orbit_wars_jax.reset import reset
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT, empty_actions, step
 
 from pipeline.rulebase.case1.baseline.agent import agent as v1_py
-from pipeline.rulebase.case1.baseline_jax import compute_actions_jax
+
+# The faithful full port (capture + reserve + plan_shot guards). NOTE: the
+# legacy lite `baseline_jax.compute_actions_jax` is ~0-win; the integration gate
+# must test the full port under development.
+from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
+    compute_actions_jax,
+)
 
 ANGLE_TOL = 1e-4
 
@@ -130,24 +136,24 @@ def test_jax_vs_python_runs_clean(seed: int) -> None:
 
 @pytest.mark.slow
 def test_jax_port_not_catastrophically_worse_than_python() -> None:
-    """Minimal anti-regression: the JAX port must not be ~0-win vs real Python.
+    """Anti-regression: the JAX port must not collapse to a near-0 win-rate.
 
-    This directly targets the failure mode (JAX rewrite degrades to near-0
-    win-rate). NOT a large-scale eval — just 4 games (2 seeds × 2 seat
-    assignments) as a cheap tripwire. Requires the JAX port to win at least
-    once; a faithful full port should be ~50% (mirror match). GREEN gate is the
-    equivalence test above; this guards against silent catastrophic drift.
+    Directly targets the failure mode (JAX rewrite degrades to ~0 wins). Uses 10
+    games (5 seeds × 2 seat assignments) — the smallest sample that is reliable:
+    a 4-game version is too noisy in this near-mirror match (a faithful port sits
+    near 50%, so 4 games swing 1/4↔3/4 by luck). Threshold = >=3/10, which a
+    catastrophically-degraded (~0-win) port cannot pass while any
+    competitive-or-faithful port clears easily. Still NOT a large-scale eval.
     """
-    seeds = [0, 1]
     jax_wins = 0
     games = 0
-    for seed in seeds:
+    for seed in range(5):
         for jax_seat in (0, 1):
             winner = _play_jax_vs_python(seed, jax_seat)
             games += 1
             if winner == jax_seat:
                 jax_wins += 1
-    assert jax_wins >= 1, (
+    assert jax_wins >= 3, (
         f"JAX port won {jax_wins}/{games} vs real Python — catastrophic "
-        f"degradation (the exact 0-win failure mode we must avoid)"
+        f"degradation (the ~0-win failure mode we must avoid)"
     )
