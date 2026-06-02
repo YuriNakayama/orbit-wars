@@ -362,3 +362,28 @@ bounded sample (10 game) で **8/10 勝**。0勝問題は決定的に解決、�
   source_inventory_left (ships-spent, reserve非減算) を使うべき。threatened source は
   reserve で available≈0 → 送れない。
 - NEXT: resolver に mission_kind を持たせ reinforce 予算を ships-spent に分離 → 再測。
+
+---
+
+# 経過 13 (2026-06-03 ~05:35) — reinforce 予算分離 + pf_jh 主因の訂正
+
+## reinforce budget を kind 別に (capture=available, reinforce=ships-spent)
+
+- resolver に f_reinf flag を追加、reinforce は source_inventory_left (ships-spent,
+  reserve 非減算) を予算に。turn0 20/20 + tripwire 2/4 維持。
+- **だが full-match 49.6%/pf_jh 154 で依然不変**。
+
+## 重要な訂正: pf_jh の主因は threatened-reinforce ではなかった
+
+診断: seed0 で Python の `threatened_candidates` が非空なのは **わずか 6 turn**。
+→ 経過11 の「reinforce=300」は **followup/rear_guard も own-target として混入**して
+いた誤分類。真の pf_jh 主因は **emit_followup_moves / emit_rear_guard_moves**
+(self-play で自陣間に ship を送る後処理 phase) で、threatened-reinforce ではない。
+
+reinforce port 自体は正しい (parity 維持) が発火機会が少ない (6 turn) ため full-match
+に効かない。followup/rear_guard が次の本命。
+
+## NEXT ACTION
+1. emit_followup_moves (各 source の best secondary capture) を調査・port
+2. emit_rear_guard_moves (後方 ship を前線へ ferry) を調査・port
+3. これらが pf_jh の主因。port して full-match 向上を実測。劣化なし維持前提。

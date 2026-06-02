@@ -160,7 +160,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     # per-pair (src, tgt) aim + score
     def pair(
         src_i: jax.Array, tgt_i: jax.Array
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         sx, sy, sr = px[src_i], py[src_i], radius[src_i]
         tx, ty, tr = px[tgt_i], py[tgt_i], radius[tgt_i]
         tox, toy = ixx[tgt_i], ixy[tgt_i]
@@ -344,11 +344,12 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         out_send = jnp.where(use_cap, send_cap, r_send)
         out_need = jnp.where(use_cap, need, r_need)
         eligible = cap_eligible | r_eligible
-        return out_score, angle, out_send, out_need, eligible
+        is_reinf = r_eligible & ~cap_eligible
+        return out_score, angle, out_send, out_need, eligible, is_reinf
 
     idx = jnp.arange(MAX_PLANETS)
     src_grid, tgt_grid = jnp.meshgrid(idx, idx, indexing="ij")
-    score, angle, send_cap, need_grid, elig = jax.vmap(jax.vmap(pair))(
+    score, angle, send_cap, need_grid, elig, is_reinf_g = jax.vmap(jax.vmap(pair))(
         src_grid, tgt_grid
     )
 
@@ -362,6 +363,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     f_sendcap = send_cap.reshape(flat)
     f_need = need_grid.reshape(flat)
     f_elig = elig.reshape(flat)
+    f_reinf = is_reinf_g.reshape(flat)
     f_src = src_grid.reshape(flat)
     f_tgt = tgt_grid.reshape(flat)
     f_pid = pid[f_src]
@@ -377,7 +379,12 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         spent, committed, out = carry
         src = f_src[oi]
         tgt = f_tgt[oi]
-        avail_now = available[src] - spent[src]
+        # capture uses attack budget (available = ships - reserve); reinforce
+        # uses source_inventory_left (ships - spent, reserve not subtracted —
+        # mirrors process_single_source_mission's reinforce branch).
+        avail_now = jnp.where(
+            f_reinf[oi], ships[src] - spent[src], available[src] - spent[src]
+        )
         # Single-source semantics (process_single_source_mission): this source
         # must INDEPENDENTLY satisfy `need` (send_limit < missing → skip). We do
         # NOT let other launches' commitments reduce need below the single-source
