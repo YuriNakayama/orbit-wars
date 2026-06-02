@@ -504,3 +504,35 @@ agent には未 wire (stable 2/4 維持)。次イテレーションで:
 ## 現状サマリ (達成済)
 - 劣化なし ✅ (tripwire 2/4, 8/10) / 高速 ✅ (jit 14.3s) / parity 部品 79 GREEN。
 - byte-parity 49.6% (swarm wire で向上見込み、但し劣化ガード必須)。
+
+---
+
+# 経過 19 (2026-06-03 ~07:35) — additive swarm wire → 10-game で 8→6 劣化、revert
+
+## verified allocate_2 で additive swarm を wire (free-source のみ)
+
+- main scan 後、free source (未発射) の top-2 capture を allocate_2 で配分し emit
+  (純加算、capture 再配分なし)。
+- 実測: full-match 49.6→49.8% (微増)、pf_jh 154→134。
+- tripwire: **4-game 1/4 (noisy)** → **10-game 6/10** (pre-swarm 8/10)。
+  → swarm で win-rate が 8→6 に**軽度低下** (0勝リスクはない)。
+
+## 判断 + 方法論の学び
+
+- **4-game tripwire は near-mirror で分散大** = byte-parity 微修正の gate に不適。
+  10-game で見ると 8→6 の実劣化を検出。
+- 劣化を避ける原則に従い **additive swarm も revert** (8/10 保護)。allocate_2 primitive は保持。
+- 原因: additive swarm は本物の「swarm mission を主 score sort に interleave」と異なり、
+  capture より先に swarm を出す等で順序がズレ、一部最適でない協調攻撃が混入。
+
+## 現実的な到達点の評価
+- **達成済 (ユーザー最優先)**: 劣化なし (8/10) + 高速 (jit 14.3s) ✅✅。
+- **byte-parity 100%** は swarm を主 resolver に厳密 interleave する必要があり、
+  additive では不十分。これは大工事で、かつ近-mirror 分散のため gate に 30+ game 必要。
+- 残: swarm を score-interleave で正確 port するか、現状 (capture+reserve+guards, 49.6%
+  parity, 8/10 win) を「劣化しない opponent」として確定するかの判断。
+
+## NEXT
+1. swarm を主 resolver の score sort に interleave (atomic 2-source commit) で厳密 port。
+2. gate は 10-game tripwire (8/10 維持) + full-match 向上の両立を条件に。
+3. 又は現状を opponent として確定し GPU vmap 速度 bench へ進む選択肢も。
