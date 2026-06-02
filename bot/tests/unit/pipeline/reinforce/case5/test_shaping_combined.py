@@ -17,6 +17,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from pipeline.reinforce.case5.policy.model_jax import ActorCriticJax, ModelConfigJax
 from pipeline.reinforce.case5.training.rollout_jax import (
@@ -81,6 +82,7 @@ def _tiny_model() -> ActorCriticJax:
     return ActorCriticJax.from_init(jax.random.PRNGKey(0), cfg)
 
 
+@pytest.mark.slow
 def test_combined_rollout_rewards_are_finite() -> None:
     """End-to-end smoke: combined mode must not emit NaN/inf rewards."""
     model = _tiny_model()
@@ -99,6 +101,7 @@ def test_combined_rollout_rewards_are_finite() -> None:
     assert np.all(np.isfinite(rewards)), "combined shaping produced non-finite reward"
 
 
+@pytest.mark.slow
 def test_ratio_rollout_rewards_are_finite() -> None:
     """H2 end-to-end smoke: ratio mode must not emit NaN/inf rewards.
 
@@ -120,6 +123,7 @@ def test_ratio_rollout_rewards_are_finite() -> None:
     assert np.all(np.isfinite(rewards)), "ratio shaping produced non-finite reward"
 
 
+@pytest.mark.slow
 def test_ratio_prod_rollout_rewards_are_finite() -> None:
     """H5 end-to-end smoke: ratio_prod (production-weighted) must stay finite.
 
@@ -141,6 +145,7 @@ def test_ratio_prod_rollout_rewards_are_finite() -> None:
     assert np.all(np.isfinite(rewards)), "ratio_prod shaping produced non-finite reward"
 
 
+@pytest.mark.slow
 def test_ratio_clip_bounds_per_turn_shaping_reward() -> None:
     """H7: shaping_clip caps the per-turn shaping reward to [-clip, +clip].
 
@@ -173,6 +178,7 @@ def test_ratio_clip_bounds_per_turn_shaping_reward() -> None:
     )
 
 
+@pytest.mark.slow
 def test_dense_zero_matches_plain_ratio() -> None:
     """H3 control: dense_coef=0 must reproduce plain ratio reward bit-for-bit."""
     model = _tiny_model()
@@ -206,6 +212,7 @@ def test_dense_zero_matches_plain_ratio() -> None:
     )
 
 
+@pytest.mark.slow
 def test_dense_positive_produces_higher_cumulative_reward() -> None:
     """H3 control: dense>0 inflates per-turn reward (mine_count is non-negative).
 
@@ -249,6 +256,7 @@ def test_dense_positive_produces_higher_cumulative_reward() -> None:
     )
 
 
+@pytest.mark.slow
 def test_ratio_clip_zero_matches_unclipped_ratio() -> None:
     """shaping_clip=0 must reproduce the plain ratio reward bit-for-bit."""
     model = _tiny_model()
@@ -281,6 +289,7 @@ def test_ratio_clip_zero_matches_unclipped_ratio() -> None:
     )
 
 
+@pytest.mark.slow
 def test_time_bonus_zero_matches_plain_ratio() -> None:
     """H6 control: time_bonus=0 and time_penalty=0 must match plain ratio."""
     model = _tiny_model()
@@ -314,6 +323,7 @@ def test_time_bonus_zero_matches_plain_ratio() -> None:
     )
 
 
+@pytest.mark.slow
 def test_time_penalty_lowers_cumulative_reward() -> None:
     """H6: positive time_penalty must lower the cumulative pre-terminal reward.
 
@@ -355,6 +365,7 @@ def test_time_penalty_lowers_cumulative_reward() -> None:
     )
 
 
+@pytest.mark.slow
 def test_combined_with_zero_ship_coef_matches_planets_mode() -> None:
     """coef_ship=0 + coef_planet=c must equal planets mode (shaping_coef=c)."""
     model = _tiny_model()
