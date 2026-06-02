@@ -9,15 +9,14 @@ agent level). See docs/plans/rulebase-to-jax/07 (原則 2, 4).
 from __future__ import annotations
 
 import jax
-
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from pipeline.rulebase.case1.baseline.core import geometry as gpy
 from pipeline.rulebase.case1.baseline_jax.core_jax import geometry_jax as gjax
+
+jax.config.update("jax_enable_x64", True)
 
 RTOL = 1e-9
 ATOL = 1e-9
@@ -34,7 +33,11 @@ def test_dist_parity(seed: int) -> None:
     for row in pts:
         ax, ay, bx, by = row[:4]
         py = gpy.dist(ax, ay, bx, by)
-        jx = float(gjax.dist(jnp.asarray(ax), jnp.asarray(ay), jnp.asarray(bx), jnp.asarray(by)))
+        jx = float(
+            gjax.dist(
+                jnp.asarray(ax), jnp.asarray(ay), jnp.asarray(bx), jnp.asarray(by)
+            )
+        )
         assert np.isclose(py, jx, rtol=RTOL, atol=ATOL)
 
 
@@ -45,7 +48,9 @@ def test_point_to_segment_distance_parity(seed: int) -> None:
         px, py_, x1, y1, x2, y2 = row[:6]
         ref = gpy.point_to_segment_distance(px, py_, x1, y1, x2, y2)
         got = float(
-            gjax.point_to_segment_distance(*(jnp.asarray(v) for v in (px, py_, x1, y1, x2, y2)))
+            gjax.point_to_segment_distance(
+                *(jnp.asarray(v) for v in (px, py_, x1, y1, x2, y2))
+            )
         )
         assert np.isclose(ref, got, rtol=RTOL, atol=ATOL)
 

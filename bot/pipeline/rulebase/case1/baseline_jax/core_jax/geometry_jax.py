@@ -24,13 +24,18 @@ def dist(ax: jax.Array, ay: jax.Array, bx: jax.Array, by: jax.Array) -> jax.Arra
 
 
 def point_to_segment_distance(
-    px: jax.Array, py: jax.Array,
-    x1: jax.Array, y1: jax.Array, x2: jax.Array, y2: jax.Array,
+    px: jax.Array,
+    py: jax.Array,
+    x1: jax.Array,
+    y1: jax.Array,
+    x2: jax.Array,
+    y2: jax.Array,
 ) -> jax.Array:
     dx = x2 - x1
     dy = y2 - y1
     seg_len_sq = dx * dx + dy * dy
-    t = ((px - x1) * dx + (py - y1) * dy) / jnp.where(seg_len_sq <= 1e-9, 1.0, seg_len_sq)
+    safe_len = jnp.where(seg_len_sq <= 1e-9, 1.0, seg_len_sq)
+    t = ((px - x1) * dx + (py - y1) * dy) / safe_len
     t = jnp.clip(t, 0.0, 1.0)
     proj_x = x1 + t * dx
     proj_y = y1 + t * dy
@@ -39,7 +44,10 @@ def point_to_segment_distance(
 
 
 def segment_hits_sun(
-    x1: jax.Array, y1: jax.Array, x2: jax.Array, y2: jax.Array,
+    x1: jax.Array,
+    y1: jax.Array,
+    x2: jax.Array,
+    y2: jax.Array,
     safety: float = SUN_SAFETY,
 ) -> jax.Array:
     d = point_to_segment_distance(
@@ -56,22 +64,28 @@ def launch_point(
 
 
 def actual_path_geometry(
-    sx: jax.Array, sy: jax.Array, sr: jax.Array,
-    tx: jax.Array, ty: jax.Array, tr: jax.Array,
+    sx: jax.Array,
+    sy: jax.Array,
+    sr: jax.Array,
+    tx: jax.Array,
+    ty: jax.Array,
+    tr: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     angle = jnp.arctan2(ty - sy, tx - sx)
     start_x, start_y = launch_point(sx, sy, sr, angle)
-    hit_distance = jnp.maximum(
-        0.0, dist(sx, sy, tx, ty) - (sr + LAUNCH_CLEARANCE) - tr
-    )
+    hit_distance = jnp.maximum(0.0, dist(sx, sy, tx, ty) - (sr + LAUNCH_CLEARANCE) - tr)
     end_x = start_x + jnp.cos(angle) * hit_distance
     end_y = start_y + jnp.sin(angle) * hit_distance
     return angle, start_x, start_y, end_x, end_y, hit_distance
 
 
 def safe_angle_and_distance(
-    sx: jax.Array, sy: jax.Array, sr: jax.Array,
-    tx: jax.Array, ty: jax.Array, tr: jax.Array,
+    sx: jax.Array,
+    sy: jax.Array,
+    sr: jax.Array,
+    tx: jax.Array,
+    ty: jax.Array,
+    tr: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Return (angle, hit_distance, valid). valid=False mirrors Python `None`."""
     angle, start_x, start_y, end_x, end_y, hit_distance = actual_path_geometry(
