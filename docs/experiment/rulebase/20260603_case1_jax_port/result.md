@@ -337,7 +337,16 @@ ship を送る (防衛) が、JAX は capture only なので撃たず hold。cap
 2. src→threatened target の reinforce option (source_inventory_left ベース、send=missing+margin)
 3. resolver に reinforce mission 種を追加 (single-source path)
 
+## tripwire 拡大確認: JAX won 8/10 vs Python (5 seed × 2 seat)
+
+bounded sample (10 game) で **8/10 勝**。0勝問題は決定的に解決、むしろ現状 JAX が
+やや勝ち越し (capture 寄りで aggressive、reinforce skip でも短期戦で有利)。
+
+**劣化なし は完全達成**。ただし「baseline_v1 の忠実 opponent」目的では byte-parity
+(49.6%→100%) がまだ要る。anti-degradation goal は ✅、parity goal は進行中。
+
 ## NEXT ACTION
-1. reinforce mission を port (threatened 抽出 + reinforce option + resolver 統合)
-2. pf_jh が減り full-game 一致が上がるか実測
-3. tripwire を再測 (劣化が確実にないか、bounded sample で)
+1. reinforce mission を port (threatened 抽出 + reinforce option + resolver 統合) →
+   pf_jh 減・full-game 一致向上
+2. その後 swarm/crash/followup/evac で byte-parity を 100% に寄せる
+3. parity 100% 後、GPU で vmapped self-play 速度 bench (RunPod)
