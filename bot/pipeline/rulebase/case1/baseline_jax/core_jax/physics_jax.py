@@ -20,6 +20,7 @@ CENTER_Y: float = 50.0
 MAX_SPEED: float = 6.0
 ROTATION_LIMIT: float = 50.0
 INTERCEPT_TOLERANCE: int = 1
+HORIZON_AIM: int = 110
 
 
 def fleet_speed(ships: jax.Array) -> jax.Array:
