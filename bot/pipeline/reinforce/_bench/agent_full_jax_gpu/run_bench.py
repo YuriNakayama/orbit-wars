@@ -59,10 +59,11 @@ class BenchResult:
 def _run_dir() -> Path:
     env_dir = os.environ.get("ORBIT_WARS_RUN_DIR")
     if env_dir:
-        return Path(env_dir)
-    fallback = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    fallback.mkdir(parents=True, exist_ok=True)
-    return fallback
+        d = Path(env_dir)
+    else:
+        d = Path("bench_local") / datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _vstep_fn() -> Callable[[Any], Any]:

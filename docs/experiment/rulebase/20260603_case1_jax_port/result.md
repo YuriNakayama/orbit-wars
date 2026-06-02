@@ -711,3 +711,26 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 ## NEXT
 1. RunPod GPU 空き時に run_bench で B=256 env-steps/s を計測 (CPU 比の speedup)。
 2. (任意) swarm parity (gate を win-rate≧45% に再定義する場合のみ)。
+
+---
+
+# 経過 27 (2026-06-03 ~10:15) — bench を RunPod 前に de-risk、write bug 修正
+
+## RunPod launch 前のローカル end-to-end 検証で bug 発見・修正
+
+- run_bench を `python -m` 相当で end-to-end 実行 → **`_run_dir()` が ORBIT_WARS_RUN_DIR
+  指定時に mkdir せず write 失敗** (全計測後に crash する致命バグ)。GPU で回す前に
+  捕捉。mkdir(parents,exist_ok) に修正、JSON 出力を確認。
+- 教訓: GPU launch は remote spend なので、ローカル CPU smoke で write path まで通して
+  から回す (計算後 crash で GPU 時間を無駄にしない)。
+- RunPod ps は branch 未 push & timeout コマンド無し等で今回は launch 見送り。bench は
+  turn-key (push → dev/runpod train → run_bench) で容量空き時に実行可能。
+
+## 現状 (全中核達成、bench 準備完了)
+- 劣化なし(8/10) ✅ / 高速結合テスト ✅ / full JAX vmap ✅ / RL opponent 登録+e2e ✅ /
+  parity 部品 79+ GREEN / GPU bench script (write 修正済) ✅。
+- byte-parity 49.6% (swarm は win-rate と緊張、A 路線で保留)。
+
+## NEXT
+1. RunPod 容量空き時に GPU bench (B=256 の env-steps/s と CPU 比 speedup)。
+2. branch push → PR は core 完成のキリで検討。
