@@ -583,3 +583,25 @@ agent を gate する。
 1. swarm score-interleave 厳密 port (10-game gate 維持条件)。
 2. GPU vmap 速度 bench (RunPod)。
 3. reinforce/case6 PFSP opponent enum に登録 (RL 投入)。
+
+---
+
+# 経過 22 (2026-06-03 ~08:35) — agent_full_jax を case6 PFSP opponent に登録
+
+## RL 投入: JAX port の本来の用途
+
+- reinforce/case6/training/rollout_jax.py に OPPONENT_BASELINE_V1_FAITHFUL (mode 7) を
+  追加。name="baseline_v1_faithful"。lax.switch clip を 0,7 に拡張。
+- これで vmap-friendly な faithful v1 (no host roundtrip) を PFSP opponent として
+  使える。python_v1 (pure_callback, 逐次 host で遅い) の高速代替。
+- lint+mypy clean、mode 0-7 登録確認。
+
+## 意義
+- memory project_reinforce_case6_live_eval の train/eval ギャップ: lite port は 0勝で
+  使い物にならなかったが、agent_full_jax は 8/10 vs 本物 v1 + 49.6% parity で、
+  「劣化しない & GPU 上で閉じる」opponent。lite/full の中間でなく本物寄りの忠実度。
+
+## NEXT
+1. case6 config で opponent=baseline_v1_faithful の 1-iter rollout smoke (model 要)。
+2. swarm score-interleave で parity を 49.6%→更に (10-game gate 維持)。
+3. GPU vmap 速度 bench (RunPod)。
