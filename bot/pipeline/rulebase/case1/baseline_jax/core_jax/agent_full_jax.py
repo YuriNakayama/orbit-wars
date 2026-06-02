@@ -26,9 +26,14 @@ from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
 from . import featurize_jax as fz
 from . import missions_jax as mj
+from . import worldmodel_jax as wm
 from .aim_jax import aim_with_prediction
 
 PARTIAL_SOURCE_MIN_SHIPS = 6
+_RESERVE_HORIZON = 110
+# keep_needed candidate cap. Bounds the parallel survival search; planets with
+# more ships fall back conservatively (rare early/mid; refine if it bites).
+_RESERVE_MAX_SHIPS = 80
 
 
 def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
@@ -52,9 +57,40 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     px, py = xy[:, 0], xy[:, 1]
     ixx, ixy = ix[:, 0], ix[:, 1]
 
-    # available reserve: at fleetless turns keep_needed=0 → available=ships.
-    # (full keep_needed-with-arrivals wired in a later slice.)
-    available = jnp.where(is_mine, ships, 0.0)
+    # available = ships - keep_needed reserve. Build per-fleet arrival ledger
+    # (target slot + eta) then keep_needed per my-planet (no-arrival → reserve 0).
+    led_slot, led_eta, led_owner = fz.build_arrival_ledger(
+        state.fleet_xy[:, 0],
+        state.fleet_xy[:, 1],
+        state.fleet_angle,
+        state.fleet_ships.astype(jnp.float_),
+        state.fleet_owner,
+        state.fleet_valid,
+        px,
+        py,
+        radius,
+        valid,
+    )
+    led_ships = state.fleet_ships.astype(jnp.float_)
+    pslot = jnp.arange(MAX_PLANETS)
+
+    def reserve_for(slot: jax.Array) -> jax.Array:
+        return wm.compute_reserve_per_planet(
+            owner[slot],
+            state.planet_ships[slot],
+            state.planet_prod[slot],
+            seat_i,
+            led_slot,
+            led_eta,
+            led_owner,
+            led_ships,
+            slot,
+            _RESERVE_HORIZON,
+            _RESERVE_MAX_SHIPS,
+        )
+
+    reserve = jax.vmap(reserve_for)(pslot).astype(jnp.float_)
+    available = jnp.where(is_mine, jnp.maximum(0.0, ships - reserve), 0.0)
 
     is_static_arr = ~state.planet_is_rotating  # precomputed at reset
     is_opening = state.step < 80

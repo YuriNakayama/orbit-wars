@@ -100,6 +100,34 @@ def fleet_target_planet(
     return jnp.where(any_hit, best, -1), jnp.where(any_hit, eta, -1)
 
 
+def build_arrival_ledger(
+    fleet_x: Arr,
+    fleet_y: Arr,
+    fleet_angle: Arr,
+    fleet_ships: Arr,
+    fleet_owner: Arr,
+    fleet_valid: Arr,
+    planet_x: Arr,
+    planet_y: Arr,
+    planet_r: Arr,
+    planet_valid: Arr,
+) -> tuple[Arr, Arr, Arr]:
+    """Per-fleet (target_slot, eta). Returns (target_slot[F], eta[F], owner[F]).
+
+    target_slot = -1 for fleets that hit nothing or are invalid. Mirrors
+    world_model.build_arrival_ledger (skips fleets with no target).
+    """
+
+    def one(fx: Arr, fy: Arr, fa: Arr, fs: Arr, fv: Arr) -> tuple[Arr, Arr]:
+        slot, eta = fleet_target_planet(
+            fx, fy, fa, fs, planet_x, planet_y, planet_r, planet_valid
+        )
+        return jnp.where(fv, slot, -1), jnp.where(fv, eta, -1)
+
+    slots, etas = jax.vmap(one)(fleet_x, fleet_y, fleet_angle, fleet_ships, fleet_valid)
+    return slots, etas, fleet_owner
+
+
 def is_safe_neutral(owner: Arr, my_t: Arr, enemy_t: Arr) -> Arr:
     """owner==-1 and my_t <= enemy_t - SAFE_NEUTRAL_MARGIN."""
     return (owner == -1) & (my_t <= enemy_t - SAFE_NEUTRAL_MARGIN)

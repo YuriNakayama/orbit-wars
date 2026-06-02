@@ -39,15 +39,29 @@ Arr = jax.Array
 
 
 def _predict(
-    cur_x: Arr, cur_y: Arr, init_x: Arr, init_y: Arr, init_r: Arr,
-    ang_vel: Arr, turns: Arr,
+    cur_x: Arr,
+    cur_y: Arr,
+    init_x: Arr,
+    init_y: Arr,
+    init_r: Arr,
+    ang_vel: Arr,
+    turns: Arr,
 ) -> tuple[Arr, Arr]:
     return predict_planet_position(cur_x, cur_y, init_x, init_y, init_r, ang_vel, turns)
 
 
 def _search_safe_intercept(
-    sx: Arr, sy: Arr, sr: Arr, cur_x: Arr, cur_y: Arr, init_x: Arr, init_y: Arr,
-    init_r: Arr, tr: Arr, ships: Arr, ang_vel: Arr,
+    sx: Arr,
+    sy: Arr,
+    sr: Arr,
+    cur_x: Arr,
+    cur_y: Arr,
+    init_x: Arr,
+    init_y: Arr,
+    init_r: Arr,
+    tr: Arr,
+    ships: Arr,
+    ang_vel: Arr,
 ) -> tuple[Arr, Arr, Arr, Arr, Arr]:
     """Fixed HORIZON sweep + masked argmin, mirroring Python search_safe_intercept."""
 
@@ -86,8 +100,17 @@ def _search_safe_intercept(
 
 
 def aim_with_prediction(
-    sx: Arr, sy: Arr, sr: Arr, cur_x: Arr, cur_y: Arr, init_x: Arr, init_y: Arr,
-    init_r: Arr, tr: Arr, ships: Arr, ang_vel: Arr,
+    sx: Arr,
+    sy: Arr,
+    sr: Arr,
+    cur_x: Arr,
+    cur_y: Arr,
+    init_x: Arr,
+    init_y: Arr,
+    init_r: Arr,
+    tr: Arr,
+    ships: Arr,
+    ang_vel: Arr,
 ) -> tuple[Arr, Arr, Arr, Arr, Arr]:
     """Return (angle, turns, ix, iy, valid) for a NON-COMET target."""
     _a0, t0, safe0 = estimate_arrival(sx, sy, sr, cur_x, cur_y, tr, ships)

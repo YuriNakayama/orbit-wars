@@ -179,9 +179,53 @@ def keep_needed(
     surv = jax.vmap(check)(candidates)  # [max_ships+1] bool
     # only candidates <= planet_ships are valid keeps
     valid = candidates <= planet_ships
-    full_holds = surv[planet_ships]
+    # full_holds = survives_with_keep(ships); clamp index to candidate range.
+    full_idx = jnp.clip(planet_ships, 0, max_ships)
+    full_holds = surv[full_idx]
     # smallest surviving candidate among valid; if none, fall back to ships
     eligible = surv & valid
     big = max_ships + 1
     first = jnp.min(jnp.where(eligible, candidates, big))
     return jnp.where(full_holds, first, planet_ships).astype(jnp.int32)
+
+
+def compute_reserve_per_planet(
+    planet_owner: Arr,
+    planet_ships: Arr,
+    production: Arr,
+    player: Arr,
+    ledger_slot: Arr,
+    ledger_eta: Arr,
+    ledger_owner: Arr,
+    ledger_ships: Arr,
+    planet_slot: Arr,
+    horizon: int,
+    max_ships: int,
+) -> Arr:
+    """keep_needed reserve for one planet, with a no-arrivals short-circuit.
+
+    ledger_* are per-fleet arrays. Only fleets whose target == planet_slot count
+    as arrivals (any owner; the timeline resolves combat). If none → reserve 0
+    (matches PoC0). Owner clamped to [0, NUM_PLAYERS) for the one-hot.
+    """
+    targets_me = (ledger_slot == planet_slot) & (ledger_eta > 0)
+    enemy_threat = targets_me & (ledger_owner != player)
+    has_threat = jnp.any(enemy_threat)
+    arr_eta = jnp.where(targets_me, ledger_eta, 10**9)
+    arr_owner = jnp.clip(ledger_owner, 0, NUM_PLAYERS - 1)
+    arr_ships = jnp.where(targets_me, ledger_ships, 0.0)
+    return jnp.where(
+        has_threat,
+        keep_needed(
+            planet_owner,
+            planet_ships,
+            production,
+            player,
+            arr_eta,
+            arr_owner,
+            arr_ships,
+            horizon,
+            max_ships,
+        ),
+        0,
+    ).astype(jnp.int32)

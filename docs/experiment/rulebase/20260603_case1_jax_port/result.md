@@ -104,3 +104,31 @@ core_jax は全て jit/vmap-friendly に書いてあるので compute_actions_ja
 → 方針確定: 近道なし。keep_needed reserve → commitments → reinforce → swarm →
 crash → followup → evac を順次 port し、各段で tripwire を実測。tripwire が ≥1勝に
 転じた時点が「劣化解消」の最小到達点、full-game 100% 一致が完全到達点。
+
+---
+
+# 経過 4 (2026-06-03 ~02:35) — 速度クリア + reserve wire
+
+## 達成
+- **jit-wrap**: compute_actions_jax_jit (seat static)。compile 0.61s / warm 3.77ms/call /
+  1 full game 14.3s。**「1試合10分以内」クリア**。turn0 parity jit でも 20/20。
+- **fleet_target_planet** (ray-circle, 5/5 parity, 750 fleet) + **build_arrival_ledger** +
+  **compute_reserve_per_planet** (keep_needed reserve, no-arrival 短絡)。
+- agent に reserve wire: available = ships - keep_needed reserve。turn0 20/20 維持 (回帰なし)。
+
+## 実測 (正直)
+| 指標 | capture-only | +reserve |
+|------|-------------|----------|
+| turn0 一致 | 20/20 | 20/20 |
+| full-game 一致 | 3.8% | **4.0%** (僅差) |
+
+reserve 単体では full-game 一致は動かない。**支配的な乖離は mission 種 (reinforce/swarm) +
+commitments 累積** (sorted-mission loop で need/target が変わる) と判明。reserve は防衛で
+必要だが勝率の主因ではない。
+
+## NEXT ACTION
+1. **mission_resolver 固定長 scan + commitments 累積** (PoC2 構造) を agent に組込む —
+   これが target 選択順と need を本物に揃える本丸。
+2. **reinforce mission** 追加 (自陣防衛の launch、勝率に直結)。
+3. 各段で tripwire (4game) と full-game 一致を実測。tripwire ≥1勝 = 劣化解消の最小到達。
+4. parity 73/73 GREEN 維持。core_jax 部品は揃ったので残りは「組み上げ」。
