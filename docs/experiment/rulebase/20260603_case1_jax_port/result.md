@@ -687,3 +687,27 @@ swarm を正確に足すほど JAX は Python に似て win-rate が 50% へ収�
 - A: 現状を「劣化しない faithful-ish opponent」として確定 → GPU bench / PFSP 学習へ。
 - B: byte-parity 100% を目標に swarm を厳密 port、gate を win-rate≧45% に緩める。
 - 当面は A 寄り (劣化なし最優先) で GPU bench / PFSP 検証を進めるのが整合的。
+
+---
+
+# 経過 26 (2026-06-03 ~09:55) — GPU vmap throughput bench script を用意
+
+## A 路線: JAX 化の実利 (throughput) を計測する基盤
+
+- `_bench/agent_full_jax_gpu/run_bench.py` を repo の bench 規約に沿って作成
+  (RunPod onstart が `_bench/<name>_gpu/` を自動 upload)。
+- 内容: agent_full_jax の vmapped JAX-vs-JAX self-play を B∈{1,8,64,256} で env-steps/sec
+  計測 + Python v1 single の参照値。headline は RunPod-GPU 図 (RUNPOD_POD_ID 検出)。
+- CPU smoke (ローカル): python v1 single 43 steps/s、JAX vmap B=1 5.0/s・B=8 5.8/s。
+  → **CPU では JAX が遅い (latency 負け、想定通り)**。vmap B=8 が B=1 を僅かに上回るのみ =
+  CPU core 数で頭打ち。**GPU で B=64/256 が massively 並列化されるのが headline**
+  (現状 GPU ローカル無し、RunPod 待ち)。
+- lint+mypy clean。
+
+## 意義
+JAX 化の justification (throughput) を測る turn-key script が揃った。GPU 容量が空いた時
+1 コマンドで RunPod 計測可能。CPU 値は "JAX wins throughput not latency" を再確認。
+
+## NEXT
+1. RunPod GPU 空き時に run_bench で B=256 env-steps/s を計測 (CPU 比の speedup)。
+2. (任意) swarm parity (gate を win-rate≧45% に再定義する場合のみ)。
