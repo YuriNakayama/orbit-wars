@@ -860,3 +860,25 @@ deliberate に実行する handoff。
 ## プロジェクト確定 (これ以上の安全な local 変更なし)
 core 要求 全達成 (劣化なし 8/10 / 結合テスト / full JAX vmap / RL投入)。GPU speedup
 のみ RunPod infra 依存で runbook 化。byte-parity 49.6% は局所最適 (swarm 要判断)。
+
+---
+
+# 経過 34 (2026-06-03 ~12:15) — over-fire 修正を unit test で lock-in
+
+## GPU は infra/safety 制約で見送り → 代わりに安全な local 改善
+
+GPU bench は volume-region (infra) + autonomous billing-leak (safety) でこれ以上
+叩かず runbook 化済 (経過33)。dev mode も volume attach で同制約。
+→ 安全・in-scope な価値: **over-fire 修正の unit 回帰防止**。
+
+## safety_jax parity test 追加 (8/8 GREEN)
+
+`test_safety_jax_parity.py`: is_trajectory_sun_safe (400 cases) +
+intercept_holds_within_tolerance (300 cases, rotating target) を本物 safety.py と
+x64 完全一致で検証。これらは plan_shot guards = over-fire (0勝) 修正の本体。
+従来 slow 10-game e2e のみが守っていたが、**fast unit で lock-in** し silent regression
+を防止。劣化なし (最優先要求) の保護を強化。
+
+## 現状
+core 要求 全達成 + over-fire 修正を unit で固定。case1 parity 部品 87+ GREEN。
+GPU speedup のみ infra 待ち (runbook 化)。
