@@ -387,3 +387,21 @@ reinforce port 自体は正しい (parity 維持) が発火機会が少ない (6
 1. emit_followup_moves (各 source の best secondary capture) を調査・port
 2. emit_rear_guard_moves (後方 ship を前線へ ferry) を調査・port
 3. これらが pf_jh の主因。port して full-match 向上を実測。劣化なし維持前提。
+
+---
+
+# 経過 14 (2026-06-03 ~05:55) — followup/rear_guard の構造を特定
+
+- emit_followup_moves: 各 source の 2nd capture (main 後の残弾で別 enemy/neutral)。
+  → own-target ではない (経過11/13 の誤分類を再訂正)。
+- emit_rear_guard_moves: 後方自陣 ship を前線寄りの自陣 planet へ ferry (own→own)。
+  → これが「own-target move」の正体。
+
+## JAX 構造ギャップ
+resolver は (1) 1 source=1 launch (out[src]<0) + (2) target=enemy/neutral のみ。
+→ followup (同 source 2 発目) も rear_guard (own→own) も出せず pf_jh に寄与。
+
+## NEXT
+1. followup port: resolver で 1 source 2 launch 許可 (FOLLOWUP_MIN_SHIPS gate)。
+2. rear_guard port: own→own ferry。
+3. 各 port 後 full-match/pf_jh/tripwire 実測 (劣化なし維持)。
