@@ -1,0 +1,48 @@
+# Kaggle Kernel smoke config for reinforce/case4 (BC warm-start OFF).
+#
+# Kaggle Kernel template currently has no DVC pull cell, so the BC reference
+# weights (case9 per_planet best.pt) are not accessible inside the kernel.
+# This config disables BC warm-start so the kernel can boot cleanly with
+# randomly-initialized weights — useful for verifying that the PPO pipeline
+# (rollout / update / artifacts) survives on Kaggle GPU before we add a proper
+# DVC / dataset transport for BC weights.
+#
+# Scope: 6 iter x 4 ep ≈ ~1500 transitions. Wall-clock on T4x2 should be
+# 15-30 min (forward path is small, rollout is the bottleneck on CPU sim).
+# Not a real training run; the resulting weights.pt is meaningless.
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+
+training:
+  seed: 0
+  iterations: 6
+  episodes_per_iter: 4
+  lr: 1.0e-4
+  weight_decay: 0.0
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.003
+  kl_beta: 0.0  # no BC reference => no KL anchor
+  ppo_epochs: 4
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  opponent: random_noop
+
+output:
+  run_dir: data/output/models/reinforce/case4/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
