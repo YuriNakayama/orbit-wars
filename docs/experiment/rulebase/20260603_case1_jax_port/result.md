@@ -624,3 +624,30 @@ agent を gate する。
 1. swarm score-interleave で parity 向上 (10-game gate 維持必須)。
 2. GPU vmap 速度 bench (RunPod)。
 3. case6 config に baseline_v1_faithful curriculum を追加し PFSP 学習で v1 勝率検証。
+
+---
+
+# 経過 24 (2026-06-03 ~09:15) — 全体 CI gate 検証 (随所で確認)
+
+## 回帰なし確認
+
+- case1 unit 全 144 passed (既存 baseline + 新 parity suite 全 7 モジュール)。
+- ruff format: 13 files OK、ruff check: All passed、mypy: Success (12 files)。
+- case2 e2e identity 3 passed (既存、クロス汚染なし)。
+
+→ これまでの全実装 (core_jax 7 module + agent_full_jax + reinforce 登録) が
+   静的チェック + 既存テスト全通過。実装全体が健全。
+
+## 現状確定サマリ
+| 項目 | 状態 |
+|------|------|
+| core_jax parity | 79+ GREEN (geometry/physics/aim/worldmodel/featurize/missions/swarm) |
+| agent_full_jax | turn0 20/20, full-game parity 49.6%, tripwire 8/10 |
+| 結合テスト gate | 10-game ≥3 GREEN (jit, <10分) |
+| RL 投入 | case6 PFSP opponent 登録 + rollout e2e 検証 |
+| lint/format/mypy | 全通過 |
+
+## NEXT (nice-to-have)
+1. swarm score-interleave (parity↑、10-game gate 維持)。
+2. GPU vmap bench (RunPod)。
+3. PFSP 学習で baseline_v1_faithful curriculum 検証。
