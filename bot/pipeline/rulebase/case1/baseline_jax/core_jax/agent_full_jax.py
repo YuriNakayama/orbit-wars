@@ -30,6 +30,13 @@ _RESERVE_HORIZON = 110
 # keep_needed candidate cap. Bounds the parallel survival search; planets with
 # more ships fall back conservatively (rare early/mid; refine if it bites).
 _RESERVE_MAX_SHIPS = 80
+_REINFORCE_MIN_PRODUCTION = 2
+_REINFORCE_MIN_FUTURE_TURNS = 40
+_REINFORCE_MAX_TRAVEL_TURNS = 22
+_REINFORCE_MAX_SOURCE_FRACTION = 0.75
+_REINFORCE_SAFETY_MARGIN = 2
+_REINFORCE_VALUE_MULT = 1.35
+_ATTACK_COST_TURN_WEIGHT = 0.55
 
 
 def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
@@ -87,6 +94,36 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
 
     reserve = jax.vmap(reserve_for)(pslot).astype(jnp.float_)
     available = jnp.where(is_mine, jnp.maximum(0.0, ships - reserve), 0.0)
+
+    # Reinforcement targets: my planets that will FALL within the horizon
+    # (threatened_info.holds_full == False), with prod >= REINFORCE_MIN_PRODUCTION
+    # and enough remaining steps. fall_turn/deficit feed the reinforce missions.
+    remaining_steps = jnp.maximum(1, 500 - state.step)
+
+    def threat_for(slot: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+        t_arr = led_slot == slot
+        a_eta = jnp.where(t_arr, led_eta, 10**9)
+        a_own = jnp.clip(led_owner, 0, wm.NUM_PLAYERS - 1)
+        a_shp = jnp.where(t_arr, led_ships, 0.0)
+        return wm.threatened_info(
+            owner[slot],
+            state.planet_ships[slot],
+            state.planet_prod[slot],
+            seat_i,
+            a_eta,
+            a_own,
+            a_shp,
+            _RESERVE_HORIZON,
+        )
+
+    holds_full, fall_turn, deficit_hint = jax.vmap(threat_for)(pslot)
+    is_threatened = (
+        is_mine
+        & ~holds_full
+        & (fall_turn >= 0)
+        & (state.planet_prod >= _REINFORCE_MIN_PRODUCTION)
+        & (remaining_steps >= _REINFORCE_MIN_FUTURE_TURNS)
+    )
 
     is_static_arr = ~state.planet_is_rotating  # precomputed at reset
     is_opening = state.step < 80
@@ -246,7 +283,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             is_four_player,
             static_neutral_count,
         )
-        eligible = (
+        cap_eligible = (
             is_mine[src_i]
             & is_target[tgt_i]
             & aim_ok
@@ -254,7 +291,60 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             & (value > 0)
             & (src_i != tgt_i)
         )
-        return score, angle, send_cap, need, eligible
+
+        # ---- reinforce alternative: tgt is a threatened OWN planet ----------
+        # send a friendly fleet to defend. source_cap caps at a fraction of src
+        # ships; need = deficit_hint; send = need + margin (mirrors
+        # build_reinforcement_missions, single best source per target).
+        # source budget at option-gen = full inventory (resolver's spent[] caps
+        # actual sends during the scan via avail_now).
+        source_cap = jnp.floor(ships[src_i] * _REINFORCE_MAX_SOURCE_FRACTION).astype(
+            jnp.int32
+        )
+        r_need = deficit_hint[tgt_i]
+        r_send = jnp.minimum(source_cap, r_need + _REINFORCE_SAFETY_MARGIN)
+        r_value = (
+            mj.target_value(
+                owner[tgt_i],
+                prod[tgt_i],
+                ships[tgt_i],
+                is_static_arr[tgt_i],
+                indirect[tgt_i],
+                turns,
+                my_t[tgt_i],
+                en_t[tgt_i],
+                remaining,
+                is_opening,
+                is_early,
+                is_late,
+                jnp.asarray(0.0),
+                is_finishing,
+                is_behind,
+                is_dominating,
+                seat_i,
+            )
+            * _REINFORCE_VALUE_MULT
+        )
+        r_score = r_value / (r_send + turns * _ATTACK_COST_TURN_WEIGHT + 1.0)
+        r_eligible = (
+            is_mine[src_i]
+            & is_threatened[tgt_i]
+            & aim_ok
+            & (src_i != tgt_i)
+            & (turns <= _REINFORCE_MAX_TRAVEL_TURNS)
+            & (turns <= fall_turn[tgt_i])
+            & (r_need > 0)
+            & (r_send >= r_need)
+            & (r_value > 0)
+        )
+        # prefer capture when both somehow apply (disjoint in practice: target is
+        # either mine-threatened or enemy/neutral).
+        use_cap = cap_eligible
+        out_score = jnp.where(use_cap, score, r_score)
+        out_send = jnp.where(use_cap, send_cap, r_send)
+        out_need = jnp.where(use_cap, need, r_need)
+        eligible = cap_eligible | r_eligible
+        return out_score, angle, out_send, out_need, eligible
 
     idx = jnp.arange(MAX_PLANETS)
     src_grid, tgt_grid = jnp.meshgrid(idx, idx, indexing="ij")
