@@ -651,3 +651,39 @@ agent を gate する。
 1. swarm score-interleave (parity↑、10-game gate 維持)。
 2. GPU vmap bench (RunPod)。
 3. PFSP 学習で baseline_v1_faithful curriculum 検証。
+
+---
+
+# 経過 25 (2026-06-03 ~09:35) — 残 mismatch の内訳 + 戦略的緊張の明確化
+
+## 3-seed robust 内訳 (現 committed agent)
+
+| 指標 | 値 |
+|------|-----|
+| full-match | 416/1154 (36.0%) ※seed0単独49.6%、multi-seed は低め (正直値) |
+| ph_jf (over-fire, JAX余計に撃つ) | 29 (小、plan_shot guards 効果) |
+| pf_jh (JAX hold/Python fire) | **348** (大、主に swarm/多source) |
+| both_diff (両者撃つが内容違い) | **361** (allocation/順序差) |
+
+→ 残 ~738 mismatch の大半 (pf_jh 348 + both_diff 361) が **多source swarm/allocation**。
+over-fire は 29 に抑制済。
+
+## 戦略的緊張 (重要な明確化)
+
+**faithful な baseline_v1 opponent の目標 win-rate は ~50% (true mirror) であって 80% ではない。**
+swarm を正確に足すほど JAX は Python に似て win-rate が 50% へ収束する。これは「忠実化」
+だが、ユーザー要求「劣化しない (win-rate を落とさない)」とは**字義的に対立**する
+(8/10 → 6/10 を経過19 で観測)。
+
+- byte-parity 100% を追う = win-rate を ~50% へ動かす = 10-game gate が「劣化」と読む。
+- 現状 (capture+reserve+guards, 8/10, 36-49% parity) は **劣化しない要求を完全充足**かつ
+  usable opponent。
+
+→ **判断**: 「劣化なし」は達成済。これ以上の byte-parity 追求は win-rate を意図的に
+下げる方向で、ユーザー要求と緊張する。swarm は (a) RL で本物 v1 を忠実 mirror したい
+場合のみ価値、(b) その際は gate を「parity↑ かつ win-rate≧~45%」に再定義すべき。
+
+## NEXT (ユーザー判断を要する分岐)
+- A: 現状を「劣化しない faithful-ish opponent」として確定 → GPU bench / PFSP 学習へ。
+- B: byte-parity 100% を目標に swarm を厳密 port、gate を win-rate≧45% に緩める。
+- 当面は A 寄り (劣化なし最優先) で GPU bench / PFSP 検証を進めるのが整合的。
