@@ -273,3 +273,30 @@ mission に束ねられない単独 capture が「他者の committed」で安�
 2. x64 parity test (本物 plan_shot vs JAX wrapper)。
 3. agent に wire → over-fire 再測 (195 が大幅減を期待) + turn0 20/20 維持。
 4. これが本命修正。effけば full-game 一致と tripwire が同時改善する見込み。
+
+---
+
+# 経過 10 (2026-06-03 ~04:35) — plan_shot guards 修正で大躍進 🎯
+
+## safety_jax (is_trajectory_sun_safe + intercept_holds_within_tolerance) wire
+
+- `safety_jax.plan_shot_ok` を実装し agent の aim_ok に AND。
+- **実測 (劇的改善)**:
+  | 指標 | before | **after** |
+  |------|--------|-----------|
+  | full-game 一致 | 11.0% | **49.6%** (4.5×) |
+  | py_hold_jax_fire (over-fire) | 195 | **13** (-93%) |
+  | turn0 一致 | 20/20 | 20/20 |
+- **over-fire の主因は plan_shot guards 未 port で確定**。診断駆動 (経過5-9) が的中。
+
+## 新たな乖離: pf_jh=154 (JAX が hold しすぎ)
+
+over-fire 解消の裏で **py_fire/jax_hold が 0→154 に増加**。JAX が本物より保守的に
+なった = guards (or aim_ok) が本物が撃つ shot も一部 reject。次の調査対象。
+both_diff=84 も残る (撃つが内容違い)。
+
+## NEXT ACTION
+1. tripwire 再測 (over-fire 解消で 0勝脱出したか) ← 実行中
+2. pf_jh=154 の診断: JAX が hold する turn で Python が撃つ target を特定
+   (guards が厳しすぎ? reinforce mission 未実装で hold? aim_ok 過剰 reject?)
+3. full-game 一致 49.6% → さらに上げる。

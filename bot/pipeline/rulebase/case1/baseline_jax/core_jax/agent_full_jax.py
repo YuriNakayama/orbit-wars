@@ -21,6 +21,7 @@ from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
 from . import featurize_jax as fz
 from . import missions_jax as mj
+from . import safety_jax as sf
 from . import worldmodel_jax as wm
 from .aim_jax import aim_with_prediction
 
@@ -139,7 +140,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         rough_ships = jnp.maximum(
             1.0, jnp.minimum(avail, jnp.maximum(PARTIAL_SOURCE_MIN_SHIPS, t_ships + 1))
         )
-        angle, turns, _ix, _iy, aim_ok = aim_with_prediction(
+        angle, turns, aim_ix, aim_iy, aim_ok0 = aim_with_prediction(
             sx,
             sy,
             sr,
@@ -151,6 +152,26 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             tr,
             rough_ships,
             ang_vel,
+        )
+        # plan_shot guards: full-trajectory sun safety + intercept tolerance
+        # (the post-aim checks WorldModel.plan_shot applies; over-fire fix).
+        aim_ok = sf.plan_shot_ok(
+            sx,
+            sy,
+            sr,
+            tx,
+            ty,
+            tox,
+            toy,
+            radius[tgt_i],
+            tr,
+            angle,
+            turns,
+            aim_ix,
+            aim_iy,
+            rough_ships,
+            ang_vel,
+            aim_ok0,
         )
         # need projects the target to `turns` accounting for in-flight fleets.
         # owner==me at arrival → need 0 (don't re-attack what's already inbound).
@@ -276,9 +297,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         need_now = f_need[oi]
         already = committed[tgt] >= need_now
         send = jnp.minimum(f_sendcap[oi], avail_now.astype(jnp.int32))
-        fire = (
-            f_elig[oi] & (need_now > 0) & (send >= need_now) & (send >= 1) & ~already
-        )
+        fire = f_elig[oi] & (need_now > 0) & (send >= need_now) & (send >= 1) & ~already
         send = jnp.where(fire, send, 0)
         spent = spent.at[src].add(jnp.where(fire, send, 0))
         committed = committed.at[tgt].add(jnp.where(fire, send, 0))
