@@ -313,3 +313,31 @@ plan_shot guards 修正でそれが解消 → 勝てるようになった。
    (reinforce mission 未実装で hold? guards 厳しすぎ?)
 2. full-game 一致 49.6% → さらに上げ、tripwire を 300戦規模で確認 (劣化が確実にないか)
 3. reinforce / swarm mission 追加で完全一致に近づける。
+
+---
+
+# 経過 11 (2026-06-03 ~04:55) — pf_jh=154 の原因 = reinforce 未実装
+
+## pf_jh (JAX hold / Python fire) turn の Python move 分類
+
+pf_jh 154 turn の Python move を target owner で分類:
+- **reinforce (own-target, 自陣へ送る) = 300**
+- capture (enemy/neutral) = 49
+
+→ **JAX が hold しすぎる主因 = reinforce mission 未実装**。本物は threatened な自陣 planet へ
+ship を送る (防衛) が、JAX は capture only なので撃たず hold。capture 系の 49 は guards が
+やや厳しい分 (副次)。
+
+## reinforce port のスコープ
+
+`build_reinforcement_missions` (108行) は `world.threatened_candidates`
+(= _compute_defense_buffers が holds_full=False の自陣 planet を fall_turn/deficit_hint
+付きで抽出) に依存。これは keep_needed timeline の派生情報。port には:
+1. threatened_candidates 相当 (各自陣 planet の fall_turn + deficit) を JAX timeline から抽出
+2. src→threatened target の reinforce option (source_inventory_left ベース、send=missing+margin)
+3. resolver に reinforce mission 種を追加 (single-source path)
+
+## NEXT ACTION
+1. reinforce mission を port (threatened 抽出 + reinforce option + resolver 統合)
+2. pf_jh が減り full-game 一致が上がるか実測
+3. tripwire を再測 (劣化が確実にないか、bounded sample で)
