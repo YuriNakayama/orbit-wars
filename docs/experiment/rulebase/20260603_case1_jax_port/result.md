@@ -763,3 +763,29 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 ## NEXT
 - GPU 容量が戻ったら同コマンドで再試行。10-min loop で毎回叩かず間隔を空ける。
 - それまで他の局所改善 or 現状維持。
+
+---
+
+# 経過 30 (2026-06-03 ~10:55) — both_diff 内訳: 安価な parity 余地なし、局所最適到達
+
+## both_diff=84 (seed0) 内訳
+| 種別 | 件数 |
+|------|------|
+| count_diff (手数違い、主に swarm 不足) | 61 |
+| srcset_diff | 13 |
+| angle_diff | 1 (aim 忠実) |
+| ships_only_diff (win-rate中立な安価候補) | 9 (≈2%, 低ROI) |
+
+## 結論: 「劣化なし」制約下の byte-parity は ~50% が局所最適
+残 gap の大半 (74/84) が swarm 起因で win-rate と緊張。win-rate 中立な余地は 9 件のみ
+で低 ROI。これ以上は swarm 投入 (win-rate↓) か gate 再定義の判断が要る。
+
+## プロジェクト最終状態 (local 完了)
+- ✅ 結合テスト (jit, <10分, 10-game ≥3 GREEN) / ✅ 劣化なし (8/10, 最優先達成)
+- ✅ full JAX vmap (GPU-ready) + RL opponent 登録+e2e / ✅ parity 部品 79+ GREEN
+- ✅ GPU bench script + RunPod case (preflight OK)
+- 49.6% byte-parity (swarm 保留) / GPU speedup (RunPod 容量待ち)
+
+## 残 (外部依存/要判断)
+1. GPU bench 実測 (RunPod 容量回復)。2. swarm 厳密 port (要 gate 再定義判断)。
+3. PFSP 学習で baseline_v1_faithful 検証。
