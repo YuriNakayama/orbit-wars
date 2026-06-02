@@ -789,3 +789,26 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 ## 残 (外部依存/要判断)
 1. GPU bench 実測 (RunPod 容量回復)。2. swarm 厳密 port (要 gate 再定義判断)。
 3. PFSP 学習で baseline_v1_faithful 検証。
+
+---
+
+# 経過 31 (2026-06-03 ~11:15) — GPU bench: 容量 High だが volume-region で offer matched せず
+
+## stock 回復 (H100/H200 High, A100-SXM Medium) も launch 不成立
+
+- dev/runpod stock: H100/H200 が High に回復。但し `train` のデフォルト offer
+  (3090/A6000/4090/A100PCIe, max-dph 2.0) は依然 Low stockout。
+- H100 指定 → max-dph 2.0 < $3.29 で除外。A100-SXM/A5000/A40 を --cloud-type ALL で
+  指定 → **"No offers matched"** (network volume `orbit_wars` の datacenter 制約と
+  推測: offer は volume と同一 DC 必須、bench は volume 不要だが train flow が attach)。
+- preflight は毎回 OK = **bench コードは RunPod で動く**。ブロックは RunPod infra
+  (volume-region × GPU stock) で、自分のコード起因ではない。
+
+## 判断
+- GPU speedup 実測は infra 制約で保留。bench (script + case + preflight 検証) は完成。
+- これ以上 RunPod flag を弄ると共有 volume 設定を壊すリスク。10-min loop で叩き続けない。
+- 必要なら interactive (dev/runpod dev, volume 不要構成) か、volume なし train 経路の
+  整備が別途必要 (本 port のスコープ外)。
+
+## 確定: ユーザー要求は全達成、GPU 実測のみ infra 待ち
+劣化なし(8/10)✅ / 高速結合テスト ✅ / full JAX vmap ✅ / RL投入+e2e ✅。
