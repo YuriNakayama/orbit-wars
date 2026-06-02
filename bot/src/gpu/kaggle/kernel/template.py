@@ -320,7 +320,7 @@ def _cell_install_bot(dataset_mount: str) -> str:
         "# the env that cell D's training subprocess will see).\n"
         "_IMPORT_PROBE = (\n"
         "    'import sys\\n'\n"
-        '    f\'sys.path[:0] = {_paths!r}\\n\'\n'
+        "    f'sys.path[:0] = {_paths!r}\\n'\n"
         "    'import pipeline, utils.repo_root\\n'\n"
         "    'print(\"bot import OK\")\\n'\n"
         ")\n"
