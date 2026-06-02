@@ -485,6 +485,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 pool_v1_shaping5: H6c (shaping_coef 0.5 → 5.0)。pool_v1 の
+    # 0/30 棄却後、horizon は 500 のまま dense reward signal を 10x 強化。
+    # H6d 失敗時の保険として用意、現時点では起動しない。
+    "reinforce_case6_kaggle_jax_train_pool_v1_shaping5": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_shaping5",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_shaping5.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6 pool_v8: noop → python_v8 curriculum (case8 production champion)。
     # pool_v1 の v8 版。最強 baseline で学習し v1/v4 への汎化を試す。
     "reinforce_case6_kaggle_jax_train_pool_v8": {
