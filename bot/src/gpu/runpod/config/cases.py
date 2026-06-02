@@ -472,6 +472,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 pool_v1_h50: H6d (horizon 500→50, iter 30)。pool_v1 の 0/30
+    # 棄却後の次仮説。reward 密度 10x で PPO approx_kl ~ 0 停止問題に対処。
+    "reinforce_case6_kaggle_jax_train_pool_v1_h50": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_h50",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_h50.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6 pool_v8: noop → python_v8 curriculum (case8 production champion)。
     # pool_v1 の v8 版。最強 baseline で学習し v1/v4 への汎化を試す。
     "reinforce_case6_kaggle_jax_train_pool_v8": {
