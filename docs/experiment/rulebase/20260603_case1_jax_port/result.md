@@ -481,3 +481,26 @@ ordered 配分) と不一致で、不正確な協調攻撃が一部の試合を�
    (send = min(limit, max(0, remaining - 後続limit和)))。
 2. build_swarm_missions の score (need ベース, swarm value mult, plan penalty) も忠実に。
 3. 実装後 tripwire が 2/4 以上を維持することを確認してから採用。劣化は revert。
+
+---
+
+# 経過 18 (2026-06-03 ~07:15) — swarm allocation primitive を parity 検証
+
+## 前回の revert を踏まえ、まず正確な primitive を検証
+
+- swarm_jax.allocate_2: process_multi_source_mission の ordered allocation
+  (turns→-limit→src_id で sort、send=min(limit,max(0,need-後続limit和))) を厳密 port。
+- **parity 5/5 GREEN (3000 random cases)** — Python と send_a/send_b/ok 完全一致。
+- 前回 revert の原因 = capture-score 順で naive split していた。正しい順序を primitive
+  として確立。
+
+## 方針 (劣化を避ける段階適用)
+
+agent には未 wire (stable 2/4 維持)。次イテレーションで:
+1. per-target 上位 source を集め allocate_2 で配分、swarm mission を主 resolver の
+   score sort に interleave (post-pass でなく)。
+2. wire 後 tripwire 2/4 以上を確認してから採用。劣化なら再 revert。
+
+## 現状サマリ (達成済)
+- 劣化なし ✅ (tripwire 2/4, 8/10) / 高速 ✅ (jit 14.3s) / parity 部品 79 GREEN。
+- byte-parity 49.6% (swarm wire で向上見込み、但し劣化ガード必須)。
