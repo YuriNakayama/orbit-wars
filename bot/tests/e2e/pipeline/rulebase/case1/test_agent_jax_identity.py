@@ -93,18 +93,61 @@ def test_jax_port_action_equivalence_over_selfplay(seed: int) -> None:
     )
 
 
+def _play_jax_vs_python(seed: int, jax_seat: int) -> int:
+    """Play JAX port (jax_seat) vs real Python (other seat). Return winner seat or -1."""
+    state = reset(seed=seed, num_agents=2)
+    py_seat = 1 - jax_seat
+    rewards = None
+    for _turn in range(500):
+        a_jax = compute_actions_jax(state, seat=jax_seat)
+        a_py = _py_row(v1_py(state_to_obs(state, player=py_seat)))
+        actions = empty_actions().at[jax_seat].set(a_jax).at[py_seat].set(a_py)
+        state, rewards, term = step(state, actions)
+        if bool(term):
+            break
+    if rewards is None:
+        return -1
+    rj, rp = float(rewards[jax_seat]), float(rewards[py_seat])
+    return jax_seat if rj > rp else (py_seat if rp > rj else -1)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", [0, 1])
-def test_jax_selfplay_runs_clean(seed: int) -> None:
-    """Smoke: JAX port vs JAX port runs a full game with no NaN / bad shapes."""
+def test_jax_vs_python_runs_clean(seed: int) -> None:
+    """Smoke: JAX port vs real Python runs a full game with no NaN / bad shapes."""
     state = reset(seed=seed, num_agents=2)
     for _turn in range(500):
         a0 = compute_actions_jax(state, seat=0)
-        a1 = compute_actions_jax(state, seat=1)
         assert a0.shape == (MAX_LAUNCHES_PER_AGENT, 3)
         assert not bool(jnp.any(jnp.isnan(a0)))
+        a1 = _py_row(v1_py(state_to_obs(state, player=1)))
         actions = empty_actions().at[0].set(a0).at[1].set(a1)
         state, _r, term = step(state, actions)
         assert not bool(jnp.any(jnp.isnan(state.planet_xy)))
         if bool(term):
             break
+
+
+@pytest.mark.slow
+def test_jax_port_not_catastrophically_worse_than_python() -> None:
+    """Minimal anti-regression: the JAX port must not be ~0-win vs real Python.
+
+    This directly targets the failure mode (JAX rewrite degrades to near-0
+    win-rate). NOT a large-scale eval — just 4 games (2 seeds × 2 seat
+    assignments) as a cheap tripwire. Requires the JAX port to win at least
+    once; a faithful full port should be ~50% (mirror match). GREEN gate is the
+    equivalence test above; this guards against silent catastrophic drift.
+    """
+    seeds = [0, 1]
+    jax_wins = 0
+    games = 0
+    for seed in seeds:
+        for jax_seat in (0, 1):
+            winner = _play_jax_vs_python(seed, jax_seat)
+            games += 1
+            if winner == jax_seat:
+                jax_wins += 1
+    assert jax_wins >= 1, (
+        f"JAX port won {jax_wins}/{games} vs real Python — catastrophic "
+        f"degradation (the exact 0-win failure mode we must avoid)"
+    )

@@ -70,11 +70,26 @@ dev/test-bot
 ```
 JAX は CPU 既定 (`JAX_PLATFORM_NAME` 不要、PoC で実証済)。x64 は parity 単体テスト側で使い、e2e は本番同様 float32 で一致率を見る (float32 で 100% にするのが最終目標、tie-break 統一で吸収)。
 
+## Step1 確立結果 (2026-06-03)
+
+ユーザー指示に沿い結合テストを **JAX vs 書き換え前 Python** で確立 (JAX 同士でない)。`bot/tests/e2e/pipeline/rulebase/case1/test_agent_jax_identity.py`:
+
+| テスト | 内容 | 現状 (lite port) | 速度 |
+|--------|------|------------------|------|
+| `test_jax_port_action_equivalence_over_selfplay` | 同一 obs で action 完全一致、本物プレイ盤面列 5 seed | 🔴 ~21% (RED) | 1 seed ≈ 18.6s |
+| `test_jax_vs_python_runs_clean` | JAX vs Python 1ゲーム完走、NaN/shape 健全性 | 🟢 PASS | |
+| `test_jax_port_not_catastrophically_worse_than_python` | **0勝検知トリップワイヤ** (2 seed × 2 seat = 4 game、最低1勝) | 🔴 **0/4勝** (FAIL) | 4 game ≈ 30s |
+
+- **1試合 ≈ 18.6 秒** → ユーザー要件「1試合10分以内」を大きくクリア。
+- **「数十対戦の大規模検証は避け、0勝を避ける最小限のテスト」** → トリップワイヤは 4 game のみ (mirror match なので faithful port なら ~50%、最低1勝を要求)。大規模 win-rate eval は行わない。
+- 既存 case2 test の「緩い tolerance + noop 進行 + JAX 同士」は**反面教師**。本件は **完全一致 + 本物プレイ盤面 + JAX vs Python** で厳格化。
+
 ## まとめ
 
-| レベル | 内容 | 合格条件 | 配置 |
+| レベル | 内容 | 合格条件 | 状態 |
 |--------|------|----------|------|
-| A: action 等価 | 同一 obs で JAX==Python、本物プレイ盤面列 | **全 turn 100% 一致** (tie-break 統一) | e2e/.../test_agent_jax_identity.py |
-| B: self-play smoke | JAX 同士で 1 ゲーム完走 | NaN/範囲外/shape 異常なし | 同上 |
+| A: action 等価 | 同一 obs で JAX==Python、本物プレイ盤面列 | **全 turn 100% 一致** | 🔴 ~21% |
+| B: smoke | JAX vs Python 1ゲーム完走 | NaN/shape 健全 | 🟢 PASS |
+| C: 0勝トリップワイヤ | JAX vs Python 4game | **最低1勝** (劣化検知) | 🔴 0/4 |
 
-既存 case2 test の「緩い tolerance + noop 進行」は**反面教師**。本件は完全一致 + 本物プレイ盤面で厳格化する。
+これらが GREEN になることが「JAX 化で劣化しない」の定義。Step2 (書き換え方針検証) → 実装 (Step1-4) へ。
