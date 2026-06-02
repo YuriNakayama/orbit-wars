@@ -838,3 +838,25 @@ full JAX vmap (GPU-ready) / RL opponent 登録+e2e / parity 部品 79+ GREEN /
 GPU bench (script+case+preflight, 実行は infra 待ち) / byte-parity 49.6% (局所最適)。
 
 GPU speedup の数値だけが外部 (RunPod infra) 依存で保留。実装・テスト・統合は完了。
+
+---
+
+# 経過 33 (2026-06-03 ~11:55) — GPU bench runbook 整備、shared-infra 改修は見送り
+
+## 判断: --no-volume 追加 (shared train flow 改修) は本 port のスコープ外
+
+dev/runpod train の volume 必須 attach を外すには cli/app.py + instance.py +
+volumes.py の改修が要る = 全 training case が使う共有 flow。infra.md 領域でリスク大、
+rulebase-jax port の責務外。interactive dev は billing-leak リスクで autonomous loop に
+不適。→ **autonomous で shared infra を弄らない**。
+
+## 代わりに: GPU bench を on-demand 再現可能に (runbook)
+
+`_bench/agent_full_jax_gpu/README.md` 作成: CPU smoke コマンド + GPU 実行手順
+(train --watch / pull) + volume-region blocker の回避策 (max-dph 引上げ or
+interactive dev + exec + destroy) を明記。容量が戻った時 or infra 改修後に
+deliberate に実行する handoff。
+
+## プロジェクト確定 (これ以上の安全な local 変更なし)
+core 要求 全達成 (劣化なし 8/10 / 結合テスト / full JAX vmap / RL投入)。GPU speedup
+のみ RunPod infra 依存で runbook 化。byte-parity 49.6% は局所最適 (swarm 要判断)。
