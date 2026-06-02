@@ -58,6 +58,48 @@ def reaction_times(
     return my_t, enemy_t
 
 
+HORIZON = 110
+
+
+def fleet_target_planet(
+    fx: Arr,
+    fy: Arr,
+    fangle: Arr,
+    fships: Arr,
+    planet_x: Arr,
+    planet_y: Arr,
+    planet_r: Arr,
+    planet_valid: Arr,
+) -> tuple[Arr, Arr]:
+    """First planet a fleet hits along its heading within HORIZON.
+
+    Returns (target_slot, eta) where target_slot is the planet array index (-1 if
+    none) and eta = ceil(hit_distance / fleet_speed). Mirrors
+    world_model.fleet_target_planet (ray-circle, first hit by time).
+    """
+    dir_x = jnp.cos(fangle)
+    dir_y = jnp.sin(fangle)
+    speed = fleet_speed(fships)
+
+    def per_planet(px: Arr, py: Arr, pr: Arr, pv: Arr) -> tuple[Arr, Arr]:
+        dx = px - fx
+        dy = py - fy
+        proj = dx * dir_x + dy * dir_y
+        perp_sq = dx * dx + dy * dy - proj * proj
+        radius_sq = pr * pr
+        hit_d = jnp.maximum(0.0, proj - jnp.sqrt(jnp.maximum(0.0, radius_sq - perp_sq)))
+        turns = hit_d / speed
+        ok = pv & (proj >= 0) & (perp_sq < radius_sq) & (turns <= HORIZON)
+        return ok, turns
+
+    oks, turns = jax.vmap(per_planet)(planet_x, planet_y, planet_r, planet_valid)
+    keyed = jnp.where(oks, turns, jnp.inf)
+    best = jnp.argmin(keyed)
+    any_hit = jnp.any(oks)
+    eta = jnp.ceil(turns[best]).astype(jnp.int32)
+    return jnp.where(any_hit, best, -1), jnp.where(any_hit, eta, -1)
+
+
 def is_safe_neutral(owner: Arr, my_t: Arr, enemy_t: Arr) -> Arr:
     """owner==-1 and my_t <= enemy_t - SAFE_NEUTRAL_MARGIN."""
     return (owner == -1) & (my_t <= enemy_t - SAFE_NEUTRAL_MARGIN)

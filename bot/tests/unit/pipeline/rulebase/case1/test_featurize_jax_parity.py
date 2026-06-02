@@ -66,3 +66,45 @@ def test_reaction_times_parity(seed: int) -> None:
     assert not mismatches, (
         f"seed={seed}: {len(mismatches)} mismatches: {mismatches[:5]}"
     )
+
+
+from pipeline.rulebase.case1.baseline.core.types import Fleet  # noqa: E402
+from pipeline.rulebase.case1.baseline.core.world_model import (  # noqa: E402
+    fleet_target_planet as ftp_py,
+)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_fleet_target_planet_parity(seed: int) -> None:
+    """Synthetic fleets vs real planets; ray-circle first-hit must match."""
+    state = reset(seed=seed, num_agents=2)
+    world = build_world(state_to_obs(state, player=0))
+    px, py, pr, _ps, _m, _e = _planet_arrays(world)
+    pv = jnp.asarray([True] * len(world.planets))
+    planets = world.planets
+
+    rng = np.random.default_rng(seed + 200)
+    mism = []
+    for _ in range(150):
+        fx, fy = rng.uniform(0, 100, 2)
+        fangle = rng.uniform(-np.pi, np.pi)
+        fships = int(rng.integers(1, 100))
+        fleet = Fleet(
+            id=0, owner=1, x=fx, y=fy, angle=fangle, from_planet_id=-1, ships=fships
+        )
+        ref_planet, ref_eta = ftp_py(fleet, planets)
+        slot, eta = fjax.fleet_target_planet(
+            jnp.asarray(fx),
+            jnp.asarray(fy),
+            jnp.asarray(fangle),
+            jnp.asarray(fships),
+            px,
+            py,
+            pr,
+            pv,
+        )
+        ref_id = ref_planet.id if ref_planet is not None else None
+        got_id = planets[int(slot)].id if int(slot) >= 0 else None
+        if ref_id != got_id or (ref_eta if ref_eta is not None else -1) != int(eta):
+            mism.append((ref_id, got_id, ref_eta, int(eta)))
+    assert not mism, f"seed={seed}: {len(mism)}/150: {mism[:5]}"
