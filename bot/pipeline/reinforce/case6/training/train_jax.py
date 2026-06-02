@@ -490,9 +490,18 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
     # `late` opponent afterwards. When `opponent` is not "curriculum" the
     # curriculum block is ignored and a single opponent runs for all iters.
+    # H6b: optional 3-stage curriculum — when `mid` and `mid_switch_iter` are
+    # set in the config, iter range [switch_iter, mid_switch_iter) uses `mid`
+    # (e.g. baseline_jax_lite) and iter >= mid_switch_iter uses `late`. This
+    # gives PPO a winnable intermediate opponent before facing the real
+    # python_v1 (which collapsed to 0/8 with the 2-stage noop→python_v1 path).
     curriculum_cfg = t_cfg.get("opponent_curriculum", {}) or {}
     curriculum_switch_iter = int(curriculum_cfg.get("switch_iter", 0))
     curriculum_early = str(curriculum_cfg.get("early", "noop"))
+    curriculum_mid = str(curriculum_cfg.get("mid", "")).strip() or None
+    curriculum_mid_switch_iter = int(
+        curriculum_cfg.get("mid_switch_iter", curriculum_switch_iter)
+    )
     curriculum_late = str(curriculum_cfg.get("late", "baseline_jax_lite"))
 
     # H2 (PFSP pool): when late == "pool", maintain a FIFO snapshot pool and,
@@ -514,6 +523,13 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             return opponent
         if it < curriculum_switch_iter:
             return curriculum_early
+        # H6b 3-stage: iter range [switch_iter, mid_switch_iter) uses `mid`
+        # (e.g. baseline_jax_lite as a winnable intermediate).
+        if (
+            curriculum_mid is not None
+            and curriculum_switch_iter <= it < curriculum_mid_switch_iter
+        ):
+            return curriculum_mid
         # When late == "pool", the concrete opponent is decided in-loop
         # (pool snapshot vs baseline_jax_full); return the base curriculum_late.
         return curriculum_late

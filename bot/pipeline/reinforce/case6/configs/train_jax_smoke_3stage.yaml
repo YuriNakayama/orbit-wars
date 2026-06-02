@@ -1,0 +1,46 @@
+# Local smoke for 3-stage curriculum (noop → baseline_jax_lite → python_v1).
+# 6 iter total: 0-1 noop, 2-3 jax_lite, 4-5 python_v1. Wiring check.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 6
+  episodes_per_iter: 4
+  horizon: 50
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.0
+  ppo_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  target_kl: null
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 2
+    mid_switch_iter: 4
+    early: noop
+    mid: baseline_jax_lite
+    late: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case6_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

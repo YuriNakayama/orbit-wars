@@ -499,6 +499,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce_case6 pool_v1_3stage: H6b 3 段 curriculum
+    # (noop → baseline_jax_lite → python_v1)。pool_v1 系の「v1 切替で 0/8 全敗」
+    # を中間に勝てる相手を挟んで解消する狙い。
+    "reinforce_case6_kaggle_jax_train_pool_v1_3stage": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_3stage",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_3stage.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case6 pool_v8: noop → python_v8 curriculum (case8 production champion)。
     # pool_v1 の v8 版。最強 baseline で学習し v1/v4 への汎化を試す。
     "reinforce_case6_kaggle_jax_train_pool_v8": {
