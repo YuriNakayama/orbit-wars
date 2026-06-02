@@ -60,11 +60,30 @@ PoC0 または Step4 で **CPU 実測の action 一致率が 100% に届かず�
 - 逐次 greedy の取りこぼし/順序が固定shape で再現不能と確定 → **physics-only JAX + mission resolver は host callback** にフォールバック (100%一致は保証、GPU rollout は一部 host round-trip)。
 - これを 09 の Open Item とし、Step4 の実測結果で確定する。机上で先に諦めない。
 
+## PoC0 実測結果 (2026-06-03, CPU)
+
+`bot/_poc0_available.py` / `_poc0_action.py` で turn0 を実測:
+
+- **`available` parity: 50 seed 全て 0 mismatch**。全 my_planet で `available == ships`。
+- **ただし turn0 は reserve が常に 0** (fleet 無し + 敵 ETA > 14 で keep_needed/proactive 共に 0)。diagnostic: 50 seed で nonzero keep=0 / nonzero proactive=0。
+  → **`available` の turn0 一致は本物だが trivial**。timeline scan / proactive の難所はまだ exercise されていない。
+- **turn0 の実際の決定surface** (これが本当の substance):
+  - 各プレイヤー home 1個・10隻。launch する時は**必ず全10隻** (send sizing は trivial)。
+  - **33/50 が launch、17/50 が hold (0手)**。hold は prod=1 等で target が opening_filter/affordability に veto される。
+  - 非自明な判断は **(a) launch するか否か、(b) どの target → angle** の 2点。target 選択 = `option_collector` の score + `opening_filter`。
+
+### PoC0 判定
+
+- ✅ `available`/reserve 計算の式は本物と一致する形で書けることを確認 (turn0 範囲)。
+- ⚠️ ただし turn0 だけでは timeline scan・逐次 greedy の核心は未検証。**真の関所は Step3(mission score+opening_filter で launch/hold と target が一致するか)と Step4(逐次 greedy)** であり、そこで実測するまで full parity の最終可否は確定しない。
+- → 選択肢3の見通しは PoC0 で**棄却されず**。次は `option_collector` の score + opening_filter を JAX 化し、turn0 の launch/hold + target 一致を実測する (PoC1)。
+
 ## まとめ
 
 | 問い | 答え |
 |------|------|
 | 選択肢3は実現可能か | **可能 (FEASIBLE-WITH-EFFORT)**。当初 BLOCKER とされた逐次 greedy は固定長 `lax.scan` で表現でき、MAX_MISSIONS を pair 上限で取れば取りこぼしゼロ |
 | 唯一の不確実性は | 逐次消費順 (score sort の tie-break) が本物と完全一致するか。**机上不可、CPU 実測で確定** |
-| 最初の一手は | PoC0: turn0 の available=10 を本物一致させる (lite の reserve 式を捨てる) |
+| PoC0 (turn0 available) | ✅ 0 mismatch / 50 seed。ただし reserve=0 で trivial。難所は未検証 |
+| 次の一手 | PoC1: option_collector score + opening_filter を JAX 化し turn0 の launch/hold + target を実測 |
 | 失敗時の退避 | physics-only JAX + mission resolver host callback (100%一致は保証) |
