@@ -432,3 +432,27 @@ pf_jh turn の Python move を dump (t46/t71/t72):
    JAX が reject するか特定 (経過9 と同じ手法を pf_jh 側に適用)。
 2. 過剰 reject を修正。followup/reinforce infra は保持 (無害、将来効く)。
 3. 劣化なし維持。
+
+---
+
+# 経過 16 (2026-06-03 ~06:35) — pf_jh 確定: 多source swarm 未実装
+
+## t46 直接トレースで確定
+
+- Python src12 が target6 (45 ships) に **send=26**、src24 が **同 target6** に send=20。
+  26+20=46 = need。**multi-source 協調攻撃 (swarm / process_multi_source_mission)**。
+- 単一 source では誰も need=46 を満たせない → JAX (single-source only) は両方 reject → hold。
+- **pf_jh の確定主因 = 多source swarm 未実装**。followup/reinforce/過剰reject ではなかった
+  (経過11/13/15 の仮説を最終訂正)。
+
+## swarm port のスコープ (process_multi_source_mission, mission_resolver.py:84)
+
+1 target に対し複数 source の option を束ね、turns 順 → -limit → src_id で sort し、
+remaining = need を各 source に割当 (send = min(limit, max(0, remaining - 他src残)))。
+remaining==0 になれば全 source 同時 launch。build_swarm_missions が pair/trio を生成。
+
+## NEXT ACTION
+1. swarm を port: target ごとに上位 source を集め need まで協調割当。
+   固定shape (target × top-K source) で実装。
+2. turn0 維持 + pf_jh 減 + full-match 向上を実測。tripwire 維持。
+3. これが pf_jh の本丸 (154 の大半)。
