@@ -67,3 +67,40 @@ reserve ヒューリスティックが中盤を粗く拾っていた分。**full
 3. reinforce / swarm / crash / followup / evac mission を順次追加
 4. 各追加ごとに full-game 一致率の上昇を結合テストで実測 (3.8% → 100% を目指す)
 5. dtype: jnp.float_ の x64 警告は無害 (float32 truncation) だが production では float32 明示推奨
+
+---
+
+# 経過 3 (2026-06-03 ~02:15) — 戦略の見直し
+
+## 2つの気づき (実装を進めて判明)
+
+### (A) 目標の再定義: 100% byte-parity ではなく「劣化しない (≥1勝/4)」
+ユーザーの核心要求は「JAX化で勝率ほぼ0になるのを避ける」。100% action 一致は
+**手段であって目的ではない**。0勝 tripwire (4game, ≥1勝) が真の受け入れゲート。
+→ capture-slice agent で tripwire を実測し、既に勝てるなら full byte-parity は
+過剰投資の可能性。全 mission 写経の前に「勝てるか」を先に測る。
+
+### (B) 速度: jit 未適用が問題
+agent_full_jax を per-call で呼ぶと遅い (tripwire 4game が 2分でも未完)。
+ユーザー要件「1試合10分以内」と GPU vmap 目標の両方に **jax.jit ラップが必須**。
+core_jax は全て jit/vmap-friendly に書いてあるので compute_actions_jax を
+`jax.jit` でラップするだけ。これは速度と劣化検証の両方に効く。
+
+## NEXT ACTION (改訂)
+
+1. compute_actions_jax を `jax.jit` ラップ → 1試合速度を計測 (要件 10分以内)
+2. tripwire (4game) を jit 版で実測 → **既に≥1勝なら劣化問題は解決済**かを判定
+3. 勝てない/不足なら mission 種を追加 (keep_needed reserve → commitments → reinforce…)
+   し、各追加で tripwire と full-game 一致率の両方を実測
+4. 「劣化なし (tripwire GREEN) + 高速 (jit, 10分以内)」が達成基準
+
+## 実測判定 (経過3 の問い (A) への回答)
+
+**capture-slice agent: tripwire 0/4 勝** (seed0/1 × 2 seat 全敗、勝者は常に Python 側)。
+→ **byte-parity を諦めて capture だけで勝てる、という近道は否定された**。capture-only は
+本物に対し依然「勝率ほぼ0」= 回避すべき失敗モードそのまま。**full mission set の
+忠実 port が劣化回避に必須**と実測で確定。turn0 一致 (20/20) は必要条件だが十分でない。
+
+→ 方針確定: 近道なし。keep_needed reserve → commitments → reinforce → swarm →
+crash → followup → evac を順次 port し、各段で tripwire を実測。tripwire が ≥1勝に
+転じた時点が「劣化解消」の最小到達点、full-game 100% 一致が完全到達点。
