@@ -16,6 +16,10 @@ dev/runpod            # RunPod GPU pod control (train / pull / promote / cost-re
 dev/kaggle            # Kaggle Notebook free-tier GPU (train / pull / promote / dataset / cost-report)
 ```
 
+## Long-running Training Checkpoint Policy
+
+長時間学習 (1h 以上想定の RunPod / Kaggle / Vast 学習) は **iter ごとに best.pt 等の中間成果物を S3 (or DVC remote) に即 upload** すること。Kaggle Kernel は完走時のみ `/kaggle/working` を output コミットするため、timeout / ERROR で中間 weights が破棄される (RunPod は preempt で消える)。`ORBIT_WARS_BEST_S3_PREFIX` 等の env var を train script に渡し、新 best 更新ごとに `s3.upload_file()` を呼ぶ実装パターンを必ず採ること。新規学習基盤を追加する際もこの規約を満たしてから本番投入する。
+
 ## DVC Commands
 
 ```bash
