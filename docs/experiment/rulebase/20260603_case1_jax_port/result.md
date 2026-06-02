@@ -734,3 +734,16 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 ## NEXT
 1. RunPod 容量空き時に GPU bench (B=256 の env-steps/s と CPU 比 speedup)。
 2. branch push → PR は core 完成のキリで検討。
+
+---
+
+# 経過 28 (2026-06-03 ~10:35) — RunPod bench case 登録 (GPU 計測を 1 コマンド化)
+
+- RunPod stock 確認: A5000 $0.16/h, 3090 $0.22/h 等 Low 在庫あり (枯渇なし)。
+- `src/gpu/runpod/config/cases.py` に `bench_agent_full_jax_gpu` を登録
+  (train_module=pipeline.reinforce._bench.agent_full_jax_gpu.run_bench)。
+  → `dev/runpod train <sha> --case bench_agent_full_jax_gpu` で 1 コマンド GPU 計測可能。
+- branch push 済。lint+mypy clean。
+
+## NEXT
+- dev/runpod train で GPU bench 実行 → B=256 env-steps/s と CPU 比 speedup を計測。
