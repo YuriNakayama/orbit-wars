@@ -882,3 +882,29 @@ x64 完全一致で検証。これらは plan_shot guards = over-fire (0勝) 修
 ## 現状
 core 要求 全達成 + over-fire 修正を unit で固定。case1 parity 部品 87+ GREEN。
 GPU speedup のみ infra 待ち (runbook 化)。
+
+---
+
+# 経過 35 (2026-06-03 ~12:35) — GPU launch 経路を特定 (US volume) → 容量待ちのみ
+
+## volume-DC blocker の解決策を発見
+
+- `orbit_wars` volume は EU-RO-1、`orbit_wars_us` は US-KS-2。default train は EU 版を
+  使い offer 0 だった。
+- **`--volume-name orbit_wars_us --data-center-id US-KS-2`** で offer list が populate
+  (3090/A6000/4090/A100 が US-KS-2 SECURE に出る)。**launch 経路は正しい**と確定。
+- ただし今回その 4 種は creation 時 unavailable (US-KS-2 momentary stockout)、
+  cheaper GPU (A5000/A4000/L4) は US-KS-2 SECURE に offer 無し。pod 未作成 = $0。
+
+## 確定した GPU bench 実行コマンド (runbook 更新候補)
+
+```
+dev/runpod train "$(git rev-parse HEAD)" --case bench_agent_full_jax_gpu \
+  --volume-name orbit_wars_us --data-center-id US-KS-2 --watch
+```
+→ US-KS-2 に 3090/4090/A100 在庫が戻った時に成功する。train --watch は self-cleaning
+(auto-cleanup + 8h guard) なので autonomous でも billing-leak しない。
+
+## 判断
+launch 経路は確定。あとは US-KS-2 容量回復のみ = 純粋な待ち。10-min loop で叩き続けず、
+容量が戻った tick で実行。bench は完成・preflight 検証済。
