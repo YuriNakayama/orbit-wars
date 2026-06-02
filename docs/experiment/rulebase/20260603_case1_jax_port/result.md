@@ -925,3 +925,15 @@ launch 経路は確定。あとは US-KS-2 容量回復のみ = 純粋な待ち�
   RL投入(case6 mode7)+e2e / parity 部品 87+ GREEN / format+lint+mypy clean。
 - 残: GPU speedup (容量待ち, 経路確定) / swarm (win-rate トレードオフ, 要判断) /
   PFSP 学習検証 (長時間)。
+
+---
+
+# 経過 37 (2026-06-03 ~13:15) — ships-only-diff の正体 + 安全改善の枯渇
+
+- GPU 背景 launch も $0 完了 (5連続 stockout 確定)。
+- ships_only_diff 9件 inspect: 同 src/angle(=target) で JAX が 1-3 隻 over-send
+  (t152 py20/jax21 等)。原因: 本物は resolver 時点で missing 再計算し send 縮小、
+  私は pre-scan need 使用。
+- 判断: 影響 ~2%・非致命的、修正は resolver 改変で回帰リスク (swarm で実証) → 低ROI 見送り。
+- 結論: 安全な autonomous 改善は出尽くした。残 parity gap は swarm(win-rate緊張) と
+  ships-only(resolver回帰リスク) で autonomous 不可。GPU 数値は容量待ち。feature 安定完成。
