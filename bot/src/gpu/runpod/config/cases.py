@@ -445,6 +445,90 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case5: case3 を丸ごと継承し support (補助) reward を検証する case。
+    # H1 = ship 差分と planet 差分を個別係数で同時加算する combined shaping。
+    # docs/experiment/reinforce/20260527_case5_support_reward/ 参照。
+    "reinforce_case5_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h1_combined.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H2: 保持割合 mine/(mine+enemy) の Δ を shaping (ratio mode)。
+    "reinforce_case5_kaggle_jax_train_h2_ratio": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h2_ratio",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h2_ratio.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H4: ratio mode の shaping_coef sweep (0.50 → 1.0)。
+    "reinforce_case5_kaggle_jax_train_h4_ratio_coef1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h4_ratio_coef1",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h4_ratio_coef1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H5: planet 信号を production 加重保持割合に (ratio_prod mode)。
+    "reinforce_case5_kaggle_jax_train_h5_ratio_prod": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h5_ratio_prod",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h5_ratio_prod.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H7: ratio per-turn shaping を band clip (序盤 spike 抑制)。
+    "reinforce_case5_kaggle_jax_train_h7_ratio_clip": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h7_ratio_clip",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h7_ratio_clip.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H3: 絶対保持数の非差分 dense 加算 (非 PBRS 対照群)。
+    "reinforce_case5_kaggle_jax_train_h3_dense": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h3_dense",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case5/configs/kaggle_jax_train_h3_dense.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case5 H6: 勝ちターン短縮 time bonus + 引き伸ばし penalty。
+    "reinforce_case5_kaggle_jax_train_h6_time_bonus": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case5_kaggle_jax_train_h6_time_bonus",
+        "train_module": "pipeline.reinforce.case5.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case5/configs/kaggle_jax_train_h6_time_bonus.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce_case1_bench_workers: short 5-iter run to measure rollout
     # parallelization speedup vs iter1 serial baseline (7h / 100 iter).
     # Same hyperparams, only iterations + rollout_workers differ.

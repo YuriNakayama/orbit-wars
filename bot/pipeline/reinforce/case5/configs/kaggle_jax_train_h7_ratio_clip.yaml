@@ -1,0 +1,59 @@
+# reinforce/case5 — support_reward H7 (ratio per-turn 報酬 band clip)
+#
+# H4 (ratio, coef=1.0) が lite last-10 0.820 で現行最良。ratio は [0,1] 正規化済だが
+# 序盤 (総 ship/惑星数が小さい時) は 1 機の増減で割合が 0→1 級に振れ ΔΦ が spike する。
+# 本 config は per-turn shaping 報酬を [-0.1, +0.1] に band clip し、序盤 spike を抑えつつ
+# 通常域 signal を素通しさせ value_loss 安定化と last-10 押し上げを狙う。
+#
+# 差分点 (= kaggle_jax_train_h4_ratio_coef1.yaml):
+#   - shaping_clip: 0.0 → 0.1  (per-turn shaping を [-0.1,0.1] に clip。clip<=0 は no-op)
+#   それ以外は H4 と完全同一 (shaping_mode=ratio / shaping_coef=1.0 / 200 iter / curriculum 等)。
+#
+# 採否: H4 (0.820) 比 +3pp で clip 採用、悪化/同等なら H4 維持 (ratio 正規化のみで spike 制御十分を確認)。
+# GPU: 3090/4090 限定 (A100 除外、コスト抑制)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 200
+  episodes_per_iter: 128
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 1.0       # H4 据え置き (ratio 信号倍増)
+  shaping_mode: ratio
+  shaping_clip: 0.1       # H7: per-turn shaping を [-0.1,0.1] に band clip
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case5_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

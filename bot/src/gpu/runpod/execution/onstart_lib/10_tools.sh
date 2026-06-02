@@ -59,7 +59,13 @@ fi
 # install 完了後の sanity check: aws version と AWS env の有無を log する
 if command -v aws >/dev/null 2>&1; then
   echo "[onstart] aws cli ready: $(aws --version 2>&1 | head -1)"
-  echo "[onstart] AWS_ACCESS_KEY_ID set=${AWS_ACCESS_KEY_ID:+yes}${AWS_ACCESS_KEY_ID:-no}"
+  # NOTE: never echo the key value itself. `${VAR:-no}` would expand to the
+  # key when set, leaking it to the S3-persisted onstart log. Use a guard.
+  if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+    echo "[onstart] AWS_ACCESS_KEY_ID set=yes"
+  else
+    echo "[onstart] AWS_ACCESS_KEY_ID set=no"
+  fi
   echo "[onstart] AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-unset}"
 else
   echo "[onstart] WARNING: aws cli unavailable; S3 markers/artifacts will be skipped" >&2
