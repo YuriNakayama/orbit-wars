@@ -350,3 +350,15 @@ bounded sample (10 game) で **8/10 勝**。0勝問題は決定的に解決、�
    pf_jh 減・full-game 一致向上
 2. その後 swarm/crash/followup/evac で byte-parity を 100% に寄せる
 3. parity 100% 後、GPU で vmapped self-play 速度 bench (RunPod)
+
+---
+
+# 経過 12 (2026-06-03 ~05:15) — reinforce wire (inert, 要 avail 修正)
+
+- threatened_info (parity 0) で is_threatened 抽出 → pair() に reinforce 分岐追加。
+- 実測: turn0 20/20 + tripwire 2/4 維持 (回帰なし)、だが full-match 49.6%/pf_jh 154 不変
+  = reinforce 未発火。
+- 原因: resolver avail_now = available(ships-reserve) を使うが reinforce は
+  source_inventory_left (ships-spent, reserve非減算) を使うべき。threatened source は
+  reserve で available≈0 → 送れない。
+- NEXT: resolver に mission_kind を持たせ reinforce 予算を ships-spent に分離 → 再測。
