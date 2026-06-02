@@ -456,3 +456,28 @@ remaining==0 になれば全 source 同時 launch。build_swarm_missions が pai
    固定shape (target × top-K source) で実装。
 2. turn0 維持 + pf_jh 減 + full-match 向上を実測。tripwire 維持。
 3. これが pf_jh の本丸 (154 の大半)。
+
+---
+
+# 経過 17 (2026-06-03 ~06:55) — 2-source swarm 試作 → 劣化のため revert
+
+## swarm pass を試作実装
+
+- per-target top-2 capture source (score順) を集め、ETA近接 & 単独不足 & 合計≥need で
+  協調 launch (send1=cap1, send2=need-cap1)。emission を main++swarm に統合。
+- 実測: pf_jh 154→134 (swarm 発火) だが both_diff 84→104、full-match 49.6→49.4%、
+  **tripwire 2/4 → 1/4 (劣化)**。
+
+## 判断: revert (劣化を避ける最優先原則)
+
+swarm の allocation が本物の process_multi_source_mission (turns順→-limit→src_id の
+ordered 配分) と不一致で、不正確な協調攻撃が一部の試合を悪化させた。**劣化を許さない
+原則に従い revert** (committed 2/4 状態へ git checkout)。発火はするが byte-faithful
+でない試作は ship しない。
+
+## NEXT ACTION (swarm を正確に)
+1. process_multi_source_mission の ordered allocation を厳密に port:
+   options を (turns, -limit, src_id) で sort、remaining を順に割当
+   (send = min(limit, max(0, remaining - 後続limit和)))。
+2. build_swarm_missions の score (need ベース, swarm value mult, plan penalty) も忠実に。
+3. 実装後 tripwire が 2/4 以上を維持することを確認してから採用。劣化は revert。
