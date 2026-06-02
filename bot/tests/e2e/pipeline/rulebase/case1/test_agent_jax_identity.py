@@ -30,9 +30,10 @@ from pipeline.rulebase.case1.baseline.agent import agent as v1_py
 
 # The faithful full port (capture + reserve + plan_shot guards). NOTE: the
 # legacy lite `baseline_jax.compute_actions_jax` is ~0-win; the integration gate
-# must test the full port under development.
+# must test the full port under development. Use the JITTED entry so the test
+# runs fast (the un-jitted fn recompiles per call → minutes per game).
 from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
-    compute_actions_jax,
+    compute_actions_jax_jit as compute_actions_jax,
 )
 
 ANGLE_TOL = 1e-4
