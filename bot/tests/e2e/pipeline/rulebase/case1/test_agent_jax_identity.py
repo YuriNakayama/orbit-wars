@@ -47,9 +47,7 @@ def _py_row(moves: list) -> jnp.ndarray:
 
 
 def _jax_to_moves(row: jnp.ndarray) -> list[tuple[int, float, int]]:
-    return sorted(
-        (int(r[0]), float(r[1]), int(r[2])) for r in row if int(r[0]) >= 0
-    )
+    return sorted((int(r[0]), float(r[1]), int(r[2])) for r in row if int(r[0]) >= 0)
 
 
 def _py_to_moves(moves: list) -> list[tuple[int, float, int]]:
