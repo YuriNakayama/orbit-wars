@@ -189,6 +189,57 @@ def keep_needed(
     return jnp.where(full_holds, first, planet_ships).astype(jnp.int32)
 
 
+def threatened_info(
+    planet_owner: Arr,
+    planet_ships: Arr,
+    production: Arr,
+    player: Arr,
+    arr_eta: Arr,
+    arr_owner: Arr,
+    arr_ships: Arr,
+    horizon: int,
+) -> tuple[Arr, Arr, Arr]:
+    """(holds_full, fall_turn, deficit_hint) for an owned planet's full-ships run.
+
+    Mirrors simulate_planet_timeline + the threatened_candidates extraction
+    (world_model.py:170-220, 508-520): run the timeline with actual ships;
+    fall_turn = first turn owner flips away from player; holds_full = never
+    flipped; deficit_hint = ceil(ships_at[fall_turn])+1 (>=1). fall_turn = -1 if
+    never falls.
+    """
+
+    def step(
+        carry: tuple[Arr, Arr, Arr, Arr], turn: Arr
+    ) -> tuple[tuple[Arr, Arr, Arr, Arr], None]:
+        owner, garrison, fall_turn, deficit = carry
+        garrison = jnp.where(owner != -1, garrison + production, garrison)
+        by_owner = _per_turn_owner_ships(arr_eta, arr_owner, arr_ships, turn)
+        has_event = jnp.sum(by_owner) > 0
+        prev_owner = owner
+        new_owner, new_g = resolve_arrival_event(owner, garrison, by_owner)
+        # first turn prev==player and now != player → record fall
+        falls_now = (
+            has_event & (prev_owner == player) & (new_owner != player) & (fall_turn < 0)
+        )
+        new_fall = jnp.where(falls_now, turn, fall_turn)
+        new_deficit = jnp.where(
+            falls_now, jnp.ceil(new_g).astype(jnp.int32) + 1, deficit
+        )
+        return (new_owner, new_g, new_fall, new_deficit), None
+
+    turns = jnp.arange(1, horizon + 1, dtype=jnp.int32)
+    init = (
+        planet_owner,
+        planet_ships.astype(jnp.float_),
+        jnp.asarray(-1, jnp.int32),
+        jnp.asarray(0, jnp.int32),
+    )
+    (_o, _g, fall_turn, deficit), _ = jax.lax.scan(step, init, turns)
+    holds_full = fall_turn < 0
+    deficit_hint = jnp.maximum(1, deficit)
+    return holds_full, fall_turn, deficit_hint
+
+
 def projected_state_at(
     planet_owner: Arr,
     planet_ships: Arr,

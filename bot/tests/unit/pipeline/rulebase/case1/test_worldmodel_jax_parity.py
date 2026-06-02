@@ -110,3 +110,50 @@ def test_keep_needed_parity(seed: int) -> None:
             mismatches.append((ships, production, arrivals, int(ref), got))
 
     assert not mismatches, f"seed={seed}: {len(mismatches)}/{n}: {mismatches[:5]}"
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_threatened_info_parity(seed: int) -> None:
+    """holds_full + fall_turn match simulate_planet_timeline (random arrivals)."""
+    rng = np.random.default_rng(seed + 700)
+    mism = []
+    n = 150
+    for _ in range(n):
+        ships = int(rng.integers(5, 50))
+        prod = int(rng.integers(1, 6))
+        p = Planet(id=0, owner=0, x=30, y=30, radius=2, ships=ships, production=prod)
+        k = int(rng.integers(0, 4))
+        arrivals = [
+            (
+                int(rng.integers(1, HORIZON + 1)),
+                int(rng.integers(1, NUM_PLAYERS)),
+                int(rng.integers(1, 40)),
+            )
+            for _ in range(k)
+        ]
+        tl = wpy.simulate_planet_timeline(p, arrivals, 0, HORIZON)
+        eta, own, shp = _pad_arrivals(arrivals)
+        hf, ft, _df = wjax.threatened_info(
+            jnp.asarray(0),
+            jnp.asarray(ships),
+            jnp.asarray(prod),
+            jnp.asarray(0),
+            eta,
+            own,
+            shp,
+            HORIZON,
+        )
+        ref_ft = tl["fall_turn"] if tl["fall_turn"] is not None else -1
+        if bool(hf) != tl["holds_full"] or int(ft) != ref_ft:
+            mism.append(
+                (
+                    ships,
+                    prod,
+                    arrivals,
+                    tl["holds_full"],
+                    tl["fall_turn"],
+                    bool(hf),
+                    int(ft),
+                )
+            )
+    assert not mism, f"seed={seed}: {len(mism)}/{n}: {mism[:3]}"
