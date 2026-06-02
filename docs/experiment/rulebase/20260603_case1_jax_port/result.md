@@ -908,3 +908,20 @@ dev/runpod train "$(git rev-parse HEAD)" --case bench_agent_full_jax_gpu \
 ## 判断
 launch 経路は確定。あとは US-KS-2 容量回復のみ = 純粋な待ち。10-min loop で叩き続けず、
 容量が戻った tick で実行。bench は完成・preflight 検証済。
+
+---
+
+# 経過 36 (2026-06-03 ~12:55) — GPU 5 連続 stockout、tick 毎 retry を停止
+
+- US-KS-2 でも 3090/4090/A6000/A100 全て persistent stockout (EU+US 通算 5 連続)。
+  memory project_runpod_3090_4090_stockout の「数時間枯渇」パターンと一致。pod 未作成 $0。
+- launch 経路は確定済 (--volume-name orbit_wars_us --data-center-id US-KS-2)。
+- **判断: 10-min loop で GPU を叩き続けない**。容量は数時間スケールで戻るため、tick 毎
+  retry は無駄。memory に実行コマンド + stockout を記録 (handoff)。容量回復した tick
+  または別セッションで 1 コマンド実行。
+
+## プロジェクト最終 (GPU 数値除き完了、安定保持)
+- 劣化なし(8/10, over-fire unit lock) / 結合テスト(jit gate) / full JAX vmap /
+  RL投入(case6 mode7)+e2e / parity 部品 87+ GREEN / format+lint+mypy clean。
+- 残: GPU speedup (容量待ち, 経路確定) / swarm (win-rate トレードオフ, 要判断) /
+  PFSP 学習検証 (長時間)。
