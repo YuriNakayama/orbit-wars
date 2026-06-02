@@ -267,9 +267,18 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         src = f_src[oi]
         tgt = f_tgt[oi]
         avail_now = available[src] - spent[src]
-        need_now = jnp.maximum(0, f_need[oi] - committed[tgt])
+        # Single-source semantics (process_single_source_mission): this source
+        # must INDEPENDENTLY satisfy `need` (send_limit < missing → skip). We do
+        # NOT let other launches' commitments reduce need below the single-source
+        # threshold (that over-fired: a tiny source "finishing" a target). Track
+        # committed only to suppress a 2nd source piling onto an already-covered
+        # target this turn (need - committed <= 0 → already handled).
+        need_now = f_need[oi]
+        already = committed[tgt] >= need_now
         send = jnp.minimum(f_sendcap[oi], avail_now.astype(jnp.int32))
-        fire = f_elig[oi] & (need_now > 0) & (send >= need_now) & (send >= 1)
+        fire = (
+            f_elig[oi] & (need_now > 0) & (send >= need_now) & (send >= 1) & ~already
+        )
         send = jnp.where(fire, send, 0)
         spent = spent.at[src].add(jnp.where(fire, send, 0))
         committed = committed.at[tgt].add(jnp.where(fire, send, 0))

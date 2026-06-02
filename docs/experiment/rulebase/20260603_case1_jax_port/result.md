@@ -218,3 +218,58 @@ Python が hold する真因を、**本物 option_collector を src=24→target2
 どの guard で reject されるか**を切り分ける (score 比較でなく veto 箇所の特定)。
 候補: build_snipe_mission 経路 / target_value が ≤0 / send_cap<needed の partial guard /
 是非 enemy が捕る planet への抑制。次イテレーションで実施。
+
+---
+
+# 経過 8 (2026-06-03 ~03:55) — over-fire 真因 = commitments 過剰減算
+
+## 本物 option_collector 直接トレース (src24 t32)
+
+- **本物**: src24→tgt26 で turns=42, needed=40, send_cap=6 → **6<40 で不採用 → hold**。
+  JAX aim も turns=42 で一致 (aim は正しい)。
+- **JAX が実際に撃つ先 = tgt6** (45 ships, prod4, turns=47)。JAX need(tgt6@47)=**46** (正しい)。
+  send_cap=6。本来 6<46 で ineligible のはず。
+- なのに発射 → **resolver の `need_now = max(0, f_need - committed[tgt])` が committed で
+  need を過剰に削っている**。高 score の別 option が tgt6 に committed を積み、src24 の
+  need_now が 6 以下に下がって発射。
+
+## 真因 = multi-source allocation 未 port
+
+本物の `process_multi_source_mission` (mission_resolver.py:84) は、複数 source が
+**1つの mission の options として束ねられた時だけ** 協調 send する。私の resolver は
+**全 (src,tgt) を独立 option 化し committed を無条件累積**したため、本来 multi-source
+mission に束ねられない単独 capture が「他者の committed」で安く見えて誤発射。
+
+→ 修正方針: committed を「同一 mission 内の協調」に限定する。最小修正は **commitments を
+撤廃し、単一 source が単独で need を満たす場合のみ発射** (process_single_source_mission
+の semantics: `send_limit < missing → return`)。multi-source swarm は後で別途。
+
+## NEXT ACTION
+1. resolver の committed 累積を撤廃 → fire 条件を `send_cap >= f_need` (単独充足) に。
+2. 再診断 (over-fire 195 が減るか) + turn0 20/20 維持確認。
+3. 効けば full-game 一致が上がり tripwire 改善を期待。multi-source は swarm port で対応。
+
+---
+
+# 経過 9 (2026-06-03 ~04:15) — over-fire 真因 確定: plan_shot guards 未 port
+
+## committed 撤廃でも不変 → 真因は aim でなく plan_shot の追加 guard
+
+- committed 過剰減算説 → 修正しても 11.0%/195 不変で棄却。
+- 決定打: **`plan_shot(24,23,6) = None` (Python)** だが JAX aim_with_prediction は
+  `aim_ok=True`。同 trajectory で可否が逆。
+- 原因確定: 本物 `WorldModel.plan_shot` (world_model.py:537) は aim_with_prediction の
+  後に **4 つの guard** を適用、JAX agent はこれを skip:
+  1. `is_trajectory_sun_safe(launch_x, launch_y, angle, turns, ships)` — turns 全体の sun 横断
+  2. `intercept_holds_within_tolerance` — 移動 target が tolerance 内に留まるか
+  3. `target_reachable_before_comet_expiry`
+  4. `fleet_crosses_other_comet`
+- JAX は aim 内の per-segment sun check のみ → **full-trajectory sun + intercept tolerance を
+  見ず、撃てない弾道を撃てると誤判定 = over-fire の主因**。
+
+## NEXT ACTION (確度高)
+1. **is_trajectory_sun_safe + intercept_holds_within_tolerance を JAX 化**し plan_shot
+   相当の wrapper を aim_with_prediction の後段に追加 (comet 2 guard は非 comet では自明 True)。
+2. x64 parity test (本物 plan_shot vs JAX wrapper)。
+3. agent に wire → over-fire 再測 (195 が大幅減を期待) + turn0 20/20 維持。
+4. これが本命修正。effけば full-game 一致と tripwire が同時改善する見込み。
