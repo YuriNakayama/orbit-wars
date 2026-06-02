@@ -1,0 +1,52 @@
+# RunPod/Kaggle JAX training config — H6d: horizon 500 → 50。
+#
+# pool_v1 (06b6faf3, 11h22 完走) は live v1 30戦で 0/30。
+# train.log で iter 5 以降 approx_kl ~ 0 で PPO 停止 → reward sparseness が主因。
+# horizon を 500 → 50 にして reward 密度を 10x、iter 数も 20 → 30 に増やす。
+# 完走想定: noop iter ~9s + python_v1 iter ~240s = (5×9 + 25×240) = ~6045s = 1h40。
+# Kaggle T4x2 (free, $0)、cost $0。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 30
+  episodes_per_iter: 8
+  horizon: 50
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 15000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case6_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

@@ -346,11 +346,18 @@ def train(
     # Kaggle resolves the actual kernel slug from the *title* (lowercase + hyphenate),
     # ignoring the `id` field for slug derivation. To keep slug and title aligned,
     # we build both from the same base string.
+    # ts_part first to ensure slug uniqueness across same-case runs:
+    # the 50-char cap truncates the end, so when ts is at the start every
+    # run gets a unique slug even if case names are long (39 chars).
     ts_part = run_id.split("__")[0]
-    kernel_basename = f"orbit-wars-{case}-{ts_part}-{commit_sha[:7]}"
+    kernel_basename = f"ow-{ts_part}-{commit_sha[:7]}-{case}"
     kernel_basename = "".join(
         c if c.isalnum() or c == "-" else "-" for c in kernel_basename
     ).lower()[:50]
+    # Kaggle drops the trailing '-' when materializing slugs from titles. So
+    # our launch.json must store the normalized (rstrip-) form to keep
+    # `dev/kaggle status/pull` lookups correct.
+    kernel_basename = kernel_basename.rstrip("-")
     kernel_slug = f"{creds.username}/{kernel_basename}"
     kernel_title = kernel_basename
     kernel_slug = _normalize_kernel_slug(kernel_slug)

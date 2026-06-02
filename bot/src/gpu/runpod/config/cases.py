@@ -422,6 +422,134 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case6: PFSP (Prioritized Fictitious Self-Play). case3 の学習
+    # レシピを継承しつつ対戦相手構成のみ変更。H1 = curriculum late を
+    # self_snapshot に差し替え、学習開始時点の凍結 self snapshot と自己対戦。
+    "reinforce_case6_kaggle_jax_train_h1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 H2: PFSP snapshot pool (K=10 周期更新 + baseline_jax_full
+    # 混合 late)。H1 の飽和を解消する狙い。iterations 100 / episodes 64 に軽量化。
+    "reinforce_case6_kaggle_jax_train_h2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h2",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h2.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 H4: PFSP f_hard=(1−x)^p 優先 sampling。難敵 (full / 強い
+    # pool snapshot) を優先選択し vs full の伸びしろを取る。iter 100 / ep 64。
+    "reinforce_case6_kaggle_jax_train_h4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_h4",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_h4.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 python_v1: 本物 baseline_v1 を pure_callback で seat1 に
+    # 注入 (opponent=python_v1, sha dc13a25)。train/eval gap を原理的に消す試行。
+    # H4 (近似 rule 相手) が live v1 戦で 0/30 だった現状を打開する狙い。
+    "reinforce_case6_kaggle_jax_train_python_v1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_python_v1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_python_v1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 pool_v1_h50: H6d (horizon 500→50, iter 30)。pool_v1 の 0/30
+    # 棄却後の次仮説。reward 密度 10x で PPO approx_kl ~ 0 停止問題に対処。
+    "reinforce_case6_kaggle_jax_train_pool_v1_h50": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_h50",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_h50.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 pool_v1_shaping5: H6c (shaping_coef 0.5 → 5.0)。pool_v1 の
+    # 0/30 棄却後、horizon は 500 のまま dense reward signal を 10x 強化。
+    # H6d 失敗時の保険として用意、現時点では起動しない。
+    "reinforce_case6_kaggle_jax_train_pool_v1_shaping5": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_shaping5",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_shaping5.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 pool_v1_3stage: H6b 3 段 curriculum
+    # (noop → baseline_jax_lite → python_v1)。pool_v1 系の「v1 切替で 0/8 全敗」
+    # を中間に勝てる相手を挟んで解消する狙い。
+    "reinforce_case6_kaggle_jax_train_pool_v1_3stage": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1_3stage",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config "
+            "pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1_3stage.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 pool_v8: noop → python_v8 curriculum (case8 production champion)。
+    # pool_v1 の v8 版。最強 baseline で学習し v1/v4 への汎化を試す。
+    "reinforce_case6_kaggle_jax_train_pool_v8": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v8",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v8.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6 pool_v1: noop → python_v1 curriculum (5c8725cd)。
+    # iter 0-4 noop で free 学習開始 → iter 5+ で本物 v1 戦。
+    # python_v1 単独より cost は嵩むが、学習信号薄問題を回避する狙い。
+    "reinforce_case6_kaggle_jax_train_pool_v1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_train_pool_v1",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_train_pool_v1.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case6_kaggle_jax_smoke: short JAX wiring smoke for case6 (verifies
+    # the self_snapshot opponent path launches and collects artifacts on RunPod).
+    "reinforce_case6_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case6_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case6.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case6/configs/kaggle_jax_smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head

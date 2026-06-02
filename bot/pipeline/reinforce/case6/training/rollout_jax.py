@@ -1,0 +1,626 @@
+"""JAX-native rollout driver for end-to-end GPU PPO.
+
+`collect_rollout_jax(model, key, episodes_per_iter, opponent='noop',
+horizon=500, seed=0)` resets N JAX env instances in parallel via vmap,
+then runs `horizon` steps of (featurize → policy forward → sample
+action → env.step), accumulating per-step transitions for PPO.
+
+Phase W4 spike scope:
+  - Opponent: `noop` only (always empty actions). Real `baseline_v1`
+    integration is a follow-up (it requires either porting the
+    rule-based agent to JAX or paying the device↔host round-trip per
+    step, defeating the purpose).
+  - PPO update is still PyTorch (W4-c). The rollout returns JAX arrays;
+    the train.py glue copies them to torch and runs the existing
+    `ppo_update`.
+  - Reward: ±1 terminal win/loss + shaping = `shaping_coef * Δ(my_ships
+    − enemy_ships)` per turn, matching `env.OrbitWarsEpisode` so PPO
+    sees the same advantage signal.
+
+Returns a `JaxRolloutBatch` containing all per-step JAX arrays plus the
+episode outcomes for logging.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as _np
+from orbit_wars_jax.reset import reset
+from orbit_wars_jax.state import EnvState
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
+from orbit_wars_jax.step import step as jax_env_step
+
+from pipeline.rulebase.case1.baseline_jax import (
+    compute_actions_jax as _baseline_jax_actions,
+)
+from pipeline.rulebase.case1.baseline_jax_full import (
+    compute_actions_jax as _baseline_jax_full_actions,
+)
+
+from ..policy.featurizer_jax import (
+    HistoryStateJax,
+    featurize_jax_w1,
+    init_history_jax,
+    update_history_jax,
+)
+from ..policy.model_jax import ActorCriticJax
+from ..policy.sampling_jax import (
+    sample_action_jax,
+    sampled_action_to_env_actions,
+)
+
+NUM_AGENTS_MAX = 4  # jax_env's NUM_AGENTS_MAX
+
+# opponent_mode constants — kept int to stay scan/vmap friendly.
+OPPONENT_NOOP: int = 0
+OPPONENT_BASELINE_JAX_LITE: int = 1
+OPPONENT_BASELINE_JAX_FULL: int = 2
+OPPONENT_SELF_SNAPSHOT: int = 3
+OPPONENT_PYTHON_V1: int = 4
+OPPONENT_PYTHON_V4: int = 5
+OPPONENT_PYTHON_V8: int = 6
+
+OPPONENT_NAME_TO_MODE: dict[str, int] = {
+    "noop": OPPONENT_NOOP,
+    "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
+    "baseline_jax_full": OPPONENT_BASELINE_JAX_FULL,
+    "self_snapshot": OPPONENT_SELF_SNAPSHOT,
+    # Real Python baseline_v{1,4,8} via pure_callback host roundtrip. Closes the
+    # train/eval gap (memory: case6 PFSP was 0/30 vs live v1 because the in-JAX
+    # baseline_jax_lite/full approximate but don't match the real rule). Cost:
+    # vmap forces sequential per-game host calls so rollout throughput drops.
+    # v1=sigmaborov LB897, v4=phase C champion (winrate 70.3%), v8=case8 predict
+    # cache + LB1224 strategy.
+    "python_v1": OPPONENT_PYTHON_V1,
+    "python_v4": OPPONENT_PYTHON_V4,
+    "python_v8": OPPONENT_PYTHON_V8,
+}
+
+
+class JaxRolloutBatch(NamedTuple):
+    """Per-step transitions collected by a (vmap'd) JAX rollout.
+
+    Leading axes are (B, T) where B = episodes_per_iter and T = horizon.
+    Episodes that terminate before T continue to advance the env but
+    `done_mask` marks the steps that should be ignored by the consumer.
+    """
+
+    planet_feats: jax.Array  # (B, T, MAX_PLANETS, PLANET_FEAT_DIM) f32
+    planet_mask: jax.Array  # (B, T, MAX_PLANETS) bool
+    my_planet_mask: jax.Array  # (B, T, MAX_PLANETS) bool
+    target_mask: jax.Array  # (B, T, MAX_PLANETS) bool
+    global_feats: jax.Array  # (B, T, GLOBAL_FEAT_DIM) f32
+    template_ctx: jax.Array  # (B, T, MAX_PLANETS, TEMPLATE_CTX_DIM) f32
+    candidate_feats: jax.Array  # (B, T, MAX_PLANETS, CAND_K, CAND_FEAT_DIM)
+    candidate_mask: jax.Array  # (B, T, MAX_PLANETS, CAND_K) bool
+    candidate_pid: jax.Array  # (B, T, MAX_PLANETS, CAND_K) int32
+    target_slot: jax.Array  # (B, T, MAX_PLANETS) int32
+    log1p_ships: jax.Array  # (B, T, MAX_PLANETS) f32
+    log_probs: jax.Array  # (B, T) f32
+    values: jax.Array  # (B, T) f32
+    rewards: jax.Array  # (B, T) f32
+    done_mask: jax.Array  # (B, T) bool — step counted iff valid (pre-terminal)
+    episode_outcomes: jax.Array  # (B,) f32 — final reward sign per ep
+
+
+def _empty_jax_actions() -> jax.Array:
+    """Action tensor for a single env where no agent fires."""
+    return jnp.full(
+        (NUM_AGENTS_MAX, MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
+    )
+
+
+def _ship_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
+    """Sum (own, enemy) ships across the current planet table."""
+    owner = state.planet_owner
+    valid = state.planet_valid
+    ships = state.planet_ships.astype(jnp.float32)
+    is_mine = valid & (owner == player)
+    is_enemy = valid & (owner != player) & (owner != -1)
+    return jnp.sum(jnp.where(is_mine, ships, 0.0)), jnp.sum(
+        jnp.where(is_enemy, ships, 0.0)
+    )
+
+
+def _planet_count_totals(state: EnvState, player: int) -> tuple[jax.Array, jax.Array]:
+    """Count (own, enemy) planets in the current planet table.
+
+    Alternative shaping signal: ship totals grow with production so the
+    diff is dominated by "who has more rotation" rather than territorial
+    control. Planet count diff is a cleaner proxy of strategic state —
+    flips only when a planet changes hands.
+    """
+    owner = state.planet_owner
+    valid = state.planet_valid
+    is_mine = valid & (owner == player)
+    is_enemy = valid & (owner != player) & (owner != -1)
+    return jnp.sum(is_mine.astype(jnp.float32)), jnp.sum(is_enemy.astype(jnp.float32))
+
+
+SHAPING_MODE_SHIPS: int = 0
+SHAPING_MODE_PLANETS: int = 1
+SHAPING_MODE_NAME_TO_INT: dict[str, int] = {
+    "ships": SHAPING_MODE_SHIPS,
+    "planets": SHAPING_MODE_PLANETS,
+}
+
+
+def _shaping_diff(state: EnvState, seat: int, shaping_mode: int) -> jax.Array:
+    """Return Δ(mine - enemy) for the configured shaping signal."""
+    ship_my, ship_en = _ship_totals(state, seat)
+    plt_my, plt_en = _planet_count_totals(state, seat)
+    # jax.lax.cond keeps the trace single.
+    out: jax.Array = jax.lax.cond(
+        shaping_mode == SHAPING_MODE_PLANETS,
+        lambda: plt_my - plt_en,
+        lambda: ship_my - ship_en,
+    )
+    return out
+
+
+def _self_snapshot_opponent_actions(
+    opp_model: ActorCriticJax, state: EnvState, player: int
+) -> jax.Array:
+    """Deterministic (L, 3) opponent action row from a frozen self snapshot.
+
+    Featurizes the opponent seat with an empty history (the rule opponents
+    use no history either, so this keeps the snapshot opponent stateless and
+    scan-friendly), runs the frozen `opp_model` forward, and takes the
+    argmax target slot + mean ship count (no sampling noise). H1 fixes the
+    snapshot at the start of training; pool / sampling is H2+.
+    """
+    history = init_history_jax()
+    batch = featurize_jax_w1(state, player=player, history=history)
+    output = opp_model(batch)
+    target_slot = jnp.argmax(output.per_planet_logits[0], axis=-1).astype(jnp.int32)
+    my_planet_mask = batch.my_planet_mask[0]
+    target_slot = jnp.where(my_planet_mask, target_slot, jnp.zeros_like(target_slot))
+    log1p_ships = jnp.where(
+        my_planet_mask, output.ship_mean[0], jnp.zeros_like(output.ship_mean[0])
+    )
+    return sampled_action_to_env_actions(
+        target_slot,
+        log1p_ships,
+        state.planet_xy,
+        state.planet_ships,
+        state.planet_id,
+        state.planet_valid,
+        my_planet_mask,
+        player,
+        NUM_AGENTS_MAX,
+    )[player]
+
+
+# ---- Real Python baseline_v1 opponent via host callback. ---------------------
+# Lazy import so importing this module on a vendored Kaggle runtime (which has
+# no `pipeline.rulebase.case1.baseline`) doesn't crash; the callback only fires
+# when the opponent is actually selected.
+def _host_python_v1_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case1.baseline.agent import agent as _v1_agent
+
+    # case1 baseline has no module-level predict cache (it's a port of the
+    # sigmaborov LB897 notebook, the predict-position cache is a case8 addition).
+    # So nothing to reset here.
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v1_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+# Prototype tells pure_callback the result's shape/dtype without an untyped
+# `jax.ShapeDtypeStruct` constructor.
+_PYTHON_V1_PROTO = jnp.zeros((MAX_LAUNCHES_PER_AGENT, 3), dtype=jnp.float32)
+
+
+def _python_v1_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    """Call the real Python baseline_v1 agent for one seat via host callback.
+
+    `vmap_method='sequential'` so that when the rollout is vmapped over a batch
+    of games, each game's seat-1 obs is dispatched to the host one at a time
+    (the Python agent is not vectorizable). This is the gold-standard opponent:
+    closes the train/eval gap that the in-JAX `baseline_jax_lite/full`
+    approximations leave open (case6 was 0/30 vs live v1 with them).
+    """
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v1_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
+# v4 / v8: case4 / case8 baseline. PFSP pool diversity. v8 has predict cache
+# (case8 addition) — reset before each oracle call to avoid `id(initial_by_id)`
+# collision in tight loops (project_case_jax_phase0 memory).
+def _host_python_v4_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case4.baseline.agent import agent as _v4_agent
+
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v4_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+def _host_python_v8_action(state: EnvState, seat: int) -> "_np.ndarray":
+    from orbit_wars_jax.observation import state_to_obs as _state_to_obs
+
+    from pipeline.rulebase.case8.baseline.agent import agent as _v8_agent
+    from pipeline.rulebase.case8.baseline.core.physics import (
+        reset_predict_cache as _reset_v8_cache,
+    )
+
+    _reset_v8_cache()
+    obs = _state_to_obs(state, player=int(seat))
+    moves = _v8_agent(obs)
+    out = _np.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=_np.float32)
+    out[:, 1:] = 0.0
+    for j, mv in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        out[j] = [float(mv[0]), float(mv[1]), float(mv[2])]
+    return out
+
+
+def _python_v4_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v4_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
+def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
+    return jnp.asarray(
+        jax.pure_callback(
+            _host_python_v8_action,
+            _PYTHON_V1_PROTO,
+            state,
+            player,
+            vmap_method="sequential",
+        )
+    )
+
+
+def _rollout_one_env(
+    model: ActorCriticJax,
+    key: jax.Array,
+    init_state: EnvState,
+    horizon: int,
+    shaping_coef: float,
+    seat: int,
+    opponent_mode: int,
+    shaping_mode: int,
+    opp_model: ActorCriticJax,
+) -> JaxRolloutBatch:
+    """Single-env rollout via `lax.scan`.
+
+    `init_state` is a JAX `EnvState` that the caller already built (via
+    `reset(seed=...)` on host). Threading it as a JAX array — instead
+    of taking `seed: int` and calling `reset` inside the body — keeps
+    the jit cache to ONE trace regardless of how many distinct seeds
+    we run. The earlier `seed: int` arg caused per-seed recompilation
+    and ate >3 GB of cache on RunPod (root cause of the
+    `bench_rollout_gpu` SIGABRT during the 16-ep variant).
+    """
+    init_history = init_history_jax()
+
+    # Initial shaping diff (ship-based or planet-count-based per shaping_mode).
+    init_diff = _shaping_diff(init_state, seat, shaping_mode)
+
+    def step_fn(
+        carry: tuple[
+            EnvState,
+            HistoryStateJax,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+        ],
+        _t: jax.Array,
+    ) -> tuple[
+        tuple[
+            EnvState,
+            HistoryStateJax,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+        ],
+        tuple[
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+        ],
+    ]:
+        state, history, prev_diff, done_already, key, ep_outcome = carry
+        key, k_sample = jax.random.split(key)
+        batch = featurize_jax_w1(state, player=seat, history=history)
+        output = model(batch)
+        action = sample_action_jax(output, batch.my_planet_mask, k_sample)
+
+        # Build env action for seat=0 (we control seat 0); opponent is
+        # noop so other rows stay -1.
+        target_slot_2d = action.target_slot[0]  # (P,) since batch=1
+        log1p_ships_2d = action.log1p_ships[0]
+        my_planet_mask_2d = batch.my_planet_mask[0]
+        env_actions = sampled_action_to_env_actions(
+            target_slot_2d,
+            log1p_ships_2d,
+            state.planet_xy,
+            state.planet_ships,
+            state.planet_id,
+            state.planet_valid,
+            my_planet_mask_2d,
+            seat,
+            NUM_AGENTS_MAX,
+        )
+
+        # Opponent row (seat 1-seat). For noop we leave the -1 sentinels
+        # already written by sampled_action_to_env_actions. For
+        # baseline_jax_{lite,full} we compute its (L, 3) row and splice it in.
+        # For self_snapshot we featurize the opponent seat, run the frozen
+        # opp_model forward, and take the deterministic (argmax) action.
+        opp_seat = jnp.int32(1) - jnp.int32(seat)
+        opp_lite_actions = _baseline_jax_actions(state, 1 - seat)  # (L, 3)
+        opp_full_actions = _baseline_jax_full_actions(state, 1 - seat)  # (L, 3)
+        opp_snapshot_actions = _self_snapshot_opponent_actions(
+            opp_model, state, 1 - seat
+        )  # (L, 3)
+        opp_python_v1_actions = _python_v1_opponent_actions(
+            state, 1 - seat
+        )  # (L, 3) via pure_callback to real Python baseline_v1
+        opp_python_v4_actions = _python_v4_opponent_actions(state, 1 - seat)  # (L, 3)
+        opp_python_v8_actions = _python_v8_opponent_actions(state, 1 - seat)  # (L, 3)
+        # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
+        opp_actions = jax.lax.switch(
+            jnp.clip(opponent_mode, 0, 6),
+            [
+                lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
+                lambda: opp_lite_actions,
+                lambda: opp_full_actions,
+                lambda: opp_snapshot_actions,
+                lambda: opp_python_v1_actions,
+                lambda: opp_python_v4_actions,
+                lambda: opp_python_v8_actions,
+            ],
+        )
+        # Splice into env_actions row for opponent seat only when not noop.
+        env_actions = jax.lax.cond(
+            opponent_mode != OPPONENT_NOOP,
+            lambda ea: ea.at[opp_seat].set(opp_actions),
+            lambda ea: ea,
+            env_actions,
+        )
+
+        # Step env. Either advance, or hold if already done (so shapes
+        # stay constant during scan).
+        new_state, _r, term = jax_env_step(state, env_actions)
+        # If we're already past terminal, freeze.
+        state_for_next = jax.tree.map(
+            lambda new, old: jnp.where(done_already, old, new),
+            new_state,
+            state,
+        )
+
+        # Shaping reward: shaping_coef * Δ(my − enemy) using either ship
+        # totals (legacy) or planet count (F: cleaner territorial signal).
+        diff = _shaping_diff(state_for_next, seat, shaping_mode)
+        shaping = shaping_coef * (diff - prev_diff)
+
+        # Terminal reward: env emits rewards on termination; turn into
+        # ±1/0 by comparing the env's rewards for both seats.
+        rewards_arr = state_for_next.rewards
+        r_self = rewards_arr[seat]
+        r_opp = rewards_arr[1 - seat]
+        terminal_reward = jnp.where(
+            term, jnp.sign(r_self - r_opp).astype(jnp.float32), jnp.float32(0.0)
+        )
+        step_reward = jnp.where(
+            done_already, jnp.float32(0.0), shaping + terminal_reward
+        )
+        new_done = done_already | term
+        # Outcome: cumulative reward (= terminal sign + shaping, just
+        # like the torch path).
+        new_outcome = ep_outcome + step_reward
+
+        # Update history AFTER featurize, mirroring the torch loop's
+        # `update_history(history, obs, actions=actions_list)` call at the
+        # end of the step. The history pytree needs the planet snapshot
+        # at the current state and any launch events.
+        # For the W4 spike, we pass empty actions to history (no launches
+        # tracked); a follow-up will track real launches.
+        empty_pid = jnp.full((4,), -1, dtype=jnp.int32)
+        empty_ships = jnp.zeros((4,), dtype=jnp.int32)
+        empty_valid = jnp.zeros((4,), dtype=jnp.bool_)
+        new_history = update_history_jax(
+            history,
+            state,
+            empty_pid,
+            empty_ships,
+            empty_valid,
+            player=seat,
+        )
+
+        # Pack per-step transition.
+        per_step = (
+            batch.planet_feats[0],
+            batch.planet_mask[0],
+            batch.my_planet_mask[0],
+            batch.target_mask[0],
+            batch.global_feats[0],
+            batch.template_ctx[0],
+            batch.candidate_feats[0],
+            batch.candidate_mask[0],
+            batch.candidate_pid[0],
+            action.target_slot[0],
+            action.log1p_ships[0],
+            action.log_prob[0],
+            output.value[0],
+            step_reward,
+            ~done_already,  # done_mask = step is valid (pre-terminal)
+        )
+        new_carry = (
+            state_for_next,
+            new_history,
+            diff,
+            new_done,
+            key,
+            new_outcome,
+        )
+        return new_carry, per_step
+
+    init_carry = (
+        init_state,
+        init_history,
+        init_diff,
+        jnp.bool_(False),
+        key,
+        jnp.float32(0.0),
+    )
+    final_carry, traj = jax.lax.scan(
+        step_fn, init_carry, jnp.arange(horizon, dtype=jnp.int32)
+    )
+    (
+        planet_feats_t,
+        planet_mask_t,
+        my_planet_mask_t,
+        target_mask_t,
+        global_feats_t,
+        template_ctx_t,
+        candidate_feats_t,
+        candidate_mask_t,
+        candidate_pid_t,
+        target_slot_t,
+        log1p_ships_t,
+        log_probs_t,
+        values_t,
+        rewards_t,
+        done_mask_t,
+    ) = traj
+    ep_outcome = final_carry[5]
+    return JaxRolloutBatch(
+        planet_feats=planet_feats_t,
+        planet_mask=planet_mask_t,
+        my_planet_mask=my_planet_mask_t,
+        target_mask=target_mask_t,
+        global_feats=global_feats_t,
+        template_ctx=template_ctx_t,
+        candidate_feats=candidate_feats_t,
+        candidate_mask=candidate_mask_t,
+        candidate_pid=candidate_pid_t,
+        target_slot=target_slot_t,
+        log1p_ships=log1p_ships_t,
+        log_probs=log_probs_t,
+        values=values_t,
+        rewards=rewards_t,
+        done_mask=done_mask_t,
+        episode_outcomes=ep_outcome,
+    )
+
+
+def collect_rollout_jax(
+    model: ActorCriticJax,
+    key: jax.Array,
+    episodes_per_iter: int,
+    *,
+    horizon: int = 500,
+    shaping_coef: float = 0.001,
+    seat: int = 0,
+    seed: int = 0,
+    opponent: str = "noop",
+    shaping_mode: str = "ships",
+    opp_model: ActorCriticJax | None = None,
+) -> JaxRolloutBatch:
+    """Run N parallel single-seat rollouts.
+
+    Per-episode keys are derived from `key` via `jax.random.split`; per-
+    episode env seeds are `seed, seed + 1, ..., seed + N - 1`. `opponent`
+    selects the rule used for the other seat:
+      - "noop": always emit empty actions (default, fastest)
+      - "baseline_jax_lite": JAX rule-based agent under
+        `pipeline/rulebase/case1/baseline_jax/` (intended PPO curriculum
+        target — roughly mirrors the Python `baseline_v1` strategy with
+        a single-pass priority score).
+      - "self_snapshot": frozen self-snapshot agent (`opp_model`) plays the
+        opponent seat deterministically. `opp_model` must be supplied for
+        this mode; for all other modes it is unused and defaults to `model`
+        so the pytree structure threaded into vmap stays valid (H1: PFSP
+        self-play foundation).
+    """
+    if opponent not in OPPONENT_NAME_TO_MODE:
+        raise ValueError(
+            f"unknown opponent={opponent!r}; supported: {sorted(OPPONENT_NAME_TO_MODE)}"
+        )
+    if shaping_mode not in SHAPING_MODE_NAME_TO_INT:
+        raise ValueError(
+            f"unknown shaping_mode={shaping_mode!r}; "
+            f"supported: {sorted(SHAPING_MODE_NAME_TO_INT)}"
+        )
+    if opponent == "self_snapshot" and opp_model is None:
+        raise ValueError("opponent='self_snapshot' requires opp_model to be supplied")
+    opponent_mode = jnp.int32(OPPONENT_NAME_TO_MODE[opponent])
+    shaping_mode_int = jnp.int32(SHAPING_MODE_NAME_TO_INT[shaping_mode])
+    # Unused for non-snapshot opponents, but threaded so the vmap pytree
+    # structure stays valid regardless of mode.
+    effective_opp_model = model if opp_model is None else opp_model
+
+    keys = jax.random.split(key, episodes_per_iter)
+    # Build all N initial states on host (reset is Python-side), then
+    # stack into a single batched EnvState so vmap can broadcast model
+    # parameters across the episode axis. This keeps the jit cache to
+    # ONE compilation regardless of episode count.
+    init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
+    batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
+
+    # vmap over (key, init_state); model + scalar args + opp_model broadcast.
+    vmapped = jax.vmap(
+        _rollout_one_env, in_axes=(None, 0, 0, None, None, None, None, None, None)
+    )
+    return vmapped(
+        model,
+        keys,
+        batched_state,
+        horizon,
+        shaping_coef,
+        seat,
+        opponent_mode,
+        shaping_mode_int,
+        effective_opp_model,
+    )
+
+
+__all__ = [
+    "JaxRolloutBatch",
+    "collect_rollout_jax",
+]
