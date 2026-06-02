@@ -422,6 +422,29 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
+    # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
+    # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
+    # P(X|Y,Z)) に置き換えた case。学習レシピ・backbone は case3 と完全同一で、
+    # head 構造のみを変えて性能・収束速度の改善を検証する純粋 ablation。
+    "reinforce_case4_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case4_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case4.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case4/configs/kaggle_jax_train.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case4_kaggle_jax_smoke: short 6-iter JAX smoke for case4 used to
+    # verify the 3-head wiring end-to-end before the full 200-iter run.
+    "reinforce_case4_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case4_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case4.training.train_jax",
+        "config_arg": "--config pipeline/reinforce/case4/configs/kaggle_jax_smoke.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case5: case3 を丸ごと継承し support (補助) reward を検証する case。
     # H1 = ship 差分と planet 差分を個別係数で同時加算する combined shaping。
     # docs/experiment/reinforce/20260527_case5_support_reward/ 参照。
