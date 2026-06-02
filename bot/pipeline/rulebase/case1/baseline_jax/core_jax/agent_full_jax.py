@@ -207,3 +207,12 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     actions = jnp.stack([from_pid, angle_col, ships_col], axis=-1)
     assert actions.shape == (MAX_LAUNCHES_PER_AGENT, 3)
     return actions
+
+
+from functools import partial  # noqa: E402
+
+
+@partial(jax.jit, static_argnames=("seat",))
+def compute_actions_jax_jit(state: EnvState, seat: int) -> jax.Array:
+    """jit-compiled entry (seat static). Use this in self-play/vmap rollouts."""
+    return compute_actions_jax(state, seat)
