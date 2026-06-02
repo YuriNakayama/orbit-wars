@@ -165,3 +165,36 @@ JAX の `need = ceil(target.ships)+1` は **in-flight 友軍 fleet を無視**�
 2. 修正後に mismatch 分類を再測 (py_hold/jax_fire が減るか)。
 3. tripwire も再測 (over-fire 解消で 0勝脱出を期待)。
 4. これが効けば「劣化なし」に最短到達。reinforce 等はその後。
+
+---
+
+# 経過 6 (2026-06-03 ~03:15) — 残 over-fire の精密診断
+
+## projection fix で 4%→11%。残 over-fire 195 を深掘り
+
+具体例 (seed0 t32, src=24 が 6 ships 発射、Python は hold):
+- src=24 の到達可能 target を JAX need で評価:
+  | target | ships | #in-flight | proj@5turn | need@5 |
+  |--------|-------|-----------|-----------|--------|
+  | 19 | 9 | 0 | neutral,9 | 10 |
+  | 22 | 20 | 0 | neutral,20 | 21 |
+  | 6 | 45 | 0 | neutral,45 | 46 |
+  | **26** | 14 | **1 (enemy)** | **enemy,2** | **3** |
+- → JAX は target26 を「敵 fleet が削るので need=3、6 ships で安く取れる」と判断し発射。
+  **Python は hold** (敵が捕る寸前の planet を横取りしない / score が低い)。
+
+## 所見
+
+残 over-fire は **gross bug でなく nuanced な score/guard 差**。JAX は enemy-contested
+planet を「安い snipe」と見て撃つが、本物は撃たない。原因候補:
+(a) target_value に indirect_wealth=0 で渡している (本物は非0) → score 過大
+(b) snipe mission の score modifier / build_snipe_mission の閾値未 port
+(c) 敵が捕る planet への横取り抑制ロジック未 port
+
+projection fix 自体は正しい (11% へ前進)。次は (a) indirect_wealth を wire (score 精度)
+→ 効果を full-game 一致 + py_hold_jax_fire で測る。
+
+## NEXT ACTION
+1. indirect_wealth_map を JAX 化し target_value に wire (score 過大の最有力原因)
+2. 再診断 (py_hold_jax_fire が減るか)
+3. 残れば snipe / 横取り抑制を調査 (web search も可)
