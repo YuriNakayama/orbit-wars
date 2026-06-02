@@ -561,3 +561,25 @@ agent を gate する。
 ## NEXT
 1. 修正後の gate (10-game, full port) が GREEN か確認 (standalone では 8/10)。
 2. 以降 swarm 等の byte-parity 改修は「test 経由の full port」で gate。
+
+---
+
+# 経過 21 (2026-06-03 ~08:15) — vmapped self-play 動作確認 (RL opponent 用途)
+
+- agent_full_jax が jax.jit(jax.vmap(one_step)) で B=8 batched JAX vs JAX self-play
+  step 可能 (compile 3.34s, vmap clean = GPU-ready)。CPU 6 env-steps/s (full agent ×
+  16 を CPU で回すため重い、GPU で並列化が本来用途)。
+
+## 到達点
+| 要求 | 状態 |
+|------|------|
+| 結合テスト (JAX vs 元Python, ローカル高速) | ✅ jit gate, 1試合<10分 |
+| 劣化なし (0勝回避) | ✅ 10-game ≥3 gate GREEN (8/10) |
+| full JAX (vmap clean) | ✅ capture+reserve+plan_shot guards |
+| byte-parity 100% | 49.6% (swarm score-interleave 残) |
+| GPU 高速化 | vmap 動作確認、bench は RunPod 次第 |
+
+## NEXT
+1. swarm score-interleave 厳密 port (10-game gate 維持条件)。
+2. GPU vmap 速度 bench (RunPod)。
+3. reinforce/case6 PFSP opponent enum に登録 (RL 投入)。
