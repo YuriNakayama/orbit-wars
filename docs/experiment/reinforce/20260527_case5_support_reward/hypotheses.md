@@ -1,0 +1,80 @@
+# Hypotheses — reinforce/case5 support_reward
+
+> 作成日: 2026-05-27
+> 最終更新: 2026-06-01 (iter7 完了、H6 time bonus rejected。全 7 仮説消化完了)
+> 状態: completed
+> 最大 iteration: リスト消化まで (deepen も許可)
+> 主要メトリクス: 合成指標 — vs `baseline_jax_lite` の **last-10 iter 平均 win_rate** と 学習 **reward trend (右肩上がり度)** を同時評価 (収束速度 + 最終性能)
+> 既定 episode 数: 128 / iter (case3 確立レシピを継承した `kaggle_jax_train.yaml` 準拠、sample variance 半減済)
+
+## スコープと固定軸
+
+case5 の **support (補助) reward 追加** にスコープを絞る。現行報酬は
+`terminal ±1 + shaping_coef · Δ(mine − enemy)` で、`shaping_mode` は
+`ships` / `planets` の **排他**二択 (採用値 `planets`, `coef=0.50`)。本 case では
+ship / 惑星の **保持割合・保持数** 等を補助報酬として加え、収束速度と最終性能の
+向上を検証する。
+
+以下は **固定** (case2 ablation で確立済みの学習レシピ、`kaggle_jax_train.yaml`)。
+report shaping 以外の変更は本 case では行わない。
+
+| 軸 | 固定値 | 出典 |
+|----|--------|------|
+| Backbone / Head | case1 純正 PerPlanetHead (from_head 無し) | case5 = case3 のレシピ継承 (case3 自体は case2 から from_head 除去) |
+| opponent | curriculum (early=noop / late=baseline_jax_lite, switch_iter=5) | H4 best |
+| lr / decay | 3e-5 → 3e-6 線形 (lr_schedule_steps=100000) | H + D |
+| gamma / gae_lambda | 0.995 / 0.95 | — |
+| entropy_coef / target_kl | 0.02 / 0.02 | G |
+| episodes_per_iter / horizon | 128 / 500 | S / J 撤回 |
+| iterations | 200 (long-run) | H6 |
+| 既存 shaping baseline | `shaping_mode=planets`, `shaping_coef=0.50` | Y / F |
+
+## 実施しない検証 / 評価 (skip list)
+
+### 評価
+- ローカル self-play 300 対戦は実施しない (学習中の last-10 win_rate (vs baseline_jax_lite, in-training) と reward trend のみで採否)
+- Kaggle publicScore は引用しない (project rule)
+- skill rating は使わない (project rule)
+
+### 分析
+- n<300 結果で結論を出さない (default ON、memory `project_imitation_case1_phase3` 由来)
+- replay 分析 (experiment-analysis) は実施する (300 対戦 skip のため、采否は学習メトリクス主体だが replay は補助として残す)
+
+### 実行
+- なし (smoke test / `dev/test-bot` / RunPod GPU / auto-recover はすべて実施)
+- case5 JAX 学習は 24GB+ VRAM 必須 (memory `project_runpod_a4000_oom`)。A4000 16GB は避け RTX 3090/4090 系を使う
+
+### 例外条件
+- H3 (絶対保持数の非差分加算) は potential-based でなく policy をバイアスさせる可能性 (Ng 1999)。
+  inconclusive ではなく **明確に劣化/引き伸ばし傾向が出た場合** はそこで rejected とし deepen しない。
+
+## 仮説リスト (priority 順)
+
+- [x] (P1) H1: ship 差分と planet 差分を **同時併用** shaping (`coef_ship·Δship + coef_planet·Δplanet`) — 現状は排他二択。両領域の状態を同時に密フィードバック。potential-based を保ちバイアス無し。 — **inconclusive (trend は adopted 寄り)** (iter1: lite phase last-10 0.549 / trend +0.376, baseline 比 +~5pp。max approx_kl 0.0055 で安定、200 iter 完走。n<300 で確定保留)
+- [x] (P1) H2: 保持「**割合**」差分 shaping (potential = `mine/(mine+enemy)` を ship・planet で算出し、その turn 差分を報酬) — 絶対数の production スケール依存を排し [0,1] 正規化で係数調整が容易。 — **adopted** (iter2: lite last-10 **0.763** / trend +0.651, H1 比 **+21pp**。割合正規化で value_loss 0.43→0.005 が決定打。max approx_kl 0.0047 で安定。n<300 で確定保留だが noise floor 大幅超過)
+- [x] (P2, depends on H1) H4: 併用時の `coef_ship : coef_planet` **比率 sweep** → ratio 文脈に再定義し ratio mode の shaping_coef sweep (0.50→1.0) で実施 — **adopted** (iter3: lite last-10 **0.820** / trend +0.668, H2(coef=0.50) 比 **+5.6pp**。ratio [0,1] 正規化で coef 倍増でも over-shaping なし (value_loss 0.0066, approx_kl 0.005)。現行最良構成。coef さらに上げる余地あり)
+- [x] (P2) H5: **production potential** 補助 (保有惑星の production 合計の差分を shaping) → ratio coef=1.0 base に重畳 (ratio_prod: planet を production 加重保持割合に) で実施 — **rejected** (iter4: lite last-10 **0.771**, H4 count-based 0.820 比 **-4.9pp**。高 prod 惑星 (home 等) に報酬偏重し惑星数=領域の広さ確保を軽視する副作用。count ベース H4 が最良維持。production 系は打ち切り)
+- [x] (P2, depends on H2) H7: 保持割合差分の **clip / 正規化** で報酬スケール安定化 (H2 派生) — **inconclusive (clip 不要を確認)** (iter5: lite last-10 **0.8234** / trend +0.585, H4 比 **+0.34pp** で seed variance 域、trend/max は H4 比劣後、value_loss 0.0066→0.0080 微増。H4 で既に value/KL 安定のため clip 改善余地なし。H4 維持推奨)
+- [x] (P3, 対照) H3: **絶対保持数の非差分 dense 加算** (`coef · (mine_ships or mine_planets)` を毎 turn) — **rejected (PBRS必要性実証)** (iter6: lite last-10 1.0000 だが win_rate **inflation**, value_loss 7163 で value 学習破綻。Ng 1999 教科書通りの非PBRS加算バイアス。H4 PBRS 維持確定。例外条件適用で deepen なし)
+- [x] (P3, pair with H3) H6: 勝ちターン短縮 **time bonus** (早期勝利に terminal bonus / 引き伸ばしに小ペナルティ) — **rejected** (iter7: lite last-10 **0.7625** / trend +0.584, H4 比 **-5.75pp**。value_loss 0.0088, approx_kl 0.0022 で学習自体は健全。time_bonus_coef=0.5 が PBRS 信号 (±0.05) より遥かに大きく、policy が「速く勝て」バイアスに過剰適応しリスクを取りすぎ最終勝率低下。H4 では引き伸ばしが問題化していなかったため対策が空振り。例外条件適用で deepen なし)
+
+## Iteration log
+
+(各 iter 完了時に experiment-analysis / experiment が追記)
+
+| iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
+|---|---|---|---|---|---|---|---|
+| 1 | 2026-05-27T15:16Z | H1 | iter1_plan.md | 20260527-151636__feature-support-reward__2f37b9e__seed0 | last-10 0.549 / trend +0.376 (lite phase) | inconclusive (trend は adopted 寄り) | iter1_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 2 | 2026-05-27T18:23Z | H2 | iter2_plan.md | 20260527-182312__feature-support-reward__c359b68__seed0 | last-10 0.763 / trend +0.651 (lite phase, H1 比 +21pp) | adopted | iter2_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 3 | 2026-05-28T00:48Z | H4 | iter3_plan.md | 20260528-004854__feature-support-reward__8e2e4a3__seed0 | last-10 0.820 / trend +0.668 (lite, H2 比 +5.6pp, coef 0.50→1.0) | adopted | iter3_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 4 | 2026-05-28T05:01Z | H5 | iter4_plan.md | 20260528-050116__feature-support-reward__531f725__seed0 | last-10 0.771 / trend +0.601 (lite, H4 比 -4.9pp) | rejected | iter4_result.md (analysis: 学習ログ baseで実施、replay skip) |
+| 5 | 2026-05-29T23:13Z | H7 | iter5_plan.md | 20260529-231332__feature-support-reward__7da3e2c__seed0 | last-10 0.8234 / trend +0.585 (lite, H4 比 +0.34pp seed variance 域) | inconclusive (clip 不要を確認、H4 維持) | iter5_result.md (analysis: 学習ログ baseで実施、replay skip。A100 one-off: RunPod consumer 全 phantom 障害のため) |
+| 6 | 2026-05-31T02:19Z | H3 | iter6_plan.md | 20260531-021927__feature-support-reward__dc1fa41__seed0 | last-10 1.0000 (inflation!) / value_loss 7163 (H4 比 ~1M×) | rejected (PBRS必要性実証、win_rate inflation で実力向上ではない) | iter6_result.md (analysis: 学習ログ baseで実施、replay skip。RTX 4090 SECURE, ~$1.8) |
+| 7 | 2026-05-31T12:26Z | H6 | iter7_plan.md | 20260531-122618__feature-support-reward__eb4092b__seed0 | last-10 0.7625 / trend +0.584 (lite, H4 比 -5.75pp) | rejected (time_bonus_coef=0.5 過大で risk-seeking バイアス。H4 では引き伸ばし問題化していないため対策空振り) | iter7_result.md (analysis: 学習ログ baseで実施、replay skip。RTX 4090 SECURE, ~$2.4) |
+| — | 2026-06-01T01:35Z | (loop end) | — | — | — | completed: 全 7 仮説消化 (adopted×2 / inconclusive×2 / rejected×3)。H4 (iter3, 0.820) が最良構成 | — |
+
+## 参考 (References)
+
+- [Ng, Harada, Russell (1999) — Policy Invariance under Reward Transformations](https://www.emergentmind.com/topics/potential-based-reward-shaping) — PBRS は potential 関数 Φ の状態間差分で報酬を整形すれば最適方策が不変。現 case5 の Δ(mine−enemy) shaping はこの族に属し、H1/H2/H5/H7 も potential-based で設計。H3 の絶対量加算は非 PBRS でバイアス源。
+- [Improving the Effectiveness of Potential-Based Reward Shaping in RL (arXiv 2502.01307)](https://arxiv.org/html/2502.01307v1) — PBRS の効果は初期 Q 値・外部報酬とのバランス依存。shaping_coef のスケール調整 (H4/H7) が sample 効率に効く根拠。
+- [Reward Shaping for Improved Learning in RTS Game Play (arXiv 2311.16339)](https://arxiv.org/pdf/2311.16339) — RTS でゲームイベント別の shaping が勝率と学習時間を改善し得る一方、不適切な設計は害。ship/planet/economy など複数信号の併用 (H1/H5) と、害になり得る項 (H3) の対照という構成を支持。

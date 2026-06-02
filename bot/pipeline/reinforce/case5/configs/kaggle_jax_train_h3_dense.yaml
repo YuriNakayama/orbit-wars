@@ -1,0 +1,65 @@
+# reinforce/case5 — support_reward H3 (絶対保持数の非差分 dense 加算 — 対照群)
+#
+# H4 (ratio coef=1.0) が lite last-10 0.820 で現行最良。H1〜H5/H7 は全て PBRS
+# (Δ ベース) だが、本 config は **非 PBRS** な絶対保持数の dense 加算を H4 base に重畳:
+#   reward = c_ship·ΔΦ_ship + c_planet·ΔΦ_planet  + (dense_coef_ship·ship_mine + dense_coef_planet·plt_mine)
+# ⚠️ Ng et al. 1999 が警告する非 potential 加算: 最適方策をバイアスさせる
+# (貯め込み・引き伸ばし)。期待は **H4 比で劣化**、PBRS の必要性を実証する対照群。
+#
+# 差分点 (= kaggle_jax_train_h4_ratio_coef1.yaml):
+#   - dense_coef_ship: 0.0 → 0.01 (ship 数 ≈ 数十〜数百/turn × 0.01 ≈ 0.1〜1/turn の加算)
+#   - dense_coef_planet: 0.0 → 0.1 (planet 数 ≈ 数個/turn × 0.1 ≈ 0.5〜1/turn の加算)
+#   - shaping_clip: 0.0 維持 (clip と独立に dense を見る)
+#   それ以外は H4 と完全同一 (shaping_mode=ratio / shaping_coef=1.0 / 200 iter / curriculum 等)。
+#
+# 採否: H4 (0.820) 比 +3pp で dense 採用、明確に劣化なら rejected (PBRS 必要性確認)、
+#       seed variance 域 (n<300) なら inconclusive。例外条件: 引き伸ばし傾向で明確劣化なら deepen しない。
+# GPU: 3090/4090 限定 (consumer, A100 不可)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 200
+  episodes_per_iter: 128
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 1.0       # H4 据え置き (ratio 信号)
+  shaping_mode: ratio
+  shaping_clip: 0.0       # clip なし
+  dense_coef_ship: 0.01   # H3: ship 絶対量の dense 加算
+  dense_coef_planet: 0.1  # H3: planet 絶対量の dense 加算
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: baseline_jax_lite
+
+output:
+  run_dir: data/output/models/reinforce/case5_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
