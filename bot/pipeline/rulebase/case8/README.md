@@ -36,6 +36,28 @@ case4 と同型。差分は:
   `reset_predict_cache()` を追加
 - `baseline/agent.py` の `agent(obs)` 先頭で `reset_predict_cache()` を呼び出し
 
+## Fully-JAX エージェント (`baseline_jax/`)
+
+case8 (= baseline_v8) の決定パイプラインを **忠実に** fixed-shape JAX へ移植した版。
+近似 (`case1/baseline_jax*` の per-source argmax) ではなく **本物のアルゴリズム**
+(mission scoring → `argsort(-score)` → 逐次 greedy global allocator) を `lax.scan` で
+再現し、`jax.vmap` でゲーム間を並列実行して GPU 上で高速に self-play / データ生成 /
+学習相手として回せる。元は `feature/jax-rulebase-agent` ブランチの `case_jax` で、case8 に集約した。
+
+| パス | 役割 |
+|------|------|
+| `baseline/` | case8 Python agent (上記)。**JAX parity の正解 (oracle)** を兼ねる |
+| `baseline_jax/` | JAX 本体。`geometry/physics/aim` は case2 から複製 (parity 済)、scoring/missions/allocator/movements は新規。entry は `agent_jax.compute_actions` |
+| `_bench/selfplay_gpu/` | vmap self-play の GPU throughput + 勝率 sanity bench |
+
+- **強さゲート**: `compute_actions` (JAX) vs `baseline_v8` (Python) を 300 戦自己対戦し
+  勝率 45-55% (Wilson CI が 50% を含む)。
+- **速度ゲート**: vmap JAX self-play が CPU per-turn 版に対し明確な throughput 向上。
+- **Kaggle submit 対象外**: 本体 (`baseline_jax/` / `_bench/`) は学習・評価・データ生成専用で、
+  `pipeline/.submitignore` で archive から除外。Kaggle 提出は従来通り `main.py` → `baseline/` が担う。
+- parity test: `tests/unit/pipeline/rulebase/case8/test_*_jax_parity.py`、
+  vmap self-play e2e: `tests/e2e/pipeline/rulebase/case8/test_selfplay_jax.py`。
+
 ## 関連 docs
 
 - `docs/experiment/rulebase/20260504_case8_multistep_optimization/` — 全 iter 記録
