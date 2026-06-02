@@ -295,8 +295,21 @@ over-fire 解消の裏で **py_fire/jax_hold が 0→154 に増加**。JAX が�
 なった = guards (or aim_ok) が本物が撃つ shot も一部 reject。次の調査対象。
 both_diff=84 も残る (撃つが内容違い)。
 
-## NEXT ACTION
-1. tripwire 再測 (over-fire 解消で 0勝脱出したか) ← 実行中
-2. pf_jh=154 の診断: JAX が hold する turn で Python が撃つ target を特定
-   (guards が厳しすぎ? reinforce mission 未実装で hold? aim_ok 過剰 reject?)
-3. full-game 一致 49.6% → さらに上げる。
+## 🎯 tripwire GREEN: JAX won 2/4 vs Python — 0勝問題 解決
+
+**tripwire 0/4 → 2/4** (mirror-ish match で期待通りの ~50%)。**ユーザーの核心要求
+「JAX 化で勝率ほぼ0」が解決**。over-fire (ship 過剰投入で自陣手薄) が 0勝の主因で、
+plan_shot guards 修正でそれが解消 → 勝てるようになった。
+
+達成基準の到達状況:
+| 基準 | 状態 |
+|------|------|
+| 高速 (1試合≤10分) | ✅ jit 1game 14.3s |
+| 劣化なし (tripwire ≥1勝) | ✅ **2/4** |
+| full-game action 100%一致 | 進行中 (49.6%) — 完全一致は残課題だが劣化問題は解決済 |
+
+## NEXT ACTION (劣化は解決、精度向上フェーズ)
+1. pf_jh=154 の診断: JAX が hold する turn で Python が撃つ target を特定
+   (reinforce mission 未実装で hold? guards 厳しすぎ?)
+2. full-game 一致 49.6% → さらに上げ、tripwire を 300戦規模で確認 (劣化が確実にないか)
+3. reinforce / swarm mission 追加で完全一致に近づける。
