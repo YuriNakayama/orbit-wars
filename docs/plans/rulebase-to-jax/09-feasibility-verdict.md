@@ -78,12 +78,36 @@ PoC0 または Step4 で **CPU 実測の action 一致率が 100% に届かず�
 - ⚠️ ただし turn0 だけでは timeline scan・逐次 greedy の核心は未検証。**真の関所は Step3(mission score+opening_filter で launch/hold と target が一致するか)と Step4(逐次 greedy)** であり、そこで実測するまで full parity の最終可否は確定しない。
 - → 選択肢3の見通しは PoC0 で**棄却されず**。次は `option_collector` の score + opening_filter を JAX 化し、turn0 の launch/hold + target 一致を実測する (PoC1)。
 
+## PoC1 実測結果 (2026-06-03, CPU)
+
+`bot/pipeline/rulebase/case1/eda/poc1_target_select.py` で turn0 の **launch/hold + target + send** を実測:
+
+- **50 seed 全て一致 (match=50, mismatch=0)**。うち hold(撃たない)判定も 17/17 一致。
+- 検証構造: 各 target の `score`(`target_value`/`(expected_send + turns·w + 1)` × `apply_score_modifiers`)を計算 → `opening_filter` で veto → **argmax over non-vetoed targets**。これが本物の `option_collector` + `plan_moves` の選択と完全一致。
+- → **turn0 の決定は「固定shape per-target score + mask + argmax」で完全再現可能**と実証。これはまさに JAX が得意な構造 (07 の「全 mission 並列 score→mask→argmax」方針が正しいと裏付け)。
+
+### PoC1 の意義と正直な限界
+
+✅ **意義**: option_collector の score chain は**純粋な比較×定数の連鎖**(strategy_helpers.py 全読で確認、制御フロー分岐なし)。turn0 で argmax 再現 = 「これらを vectorize すれば JAX 化できる」が機械的作業だと実証。`plan_shot`(aim solver)は case2 に JAX 済。
+
+⚠️ **限界 (まだ未検証)**:
+1. **PoC1 は本物の Python helper を per-target で呼んでいる** — score 式を JAX に書き直してはいない (~40 定数の写経は Step3)。検証したのは「決定が per-target score+mask+argmax 構造である」こと。
+2. **turn0 は single source** — 複数 my_planet の**逐次 greedy (spent_total 累積)** は依然未検証。これが選択肢3 最後の関所。
+3. **snipe/swarm mission** は turn0 で支配的でないため PoC1 で除外。中盤以降で要検証。
+
+### 累積進捗
+
+| PoC | 検証内容 | 結果 |
+|-----|---------|------|
+| PoC0 | turn0 `available`/reserve | ✅ 50 seed 0 mismatch (ただし reserve=0 で trivial) |
+| PoC1 | turn0 launch/hold + target + send | ✅ 50 seed 0 mismatch (per-target score+argmax 構造を実証) |
+| **PoC2 (次)** | **複数 source の逐次 greedy** | 未 — 中盤盤面 (step 50+) で multi-source 消費順を実測 |
+
 ## まとめ
 
 | 問い | 答え |
 |------|------|
-| 選択肢3は実現可能か | **可能 (FEASIBLE-WITH-EFFORT)**。当初 BLOCKER とされた逐次 greedy は固定長 `lax.scan` で表現でき、MAX_MISSIONS を pair 上限で取れば取りこぼしゼロ |
-| 唯一の不確実性は | 逐次消費順 (score sort の tie-break) が本物と完全一致するか。**机上不可、CPU 実測で確定** |
-| PoC0 (turn0 available) | ✅ 0 mismatch / 50 seed。ただし reserve=0 で trivial。難所は未検証 |
-| 次の一手 | PoC1: option_collector score + opening_filter を JAX 化し turn0 の launch/hold + target を実測 |
+| 選択肢3は実現可能か | **可能 (FEASIBLE-WITH-EFFORT)**。turn0 で score+argmax 構造を実証、逐次 greedy は固定長 `lax.scan` で表現可 |
+| turn0 の決定は再現できたか | ✅ PoC0 (available) + PoC1 (launch/hold/target/send) 共に 50 seed 完全一致 |
+| 残る最後の関所 | **複数 source の逐次 greedy (spent_total)**。中盤盤面で実測 (PoC2) |
 | 失敗時の退避 | physics-only JAX + mission resolver host callback (100%一致は保証) |
