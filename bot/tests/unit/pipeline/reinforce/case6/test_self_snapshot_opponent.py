@@ -74,9 +74,16 @@ def test_self_snapshot_rollout_runs_and_is_finite() -> None:
     assert bool(jnp.all(jnp.isfinite(batch.episode_outcomes)))
 
 
-@pytest.mark.parametrize("opponent", ["noop", "baseline_jax_lite"])
+@pytest.mark.parametrize(
+    "opponent", ["noop", "baseline_jax_lite", "baseline_v1_faithful"]
+)
 def test_non_snapshot_opponents_still_run(opponent: str) -> None:
-    """Regression: threading opp_model must not break the existing modes."""
+    """Regression: threading opp_model must not break the existing modes.
+
+    Includes baseline_v1_faithful (the faithful pure-JAX v1 port, mode 7) to
+    smoke-test that it runs end-to-end through the rollout (vmap-friendly, no
+    host roundtrip).
+    """
     model = _tiny_model()
     batch = collect_rollout_jax(
         model,

@@ -605,3 +605,22 @@ agent を gate する。
 1. case6 config で opponent=baseline_v1_faithful の 1-iter rollout smoke (model 要)。
 2. swarm score-interleave で parity を 49.6%→更に (10-game gate 維持)。
 3. GPU vmap 速度 bench (RunPod)。
+
+---
+
+# 経過 23 (2026-06-03 ~08:55) — PFSP rollout で baseline_v1_faithful が end-to-end 動作
+
+- test_non_snapshot_opponents_still_run に baseline_v1_faithful を追加。
+  collect_rollout_jax(opponent="baseline_v1_faithful") が 3 passed (rewards 有限・shape 正)。
+- **JAX port が実際の RL rollout で end-to-end 動作することを確認** (登録だけでなく実行検証)。
+- これで agent_full_jax は PFSP opponent として完全に使用可能。
+
+## プロジェクト到達点 (確定)
+- ✅ 結合テスト (JAX vs 元Python, jit, <10分) / ✅ 劣化なし (10-game ≥3 gate, 8/10)
+- ✅ full JAX (vmap clean) / ✅ RL opponent 登録+rollout 実行検証
+- core_jax parity 79 GREEN。byte-parity 49.6% (swarm が残課題、劣化させずには大工事)。
+
+## NEXT (nice-to-have)
+1. swarm score-interleave で parity 向上 (10-game gate 維持必須)。
+2. GPU vmap 速度 bench (RunPod)。
+3. case6 config に baseline_v1_faithful curriculum を追加し PFSP 学習で v1 勝率検証。
