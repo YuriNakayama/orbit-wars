@@ -198,3 +198,23 @@ projection fix 自体は正しい (11% へ前進)。次は (a) indirect_wealth �
 1. indirect_wealth_map を JAX 化し target_value に wire (score 過大の最有力原因)
 2. 再診断 (py_hold_jax_fire が減るか)
 3. 残れば snipe / 横取り抑制を調査 (web search も可)
+
+---
+
+# 経過 7 (2026-06-03 ~03:35) — indirect_wealth wire (仮説a 棄却)
+
+## indirect_wealth を JAX 化・wire。parity 0 mismatch だが over-fire 変わらず
+
+- `featurize_jax.indirect_wealth` 実装、実盤面 5 seed で WorldModel.indirect_wealth_map と
+  **0 mismatch**。target_value に wire (これまで 0 を渡していた)。
+- 実測: turn0 20/20 維持、full-match **11.0% で不変**、py_hold_jax_fire **195 で不変**。
+- → **仮説 (a) score 過大の原因は indirect_wealth ではない、と棄却**。indirect_wealth 自体は
+  正しく必要 (full-game score 精度に寄与) なので採用・保持。
+
+## 次の調査方針 (over-fire target26 の Python veto 源を直接特定)
+
+t32 target26 は enemy-contested neutral (my_t=42 >> enemy_t=9, need=3 by JAX)。
+Python が hold する真因を、**本物 option_collector を src=24→target26 で直接呼んで
+どの guard で reject されるか**を切り分ける (score 比較でなく veto 箇所の特定)。
+候補: build_snipe_mission 経路 / target_value が ≤0 / send_cap<needed の partial guard /
+是非 enemy が捕る planet への抑制。次イテレーションで実施。

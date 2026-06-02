@@ -128,6 +128,43 @@ def build_arrival_ledger(
     return slots, etas, fleet_owner
 
 
+INDIRECT_FRIENDLY_WEIGHT = 0.35
+INDIRECT_NEUTRAL_WEIGHT = 0.9
+INDIRECT_ENEMY_WEIGHT = 1.25
+
+
+def indirect_wealth(
+    planet_x: Arr,
+    planet_y: Arr,
+    planet_prod: Arr,
+    planet_owner: Arr,
+    planet_valid: Arr,
+    player: Arr,
+) -> Arr:
+    """Per-planet indirect wealth [P]. Mirrors world_model.indirect_wealth.
+
+    For each planet p, sum over other valid planets o: prod_o/(dist+12) weighted
+    by friendly/neutral/enemy. Skip self and dist<1.
+    """
+    px = planet_x[:, None]
+    py = planet_y[:, None]
+    ox = planet_x[None, :]
+    oy = planet_y[None, :]
+    d = jnp.sqrt((px - ox) ** 2 + (py - oy) ** 2)
+    prod_o = planet_prod[None, :].astype(jnp.float_)
+    factor = prod_o / (d + 12.0)
+    o_owner = planet_owner[None, :]
+    w = jnp.where(
+        o_owner == player,
+        INDIRECT_FRIENDLY_WEIGHT,
+        jnp.where(o_owner == -1, INDIRECT_NEUTRAL_WEIGHT, INDIRECT_ENEMY_WEIGHT),
+    )
+    self_mask = jnp.eye(planet_x.shape[0], dtype=jnp.bool_)
+    valid_pair = planet_valid[None, :] & ~self_mask & (d >= 1.0)
+    contrib = jnp.where(valid_pair, factor * w, 0.0)
+    return jnp.sum(contrib, axis=1)
+
+
 def is_safe_neutral(owner: Arr, my_t: Arr, enemy_t: Arr) -> Arr:
     """owner==-1 and my_t <= enemy_t - SAFE_NEUTRAL_MARGIN."""
     return (owner == -1) & (my_t <= enemy_t - SAFE_NEUTRAL_MARGIN)

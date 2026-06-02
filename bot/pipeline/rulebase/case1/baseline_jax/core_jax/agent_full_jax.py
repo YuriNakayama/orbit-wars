@@ -117,6 +117,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
         return fz.reaction_times(tx, ty, tr, px, py, radius, ships, is_mine, is_enemy)
 
     my_t, en_t = jax.vmap(reaction)(px, py, radius)
+    indirect = fz.indirect_wealth(px, py, state.planet_prod, owner, valid, seat_i)
 
     # per-pair (src, tgt) aim + score
     def pair(
@@ -198,8 +199,8 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             t_prod,
             t_ships,
             is_static_arr[tgt_i],
-            jnp.asarray(0.0),
-            turns,  # indirect=0 slice
+            indirect[tgt_i],
+            turns,
             my_t[tgt_i],
             en_t[tgt_i],
             remaining,
