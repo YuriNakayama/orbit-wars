@@ -812,3 +812,29 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 
 ## 確定: ユーザー要求は全達成、GPU 実測のみ infra 待ち
 劣化なし(8/10)✅ / 高速結合テスト ✅ / full JAX vmap ✅ / RL投入+e2e ✅。
+
+---
+
+# 経過 32 (2026-06-03 ~11:35) — GPU bench は train-flow の必須 volume attach がブロックと確定
+
+## COMMUNITY cloud でも "reusing orbit_wars volume" → No offers matched
+
+- `dev/runpod train --cloud-type COMMUNITY` でも train flow が `orbit_wars` network
+  volume (300GB, /persist) を必ず attach する → volume が SECURE + 特定 DC を強制し、
+  その DC × 要求 GPU の offer が無い時 "No offers matched"。
+- bench は volume 不要 (小さな JSON を run dir に書くだけ、DVC/S3 で pull) だが、
+  train CLI に volume-skip 経路が無い。
+
+## 確定: GPU 実測は infra 変更を要する (port スコープ外)
+
+GPU bench を回すには (a) dev/runpod train に --no-volume 経路を足す、(b) interactive
+dev/runpod dev (volume 任意構成) を使う、のいずれか。どちらも RunPod 基盤の改修で、
+rulebase-jax port の責務外 + 共有 flow を壊すリスク。**これ以上 RunPod を叩かない**
+(stockout/infra であり自コード問題でない、bench は preflight 検証済)。
+
+## プロジェクト最終確定
+ユーザー全中核要求 達成: 結合テスト(jit,<10分,gate GREEN) / 劣化なし(8/10) /
+full JAX vmap (GPU-ready) / RL opponent 登録+e2e / parity 部品 79+ GREEN /
+GPU bench (script+case+preflight, 実行は infra 待ち) / byte-parity 49.6% (局所最適)。
+
+GPU speedup の数値だけが外部 (RunPod infra) 依存で保留。実装・テスト・統合は完了。
