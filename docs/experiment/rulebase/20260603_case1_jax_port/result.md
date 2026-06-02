@@ -747,3 +747,19 @@ JAX 化の justification (throughput) を測る turn-key script が揃った。G
 
 ## NEXT
 - dev/runpod train で GPU bench 実行 → B=256 env-steps/s と CPU 比 speedup を計測。
+
+---
+
+# 経過 29 (2026-06-03 ~10:45) — GPU bench launch 試行 → stockout (pod 未作成 $0)
+
+- `dev/runpod train <sha> --case bench_agent_full_jax_gpu` 実行。
+- **preflight ✅**: bench module import + case0 CPU smoke train OK = RunPod toolchain で
+  bench が動くことを確認。
+- offer 全 4 種 (3090/A6000/4090/A100) が creation 時 unavailable (stock 表示は Low
+  だったが実取得で枯渇)。memory project_runpod_3090_4090_stockout の通り。
+  **pod 未作成 = 課金ゼロ**。
+- → backoff (40min 目安) して再試行。bench は完全 ready、容量のみがブロック。
+
+## NEXT
+- GPU 容量が戻ったら同コマンドで再試行。10-min loop で毎回叩かず間隔を空ける。
+- それまで他の局所改善 or 現状維持。
