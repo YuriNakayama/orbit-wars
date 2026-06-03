@@ -1202,3 +1202,42 @@ HEAD の fresh throughput は外部在庫待ちの **nice-to-have 再計測**で
 変更 (+56行/turn) は per-turn の定数係数増で order-of-magnitude の throughput 結論を変えない。
 全 core 要件 (no-degradation tripwire 8/10・高速結合テスト・full JAX vmap・RL opponent 登録・
 GPU throughput・CI green) は達成済。
+
+---
+
+# 経過 49 (2026-06-03 ~11:10) — GPU bench は実は完走済だった (run 復旧)
+
+## 発見: 45557fc の bench が S3/DVC に既に存在
+
+stockout 再試行のため push しようとしたら remote が 1 commit 先行 (f952d3bd:
+`runpod-bot` の auto-commit)。rebase で取り込み、`.dvc` pointer を発見:
+`runs/20260603-015451__feature-rulebase-to-jax__45557fc__seed0` (5 files, 35KB)。
+
+`dev/runpod pull <run_id> --case bench_agent_full_jax_gpu` (S3 fallback) で復旧。
+launch.json: **A100 80GB PCIe / US-KS-2 / commit 45557fce (= build_modes 忠実化込み)**。
+train.log: `train pipeline exit=0`, bench json 書込済。
+
+## 確定 throughput (build_modes 込みの現行 logic、A100 80GB PCIe)
+
+| Batch | env-steps/s |
+|-------|-------------|
+| B=1   | 7 |
+| B=8   | 42 |
+| B=64  | 156 |
+| B=256 | **217** (31× batch scaling) |
+
+**重要**: これまで「ace42d6 baseline 217」と「HEAD で再計測」を別物と扱っていたが、
+実際は **45557fc (build_modes 込み) の単一 run** であり、217/s @B256 がそのまま現行 logic の
+canonical 値。build_modes +56行/turn の影響込みで 217/s を達成している。stockout 再 launch は
+冗長だった (この run で既に答えが出ていた)。
+
+## ステータス: 全 core deliverable + GPU throughput 確定 → ループのゴール達成
+
+- 劣化対策 (≈0勝回避): tripwire 8/10
+- 高速ローカル結合テスト (JAX vs 元Python): 確立済
+- full JAX vmap + RL opponent 登録 (OPPONENT id=7)
+- **GPU throughput: 217 env-steps/s @ B256 / A100 (build_modes 込み、exit=0 で確定)**
+- CI green (2039 passed)
+
+残課題は byte-parity 100% (swarm) のみだが、これは win-rate と trade-off で user judgment 待ち
+(自走対象外)。外部依存の宿題は無し。
