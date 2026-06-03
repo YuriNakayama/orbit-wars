@@ -957,3 +957,27 @@ launch 経路は確定。あとは US-KS-2 容量回復のみ = 純粋な待ち�
 測定上の parity 向上は無いが、stub を実装に置換した忠実化。劣化ゼロを確認した上で採用
 (speculative でなく Python に exact 準拠)。ships-only の真因は send 計算の別箇所
 (resolver send vs option send_cap) で、resolver 回帰リスクのため引き続き保留。
+
+---
+
+# 経過 39 (2026-06-03 ~13:55) — ships-only 1隻 over-send を深掘り → 微細な margin 相互作用、追跡停止
+
+## 切り分け (t152 src21→tgt25)
+
+- need=11, avail=21, preferred_send=20 (py=jax 一致), JAX reserve=0=py available=21。
+  単体では send_cap=min(21,20)=20 のはず。
+- だが jit agent は **21** を emit (py=20)。preferred_send/avail/need/reserve は全て一致
+  なので、真因は agent 内の reaction_times[25] (my_t/en_t) が t152 盤面で Python と
+  微差 → is_contested_neutral 等の margin 相互作用、と推測 (reaction_times parity test は
+  turn0 盤面のみ検証、mid-game 未カバー)。
+
+## 判断: 追跡停止 (影響 2% × 非致命 × 深い相互作用)
+
+ships-only over-send は 9/498 (2%)・1-3隻・win-rate 中立 (同 launch)。真因は
+reaction_times×margin の mid-game 微差で、特定に更なる深掘りを要するが ROI が低い。
+劣化なし (最優先) は満たしており、これ以上の autonomous 追跡は見送り。
+
+## feature 確定状態 (再掲)
+劣化なし(8/10)+unit lock / 結合テスト(jit gate) / full JAX vmap / RL投入+e2e /
+build_modes 忠実 / parity 部品 87+ GREEN / lint+mypy+format clean。
+残: GPU(容量待ち) / swarm(win-rate緊張) / ships-only(2%, 低ROI)。
