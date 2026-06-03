@@ -49,3 +49,10 @@
 1. GPU scale (RunPod、~$1.5+、research 準拠だが memory: GPU でも v1 0/10 実績あり)。
 2. 別 family: rulebase/case8 は既に v1 互角〜上 (確実)。
 3. 現状で一区切り (学習基盤健全化 + 弱相手攻略 + 4 commit は達成済)。
+
+## 追記: JAX 相手の飽和を定量化 (tick 25)
+iter12 model vs JAX 相手 (6戦, horizon=500):
+- baseline_jax_lite: win 0.17, outcomes [-2,-2,-2,+2,-2,-2] (ほぼ飽和)
+- baseline_jax_full: win 0.17, outcomes [+1.7,-2,-2,-2,-2,-2] (ほぼ飽和)
+→ JAX-native の「学習可能な外部相手」は存在しない (lite/full とも 0.17 = 大半 -2.0 飽和)。
+  1/6 勝の勾配では iter13 で実証した通り plateau。**小規模での v1 攻略路は閉じた**。
