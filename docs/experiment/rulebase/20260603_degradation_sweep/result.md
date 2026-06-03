@@ -16,10 +16,10 @@ case を **10 game/case (5 seed × 2 seat)** で JAX port vs その case Python 
 | case2 | 7/10 = 70% | ok (sweep) |
 | case3 | 7/10 = 70% | ok (sweep) |
 | case4 | 7/10 = 70% | ok (sweep) |
-| case6 | 62.5% (個別 16game) | ok |
-| case7 | 67% (個別 6game) | ok |
-| case8 | 50% (個別 4game) | ok |
-| case9 | 50% (個別 4game) | ok |
+| case6 | 5/10 = 50% | ok (sweep; 個別16game 62.5%) |
+| case7 | 6/10 = 60% | ok (sweep; 個別 67%) |
+| case8 | 50% (個別 4game) | ok (sweep 実行中) |
+| case9 | 50% (個別 4game) | ok (sweep 待機) |
 
 **退化なしの結論確定**: sweep 完走 3 case (case1/2/3) は全て 70-80% で ≈0勝の失敗モードなし。
 個別 gate の 50% 系より高く、**小サンプル noise が pessimistic 側だった**ことを裏付け。残
