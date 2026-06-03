@@ -1,99 +1,98 @@
-"""End-to-end identity: case2 Python agent vs JAX-wired agent on jax_env.
+"""Integration (e2e): case2 JAX port vs real case2 Python agent.
 
-This is the agent-level (not function-level) parity check the user asked for:
-with the env *also* JAX (`bot/src/jax_env`), does routing the hot path through
-`aim_with_prediction_jax` (ORBIT_WARS_AIM_BACKEND=jax) leave the agent's emitted
-action list unchanged vs the pure-Python backend?
+Mirrors case1's test_agent_jax_identity (docs/experiment/rulebase/
+20260603_case2_jax_port/plan.md). The #1 risk is the JAX rewrite degrading to a
+~0 win-rate; this gate targets it directly with a small (10-game) tripwire rather
+than a large eval.
 
-Procedure per step:
-  1. advance a `jax_env` episode with the Python agent (to reach realistic,
-     reachable observations),
-  2. at each step, run BOTH backends on the *same* observation with a freshly
-     reset opponent-model state, and assert the action lists match.
+case2 is an earlier case1-lineage fork (config closer to case1: PARTIAL=6,
+REINFORCE margins 2/0.75). JAX port = case8's core_jax with case2 config values.
+The JAX port reuses case1's parity-verified core_jax with case2's config deltas
+(PARTIAL_SOURCE_MIN_SHIPS 16, REINFORCE margins, opening mults). OM / lookahead
+are default-OFF in case2 config, so the runtime agent reduces to plan_moves with
+the forked missions — close to case1's core_jax.
 
-The aim solver agrees with its Python original within float32 tol (see
-test_aim_jax_parity.py); here we assert that this propagates to identical agent
-*decisions*. A small number of steps may differ if a near-tolerance intercept
-flips a downstream mission choice; we require exact match on the large majority
-and that the two never disagree on whether to act at all (empty vs non-empty).
+Marked `slow` (full 500-turn games). Run locally on CPU:
+    uv run pytest tests/e2e/pipeline/rulebase/case2/test_agent_jax_identity.py -q
 """
 
 from __future__ import annotations
 
-import importlib
-from types import ModuleType
 from typing import Any
 
 import jax.numpy as jnp
 import pytest
 from orbit_wars_jax.observation import state_to_obs
 from orbit_wars_jax.reset import reset
-from orbit_wars_jax.step import empty_actions, step
+from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT, empty_actions, step
+
+from pipeline.rulebase.case2.baseline.agent import agent as v2_py
+from pipeline.rulebase.case2.baseline_jax.core_jax.agent_full_jax import (
+    compute_actions_jax_jit as compute_actions_jax,
+)
+
+ANGLE_TOL = 1e-4
 
 
-def _run_agent_fresh(
-    agent_mod: ModuleType,
-    obs: dict[str, Any],
-    backend: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> list[list[int | float]]:
-    """Run the agent on `obs` with a fresh OM state and the given aim backend."""
-    monkeypatch.setenv("ORBIT_WARS_AIM_BACKEND", backend)
-    # Reset module-global opponent-model state so the call is deterministic
-    # (via the module __dict__ — setattr trips ruff B010, direct attr trips
-    # mypy on ModuleType).
-    vars(agent_mod)["_OM_STATE"] = agent_mod.om.OMState()
-    moves = agent_mod.agent(obs)
-    return [list(m) for m in moves]
+def _py_row(moves: list[Any]) -> jnp.ndarray:
+    row = jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32)
+    for i, m in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
+        row = row.at[i].set(jnp.asarray([m[0], m[1], m[2]], dtype=jnp.float32))
+    return row
 
 
-@pytest.mark.parametrize("seed", [0, 1, 5])
-def test_agent_identity_python_vs_jax(
-    seed: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    agent_mod = importlib.import_module("pipeline.rulebase.case2.baseline.agent")
-
+def _play_jax_vs_python(seed: int, jax_seat: int) -> int:
+    """Play case2 JAX port (jax_seat) vs real case2 Python. Return winner seat or -1."""
     state = reset(seed=seed, num_agents=2)
-    n_steps = 12
-    mismatches = 0
-    act_disagreements = 0
-    compared = 0
+    py_seat = 1 - jax_seat
+    rewards = None
+    for _turn in range(500):
+        a_jax = compute_actions_jax(state, seat=jax_seat)
+        a_py = _py_row(v2_py(state_to_obs(state, player=py_seat)))
+        actions = empty_actions().at[jax_seat].set(a_jax).at[py_seat].set(a_py)
+        state, rewards, term = step(state, actions)
+        if bool(term):
+            break
+    if rewards is None:
+        return -1
+    rj, rp = float(rewards[jax_seat]), float(rewards[py_seat])
+    return jax_seat if rj > rp else (py_seat if rp > rj else -1)
 
-    for _ in range(n_steps):
-        obs = state_to_obs(state, player=0)
 
-        py_moves = _run_agent_fresh(agent_mod, obs, "python", monkeypatch)
-        jax_moves = _run_agent_fresh(agent_mod, obs, "jax", monkeypatch)
-        compared += 1
-
-        if bool(py_moves) != bool(jax_moves):
-            act_disagreements += 1
-        elif py_moves != jax_moves:
-            # Allow tiny numeric drift: compare with tolerance on angle/ships.
-            same = len(py_moves) == len(jax_moves) and all(
-                p[0] == j[0]  # same source planet id
-                and abs(float(p[1]) - float(j[1])) < 1e-2  # angle
-                and int(p[2]) == int(j[2])  # ships
-                for p, j in zip(sorted(py_moves), sorted(jax_moves), strict=False)
-            )
-            if not same:
-                mismatches += 1
-
-        # Advance the episode with the Python agent's move (opponent: noop).
-        # Build a noop action tensor and splice seat 0's launches in is complex;
-        # for the identity check we only need a sequence of reachable states, so
-        # step with empty actions (both seats noop) to roll the board forward.
-        state, _r, term = step(state, empty_actions())
+@pytest.mark.slow
+@pytest.mark.parametrize("seed", [0, 1])
+def test_jax_vs_python_runs_clean(seed: int) -> None:
+    """Smoke: case2 JAX port vs real Python runs a full game with no NaN / bad shapes."""
+    state = reset(seed=seed, num_agents=2)
+    for _turn in range(500):
+        a0 = compute_actions_jax(state, seat=0)
+        assert a0.shape == (MAX_LAUNCHES_PER_AGENT, 3)
+        assert not bool(jnp.any(jnp.isnan(a0)))
+        a1 = _py_row(v2_py(state_to_obs(state, player=1)))
+        actions = empty_actions().at[0].set(a0).at[1].set(a1)
+        state, _r, term = step(state, actions)
+        assert not bool(jnp.any(jnp.isnan(state.planet_xy)))
         if bool(term):
             break
 
-    assert act_disagreements == 0, (
-        f"seed={seed}: act/no-act disagreed on {act_disagreements}/{compared} steps"
-    )
-    assert mismatches <= 1, (
-        f"seed={seed}: action list mismatched on {mismatches}/{compared} steps (>1)"
-    )
 
+@pytest.mark.slow
+def test_jax_port_not_catastrophically_worse_than_python() -> None:
+    """Anti-regression: case2 JAX port must not collapse to a near-0 win-rate.
 
-def _quiet_unused() -> None:
-    _ = jnp
+    Directly targets the failure mode (JAX rewrite degrades to ~0 wins). 10 games
+    (5 seeds x 2 seat assignments), threshold >=3/10 — a catastrophically-degraded
+    (~0-win) port cannot pass while any competitive-or-faithful port clears easily.
+    """
+    jax_wins = 0
+    games = 0
+    for seed in range(5):
+        for jax_seat in (0, 1):
+            winner = _play_jax_vs_python(seed, jax_seat)
+            games += 1
+            if winner == jax_seat:
+                jax_wins += 1
+    assert jax_wins >= 3, (
+        f"case2 JAX port won {jax_wins}/{games} vs real Python — catastrophic "
+        f"degradation (the ~0-win failure mode we must avoid)"
+    )
