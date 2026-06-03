@@ -38,6 +38,14 @@ _REINFORCE_SAFETY_MARGIN = 2
 _REINFORCE_VALUE_MULT = 1.35
 _ATTACK_COST_TURN_WEIGHT = 0.55
 _FOLLOWUP_MIN_SHIPS = 8
+# build_modes thresholds/bonuses (strategy_helpers.build_modes)
+_AHEAD_DOMINATION = 0.18
+_BEHIND_DOMINATION = -0.2
+_AHEAD_ATTACK_MARGIN_BONUS = 0.08
+_BEHIND_ATTACK_MARGIN_PENALTY = 0.05
+_FINISHING_DOMINATION = 0.35
+_FINISHING_ATTACK_MARGIN_BONUS = 0.08
+_FINISHING_PROD_RATIO = 1.25
 
 
 def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
@@ -137,17 +145,56 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
     remaining = jnp.maximum(1, 500 - state.step)
     static_neutral_count = jnp.sum(is_target & (owner == -1) & is_static_arr)
 
-    # modes (turn-snapshot approximation: strengths from planets only).
-    my_total = jnp.sum(jnp.where(is_mine, ships, 0.0))
-    enemy_total = jnp.sum(jnp.where(is_enemy, ships, 0.0))
+    # modes (build_modes): owner_strength = planet ships + in-flight fleet ships
+    # (matches
+    # WorldModel.owner_strength). modes mirror strategy_helpers.build_modes
+    # verbatim (thresholds + bonuses) — previously the bonuses were stubbed 0,
+    # which over-sent by 1-3 ships mid/late game (ships-only-diff).
+    fl_owner = state.fleet_owner
+    fl_ships = state.fleet_ships.astype(jnp.float_)
+    fl_valid = state.fleet_valid
+    fl_mine = fl_valid & (fl_owner == seat_i)
+    fl_enemy = fl_valid & (fl_owner != seat_i) & (fl_owner != -1)
+    my_total = jnp.sum(jnp.where(is_mine, ships, 0.0)) + jnp.sum(
+        jnp.where(fl_mine, fl_ships, 0.0)
+    )
+    enemy_total = jnp.sum(jnp.where(is_enemy, ships, 0.0)) + jnp.sum(
+        jnp.where(fl_enemy, fl_ships, 0.0)
+    )
+
+    # max single-enemy strength (planets+fleets) for is_dominating.
+    def _owner_strength(k: jax.Array) -> jax.Array:
+        return jnp.sum(jnp.where(valid & (owner == k), ships, 0.0)) + jnp.sum(
+            jnp.where(fl_valid & (fl_owner == k), fl_ships, 0.0)
+        )
+
+    enemy_strengths = jnp.array(
+        [
+            jnp.where(jnp.int32(k) == seat_i, 0.0, _owner_strength(jnp.int32(k)))
+            for k in range(4)
+        ]
+    )
+    max_enemy_strength = jnp.max(enemy_strengths)
+    my_prod = jnp.sum(jnp.where(is_mine, prod, 0.0))
+    enemy_prod = jnp.sum(jnp.where(is_enemy, prod, 0.0))
+
     domination = (my_total - enemy_total) / jnp.maximum(1.0, my_total + enemy_total)
-    is_behind = domination < -0.15  # BEHIND_DOMINATION (approx; refine later)
-    is_ahead = domination > 0.15
-    is_dominating = is_ahead
-    is_finishing = jnp.asarray(False)  # step>100 + prod ratio; opening slice skips
+    is_behind = domination < _BEHIND_DOMINATION
+    is_ahead = domination > _AHEAD_DOMINATION
+    is_dominating = is_ahead | (
+        (max_enemy_strength > 0) & (my_total > max_enemy_strength * 1.25)
+    )
+    is_finishing = (
+        (domination > _FINISHING_DOMINATION)
+        & (my_prod > enemy_prod * _FINISHING_PROD_RATIO)
+        & (state.step > 100)
+    )
     attack_margin_mult = (
-        1.0 + jnp.where(is_ahead, 0.0, 0.0) - jnp.where(is_behind, 0.0, 0.0)
-    )  # AHEAD/BEHIND bonuses are 0 in opening; refined later
+        1.0
+        + jnp.where(is_ahead, _AHEAD_ATTACK_MARGIN_BONUS, 0.0)
+        - jnp.where(is_behind, _BEHIND_ATTACK_MARGIN_PENALTY, 0.0)
+        + jnp.where(is_finishing, _FINISHING_ATTACK_MARGIN_BONUS, 0.0)
+    )
 
     # per-target reaction times (vectorized)
     def reaction(

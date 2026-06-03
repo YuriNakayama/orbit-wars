@@ -937,3 +937,23 @@ launch 経路は確定。あとは US-KS-2 容量回復のみ = 純粋な待ち�
 - 判断: 影響 ~2%・非致命的、修正は resolver 改変で回帰リスク (swarm で実証) → 低ROI 見送り。
 - 結論: 安全な autonomous 改善は出尽くした。残 parity gap は swarm(win-rate緊張) と
   ships-only(resolver回帰リスク) で autonomous 不可。GPU 数値は容量待ち。feature 安定完成。
+
+---
+
+# 経過 38 (2026-06-03 ~13:35) — build_modes を忠実化 (bonuses stub 0 → 正しい閾値)
+
+## 修正: attack_margin_mult / is_dominating / is_finishing を本物 build_modes に
+
+- 従来 agent は modes の AHEAD/BEHIND/FINISHING bonus を 0 に stub、強度も planet のみ。
+  → 本物 build_modes 通りに修正: owner_strength = planet + in-flight fleet、
+  is_ahead/behind (0.18/-0.2)、is_dominating (max_enemy*1.25)、is_finishing
+  (dom>0.35 & prod比1.25 & step>100)、attack_margin_mult に 3 bonus 加算。
+- 実測: turn0 20/20、3-seed full-match 36.0% (不変)、tripwire 2/4 (不変)、
+  ships_only_diff 9 (不変)。
+- → ships-only の原因ではなかった (仮説外し)。但し **modes は本物に忠実化** され、
+  late-game (step>100, finishing) の未テスト状態で正しくなる correctness 改善。劣化なし。
+
+## 正直な評価
+測定上の parity 向上は無いが、stub を実装に置換した忠実化。劣化ゼロを確認した上で採用
+(speculative でなく Python に exact 準拠)。ships-only の真因は send 計算の別箇所
+(resolver send vs option send_cap) で、resolver 回帰リスクのため引き続き保留。
