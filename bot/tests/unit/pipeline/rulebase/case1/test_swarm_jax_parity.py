@@ -7,6 +7,8 @@ Standalone check of the ordered 2-source allocation before wiring into the agent
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -23,17 +25,18 @@ def _py_allocate_2(
     turns_b: int,
     src_b: int,
 ) -> tuple[int, int, bool]:
-    opts = [
-        {"limit": lim_a, "turns": turns_a, "src": src_a, "key": "a"},
-        {"limit": lim_b, "turns": turns_b, "src": src_b, "key": "b"},
+    # (limit, turns, src, key) tuples — homogeneous so mypy infers int/str cleanly.
+    opts: list[tuple[int, int, int, str]] = [
+        (lim_a, turns_a, src_a, "a"),
+        (lim_b, turns_b, src_b, "b"),
     ]
-    ordered = sorted(opts, key=lambda o: (o["turns"], -o["limit"], o["src"]))
+    ordered = sorted(opts, key=lambda o: (o[1], -o[0], o[2]))
     remaining = need
-    sends = {}
+    sends: dict[str, int] = {}
     for idx, o in enumerate(ordered):
-        remaining_other = sum(x["limit"] for x in ordered[idx + 1 :])
-        send = min(o["limit"], max(0, remaining - remaining_other))
-        sends[o["key"]] = send
+        remaining_other = sum(x[0] for x in ordered[idx + 1 :])
+        send = min(o[0], max(0, remaining - remaining_other))
+        sends[o[3]] = send
         remaining -= send
     if remaining > 0:
         return 0, 0, False
@@ -43,7 +46,7 @@ def _py_allocate_2(
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 def test_allocate_2_parity(seed: int) -> None:
     rng = np.random.default_rng(seed)
-    mism = []
+    mism: list[Any] = []
     n = 600
     for _ in range(n):
         need = int(rng.integers(1, 80))

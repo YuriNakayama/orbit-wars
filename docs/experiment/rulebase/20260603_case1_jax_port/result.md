@@ -1105,3 +1105,30 @@ swarm (win-rate↓) / ships-only-2ndaim (5.7×遅延+win-rate↓) / 他は低ROI
 ## 教訓
 jax_enable_x64 は global mutable state。test で使うなら module-level でなく
 fixture で set+restore (xdist worker 共有のため leak する)。memory 候補。
+
+---
+
+# 経過 45 (2026-06-03 ~17:15) 🐛 — dev/test-bot 全gate を通す CI-debt 一掃
+
+## dev/test-bot 実行で多数の latent CI 失敗を発見
+
+これまで source module の mypy/lint のみ確認していたが、`dev/test-bot` は全体に
+format/lint/mypy/pytest を掛ける。実行したら:
+1. **format**: PoC eda scripts 4 本 未フォーマット → throwaway (findings は result.md 済) のため
+   **削除** (poc0/1/2)。
+2. **lint**: (PoC 削除で解消)。
+3. **mypy**: 新規 parity test 7+e2e に **32 errors** (untyped helper, bare list, jax.Array
+   vs float arg 等)。test module を pyproject mypy override (disallow_untyped_calls=false、
+   case5 test と同じ precedent) に追加 + helper に型注釈 (_planet_arrays/_modes/_pad_arrivals/
+   _call_jax/to/mismatches) + swarm の mixed-dict を tuple 化 + geometry の *generator を
+   explicit 引数化。
+
+## 結果: 全 gate green
+
+case1 test + e2e: format ✅ / lint All checks passed / mypy Success (22 files) /
+pytest 26 passed (logic 不変)。dev/test-bot を通る状態に。
+
+## 教訓
+source module だけでなく **test module も mypy 対象** (dev/test-bot は `mypy .`)。
+新規 test は最初から型注釈 + 全体 gate で確認すべき。memory feedback_jax_x64 と同系の
+「source だけ verify して test/CI 全体を見落とす」パターン。

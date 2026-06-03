@@ -58,8 +58,12 @@ def test_segment_hits_sun_parity(seed: int) -> None:
     pts = _rng_points(seed, 128)
     for row in pts:
         x1, y1, x2, y2 = row[:4]
-        ref = gpy.segment_hits_sun(x1, y1, x2, y2)
-        got = bool(gjax.segment_hits_sun(*(jnp.asarray(v) for v in (x1, y1, x2, y2))))
+        ref = gpy.segment_hits_sun(float(x1), float(y1), float(x2), float(y2))
+        got = bool(
+            gjax.segment_hits_sun(
+                jnp.asarray(x1), jnp.asarray(y1), jnp.asarray(x2), jnp.asarray(y2)
+            )
+        )
         assert ref == got
 
 
@@ -84,6 +88,6 @@ def test_safe_angle_and_distance_parity(seed: int) -> None:
 def test_geometry_jax_is_vmappable() -> None:
     """The port must vmap (the whole point of the JAX rewrite)."""
     xs = jnp.linspace(0.0, 100.0, 16)
-    f = jax.vmap(lambda x: gjax.dist(x, x, 50.0, 50.0))
+    f = jax.vmap(lambda x: gjax.dist(x, x, jnp.asarray(50.0), jnp.asarray(50.0)))
     out = f(xs)
     assert out.shape == (16,)

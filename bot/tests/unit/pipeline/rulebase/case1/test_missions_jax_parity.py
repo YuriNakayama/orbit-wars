@@ -7,6 +7,8 @@ apply_score_modifiers match. Real reset boards (turn 0) over several seeds.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -20,7 +22,7 @@ from pipeline.rulebase.case1.baseline_jax.core_jax import missions_jax as mj
 RTOL = 1e-7
 
 
-def _modes(world):
+def _modes(world: Any) -> dict[str, Any]:
     return sh.build_modes(world)
 
 

@@ -20,6 +20,8 @@ Marked `slow` (full 500-turn games). Run locally on CPU:
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import pytest
 from orbit_wars_jax.observation import state_to_obs
@@ -39,7 +41,7 @@ from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
 ANGLE_TOL = 1e-4
 
 
-def _py_row(moves: list) -> jnp.ndarray:
+def _py_row(moves: list[Any]) -> jnp.ndarray:
     row = jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32)
     for i, m in enumerate(moves[:MAX_LAUNCHES_PER_AGENT]):
         row = row.at[i].set(jnp.asarray([m[0], m[1], m[2]], dtype=jnp.float32))
@@ -50,11 +52,11 @@ def _jax_to_moves(row: jnp.ndarray) -> list[tuple[int, float, int]]:
     return sorted((int(r[0]), float(r[1]), int(r[2])) for r in row if int(r[0]) >= 0)
 
 
-def _py_to_moves(moves: list) -> list[tuple[int, float, int]]:
+def _py_to_moves(moves: list[Any]) -> list[tuple[int, float, int]]:
     return sorted((int(m[0]), float(m[1]), int(m[2])) for m in moves)
 
 
-def _actions_equal(jax_row: jnp.ndarray, py_moves: list) -> bool:
+def _actions_equal(jax_row: jnp.ndarray, py_moves: list[Any]) -> bool:
     j = _jax_to_moves(jax_row)
     p = _py_to_moves(py_moves)
     if len(j) != len(p):

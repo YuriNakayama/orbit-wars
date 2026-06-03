@@ -7,6 +7,8 @@ original takes a list of (eta, owner, ships) — we build matching inputs.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -27,7 +29,7 @@ def _by_owner_vec(arrivals: list[tuple[int, int, int]]) -> jnp.ndarray:
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 def test_resolve_arrival_event_parity(seed: int) -> None:
     rng = np.random.default_rng(seed)
-    mismatches = []
+    mismatches: list[Any] = []
     n = 400
     for _ in range(n):
         owner = int(rng.integers(-1, NUM_PLAYERS))  # -1 neutral or a player
@@ -56,7 +58,7 @@ HORIZON = 110
 MAX_SHIPS = 60
 
 
-def _pad_arrivals(arrivals, max_arr=64):
+def _pad_arrivals(arrivals: Any, max_arr: int = 64) -> tuple[Any, ...]:
     eta = np.full(max_arr, 10**9, dtype=np.int64)
     own = np.zeros(max_arr, dtype=np.int64)
     shp = np.zeros(max_arr, dtype=np.float64)
@@ -68,7 +70,7 @@ def _pad_arrivals(arrivals, max_arr=64):
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 def test_keep_needed_parity(seed: int) -> None:
     rng = np.random.default_rng(seed + 50)
-    mismatches = []
+    mismatches: list[Any] = []
     n = 120
     for _ in range(n):
         player = 0
@@ -113,7 +115,7 @@ def test_keep_needed_parity(seed: int) -> None:
 def test_threatened_info_parity(seed: int) -> None:
     """holds_full + fall_turn match simulate_planet_timeline (random arrivals)."""
     rng = np.random.default_rng(seed + 700)
-    mism = []
+    mism: list[Any] = []
     n = 150
     for _ in range(n):
         ships = int(rng.integers(5, 50))

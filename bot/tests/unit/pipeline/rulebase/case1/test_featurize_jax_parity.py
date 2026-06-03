@@ -7,6 +7,8 @@ follow from the same reaction times.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,7 +19,7 @@ from pipeline.rulebase.case1.baseline.agent import build_world
 from pipeline.rulebase.case1.baseline_jax.core_jax import featurize_jax as fjax
 
 
-def _planet_arrays(world):
+def _planet_arrays(world: Any) -> tuple[Any, ...]:
     xs, ys, rs, ships, mine, enemy = [], [], [], [], [], []
     for p in world.planets:
         xs.append(p.x)
@@ -26,7 +28,10 @@ def _planet_arrays(world):
         ships.append(p.ships)
         mine.append(p.owner == world.player)
         enemy.append(p.owner not in (-1, world.player))
-    to = lambda a, dt: jnp.asarray(np.asarray(a, dtype=dt))  # noqa: E731
+
+    def to(a: Any, dt: Any) -> jnp.ndarray:
+        return jnp.asarray(np.asarray(a, dtype=dt))
+
     return (
         to(xs, np.float64),
         to(ys, np.float64),
@@ -119,7 +124,7 @@ def test_reaction_times_parity_midgame() -> None:
 
     from pipeline.rulebase.case1.baseline.agent import agent as v1_py
 
-    def _pyrow(m: list) -> jnp.ndarray:
+    def _pyrow(m: list[Any]) -> jnp.ndarray:
         r = jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32)
         for i, mv in enumerate(m[:MAX_LAUNCHES_PER_AGENT]):
             r = r.at[i].set(jnp.asarray([mv[0], mv[1], mv[2]], dtype=jnp.float32))

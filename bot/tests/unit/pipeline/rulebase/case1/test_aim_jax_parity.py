@@ -8,6 +8,8 @@ matches Python None-vs-result.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -20,7 +22,9 @@ RTOL = 1e-7
 ATOL = 1e-7
 
 
-def _call_jax(src: Planet, tgt: Planet, init: Planet, ships: int, ang_vel: float):
+def _call_jax(
+    src: Planet, tgt: Planet, init: Planet, ships: int, ang_vel: float
+) -> tuple[Any, ...]:
     return aim_jax.aim_with_prediction(
         jnp.asarray(src.x),
         jnp.asarray(src.y),
@@ -40,7 +44,7 @@ def _call_jax(src: Planet, tgt: Planet, init: Planet, ships: int, ang_vel: float
 def test_aim_with_prediction_parity_planets(seed: int) -> None:
     rng = np.random.default_rng(seed)
     ang_vel = 0.035
-    mismatches = []
+    mismatches: list[Any] = []
     n = 80
     for _ in range(n):
         sx, sy, tx, ty = rng.uniform(5, 95, 4)
@@ -86,7 +90,7 @@ def test_aim_with_prediction_parity_rotating(seed: int) -> None:
     """Rotating targets (within ROTATION_LIMIT) exercise the refine loop."""
     rng = np.random.default_rng(seed + 100)
     ang_vel = 0.04
-    mismatches = []
+    mismatches: list[Any] = []
     n = 60
     refine_used = 0
     for _ in range(n):
