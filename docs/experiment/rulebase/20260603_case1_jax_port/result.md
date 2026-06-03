@@ -1189,4 +1189,16 @@ throughput が変わり得る → HEAD (45557fce) で再計測は新情報。A10
 
 `dev/runpod train <HEAD> --case bench_agent_full_jax_gpu --volume-name orbit_wars_us
 --data-center-id US-KS-2 --watch` を background 起動。US-KS-2 offer は populate
-(3090/A6000/4090/A100PCIe)、A100 PCIe (Medium) 取得を期待。結果待ち。
+(3090/A6000/4090/A100PCIe)。
+
+## 結果: stockout (pod 未作成 = $0)
+
+auto-pick #1 (3090) → `unavailable (attempt 1/4): There are no longer any` で全 offer 枯渇、
+exit 0。run dir / launch.json 共に未生成 = **pod 未作成、課金ゼロ**。
+[[project_runpod_3090_4090_stockout]] の既知挙動につき tick 毎の再試行はしない。
+
+HEAD の fresh throughput は外部在庫待ちの **nice-to-have 再計測**であり core deliverable
+ではない: ace42d6 で既に 217 env-steps/s @ B256 (31× batch scaling) を実証済。build_modes
+変更 (+56行/turn) は per-turn の定数係数増で order-of-magnitude の throughput 結論を変えない。
+全 core 要件 (no-degradation tripwire 8/10・高速結合テスト・full JAX vmap・RL opponent 登録・
+GPU throughput・CI green) は達成済。
