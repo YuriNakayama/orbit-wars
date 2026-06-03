@@ -420,15 +420,12 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
 
         # priority: capture > reinforce > harass (capture/reinforce disjoint;
         # harass only fires when neither capture nor reinforce claims the pair).
+        # harass fills the fall-through: when neither capture nor reinforce
+        # claims the pair, the nested where below selects h_score / need.
         use_cap = cap_eligible
         use_reinf = r_eligible & ~cap_eligible
-        use_harass = h_eligible & ~cap_eligible & ~r_eligible
-        out_score = jnp.where(
-            use_cap, score, jnp.where(use_reinf, r_score, h_score)
-        )
-        out_send = jnp.where(
-            use_cap, send_cap, jnp.where(use_reinf, r_send, need)
-        )
+        out_score = jnp.where(use_cap, score, jnp.where(use_reinf, r_score, h_score))
+        out_send = jnp.where(use_cap, send_cap, jnp.where(use_reinf, r_send, need))
         out_need = jnp.where(use_cap, need, jnp.where(use_reinf, r_need, need))
         eligible = cap_eligible | r_eligible | h_eligible
         is_reinf = use_reinf
