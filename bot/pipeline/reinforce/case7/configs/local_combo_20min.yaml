@@ -1,0 +1,63 @@
+# case7 local ~20min experiment — combine case5 best support reward (ratio /
+# coef=1.0, the H4 winner of 20260527_case5_support_reward) with case6's PFSP
+# self-snapshot opponent pool (past-self snapshots + baseline_jax_full mix,
+# f_hard prioritized). Sized for a single laptop-CPU JAX run finishing in
+# ~20 min: episodes 8 × horizon 200, 16 iters (measured ~71s/iter on laptop
+# CPU; self_snapshot opponent forward adds no rollout cost). switch_iter=4 so
+# the pool (incl. periodically pushed past-self snapshots) engages early.
+#
+# Recipe (gamma/entropy/target_kl/lr decay) inherited from case3/5/6.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 16
+  episodes_per_iter: 8
+  horizon: 200
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 5000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  # --- case5 best support reward (H4: ratio, coef=1.0) ---
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  # --- case6 PFSP: opponent pool incl. past-self snapshots ---
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 4      # push current model into the pool every 4 iters
+    cap: 4                 # FIFO pool of up to 4 past-self snapshots
+    late_full_prob: 0.4    # 40% baseline_jax_full, else a pooled past self
+    priority: f_hard       # prioritize hard opponents by (1 - win_ema)^p
+    priority_p: 2.0
+    priority_ema: 0.7
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
