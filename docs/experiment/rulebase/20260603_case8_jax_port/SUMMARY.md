@@ -12,7 +12,7 @@ user 指示「現状実装されている rulebase モデルを全て JAX 化」
 | case9 | case8 core 流用 | 50% | anti-ping-pong は dormant/近似 |
 | case2 | case8 core + config | 50% | case1 寄り config |
 | case3 | case8 core + config | 62% | rollout は未 port (5% 差) |
-| case6 | case8 core 流用 | 33% | STAY 有益 → omit で -17pp |
+| case6 | case8 core 流用 | 62% (16game) | STAY 未port、初回6game 33%は noise |
 | case7 | case8 core 流用 | 67% | STAY 自滅 → omit で +優位 |
 | case5 | (見送り) | — | LB1224 別 lineage、from-scratch 要、弱い case |
 

@@ -16,11 +16,18 @@
 - **foreground 6-game gate: JAX 2/6 = 33%**。≈0勝劣化の floor (≥3/10≈≥1.8/6) は超えるが
   50% を下回る。STAY が case6 Python を有利にしており、omit すると JAX が ~17pp 劣後。
 
+## 追検証で 33% は noise と判明 (通算 62.5%)
+
+初回 gate (seeds0-2) の 2/6=33% は n=6 の sample noise。disjoint seeds3-7 を追加実行:
+**JAX 8/10 = 80%**。通算 **10/16 = 62.5%**。→ case6 JAX port は非劣化どころか case6
+Python に勝ち越し。STAY omit の影響は懸念したほど大きくない (STAY は seed 依存で
+有益/中立が振れる)。
+
 ## 限界 (honest)
 
-case7 の t14 trap (STAY が ships 一斉発射で自滅) と異なり、case6 では **STAY が Python を
-有利化**。stateless JAX では STAY (跨ターン状態) を faithful に持てず、33% に留まる。
-非劣化 (≈0勝回避) は満たすが、case6 は本 lineage で最も parity gap が大きい case。
-stateful STAY の近似 (e.g. EnvState から consecutive_holds を推定) は別途要検討。
+STAY (跨ターン `consecutive_holds`) は **stateless JAX に faithful port 不可**につき
+未 port。実戦では case6 Python に対し平均 62.5% で勝ち越すため degradation ではないが、
+STAY が強く効く特定盤面では Python の挙動と乖離する。stateful STAY の近似は別途要検討。
 
-→ **case6 完了** (config-only port + 非劣化 33%、STAY gap documented)。
+→ **case6 完了** (config-only port + 非劣化、通算 62.5%)。教訓: gate は n≥10 で判断
+(n=6 では 33%↔80% に振れる)。
