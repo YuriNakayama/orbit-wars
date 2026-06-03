@@ -30,7 +30,8 @@ user 指示「現状実装されている rulebase モデルを全て JAX 化」
 - JAX port は本物より **大幅に under-launch** (case1 0.32x, case8 0.17x)。保守的だが
   case1 では本物 v1 に 89% 勝利。
 - **stateful 機能 (STAY, anti-ping-pong, rollout) は stateless JAX に faithful port 不可**。
-  omit の影響は機能が Python で有益(case6 -17pp)か有害(case7 +優位)かで符号が変わる。
+  omit しても全 case 非劣化 (case6 62% / case7 67%)。STAY の効き方は盤面依存だが、
+  実戦平均では omit による degradation は生じなかった。
 - CI: format/lint/mypy green、e2e tests は slow marker。
 
 ## 最終検証 (2026-06-03 ~14:55)
