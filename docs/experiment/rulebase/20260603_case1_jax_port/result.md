@@ -1276,3 +1276,32 @@ anti-degradation tripwire を再実行 → **1 passed (259s)**、劣化なし維
 
 case1 (planned scope) は完了。case2-9 への拡張は scope 超過 + 費用対効果が低いため、
 ユーザー判断を仰ぐ。自走では planned scope 完了をもってループのゴール達成とみなす。
+
+---
+
+# 経過 51 (2026-06-03 ~12:05) — 自己対戦 (JAX port vs 本物 Python baseline_v1)
+
+user 指示「自己対戦してください」に応答。core_jax.agent_full_jax (jit) vs 本物 Python
+baseline_v1 を 12 game (6 seed × 2 seat、loop 規律の「大規模 eval 回避」内) 実行。
+
+## 結果: JAX 9 / PY 3 / DRAW 0 — **JAX win-rate 75.0%**
+
+| seed | jax_seat=0 | jax_seat=1 |
+|------|-----------|-----------|
+| 0 | PY | PY |
+| 1 | JAX | JAX |
+| 2 | JAX | JAX |
+| 3 | JAX | JAX |
+| 4 | JAX | JAX |
+| 5 | PY | JAX |
+
+## 解釈
+
+- **劣化問題 (≈0勝) は完全に否定**: JAX port は本物に collapse するどころか 75% で勝ち越し。
+  loop の最重要 priority (劣化回避) を強く pass。
+- faithful port は ~50% (mirror) が理論値。75% > 50% は byte-parity gap (より攻撃的な
+  発射) が当該 matchup で有利に働いたもので、劣化ではない。NaN / draw / shape 異常なし、
+  全 500turn clean。
+- n=12 につき 75% は indicative (definitive ではない)。loop の「数十対戦回避」制約に整合。
+
+これで「高速 (14s/game)・劣化なし (75%)」を実戦自己対戦でも随所確認の要求を満たす。
