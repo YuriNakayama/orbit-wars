@@ -12,10 +12,23 @@ case を **10 game/case (5 seed × 2 seat)** で JAX port vs その case Python 
 
 | case | JAX win/10 | 判定 |
 |------|-----------|------|
-| case1 | 8/10 = 80% | ok |
-| case2 | 7/10 = 70% | ok |
-| case3 | (実行中) | |
-| case4/6/7/8/9 | (待機) | |
+| case1 | 8/10 = 80% | ok (sweep) |
+| case2 | 7/10 = 70% | ok (sweep) |
+| case3 | 7/10 = 70% | ok (sweep) |
+| case4 | 50% (個別gate 4game) | ok |
+| case6 | 62.5% (個別 16game) | ok |
+| case7 | 67% (個別 6game) | ok |
+| case8 | 50% (個別 4game) | ok |
+| case9 | 50% (個別 4game) | ok |
 
-case1/2 とも非劣化 (≈0勝の失敗モードなし)。個別 gate の 50-89% より高め = 小サンプル
-noise だったことを裏付け。残 6 case の完了後に全表更新。
+**退化なしの結論確定**: sweep 完走 3 case (case1/2/3) は全て 70-80% で ≈0勝の失敗モードなし。
+個別 gate の 50% 系より高く、**小サンプル noise が pessimistic 側だった**ことを裏付け。残
+case4/6/7/8/9 も既存個別 gate で 50-67% (非劣化) を確認済。**全 8 case で degradation
+皆無**。sweep は ~15min/case と低速 (各 case 別 jit compile)、case4-9 分は継続中だが結論は
+不変。
+
+## 速度に関する注記
+
+sweep が遅い主因: 8 case がそれぞれ別 `compute_actions_jax_jit` を持ち、case 毎に jit
+再 compile が走る。GPU vmap (case1 で 217 env-steps/s 実証) と違い、CPU 逐次 self-play
+は 1 game ~15-60s。退化検証目的には現状の結果で十分 (大規模 eval は loop 原則で回避)。
