@@ -981,3 +981,20 @@ reaction_times×margin の mid-game 微差で、特定に更なる深掘りを�
 劣化なし(8/10)+unit lock / 結合テスト(jit gate) / full JAX vmap / RL投入+e2e /
 build_modes 忠実 / parity 部品 87+ GREEN / lint+mypy+format clean。
 残: GPU(容量待ち) / swarm(win-rate緊張) / ships-only(2%, 低ROI)。
+
+---
+
+# 経過 40 (2026-06-03 ~14:15) — reaction_times mid-game parity を検証・lock-in
+
+## ships-only 仮説 (reaction_times mid-game 微差) を test で検証 → 0 mismatch
+
+- self-play で t60/120/152/180 まで進めて全 planet の reaction_times を本物と比較:
+  **0/172 mismatch**。reaction_times は mid-game でも忠実と確定。
+- → ships-only over-send の原因は reaction_times **ではない** (仮説外し)。残る候補は
+  agent の aim turns vs plan_shot turns の mid-game 微差等、より深い箇所。
+- mid-game parity を `test_reaction_times_parity_midgame` として lock-in (turn0 のみ
+  だった reaction parity を全 game に拡張、回帰防止)。
+
+## 価値
+ships-only の真因特定には至らずだが、(1) reaction_times の mid-game 忠実性を確認・固定、
+(2) 仮説を 1 つ消去。test カバレッジ拡張で安全。劣化なし維持。case1 parity 部品 88+ GREEN。

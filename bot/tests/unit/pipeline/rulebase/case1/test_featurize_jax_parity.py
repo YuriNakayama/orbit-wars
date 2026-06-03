@@ -108,3 +108,54 @@ def test_fleet_target_planet_parity(seed: int) -> None:
         if ref_id != got_id or (ref_eta if ref_eta is not None else -1) != int(eta):
             mism.append((ref_id, got_id, ref_eta, int(eta)))
     assert not mism, f"seed={seed}: {len(mism)}/150: {mism[:5]}"
+
+
+def test_reaction_times_parity_midgame() -> None:
+    """reaction_times must stay parity on MID-GAME boards, not just turn-0.
+
+    A ships-only over-send diagnosis suspected reaction_times diverging mid-game
+    (the other tests only cover reset boards). This advances a real self-play
+    game and checks parity at several mid points — it confirmed 0 mismatch, so
+    this locks reaction_times faithfulness across the game, not just the opening.
+    """
+    from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT, empty_actions, step
+
+    from pipeline.rulebase.case1.baseline.agent import agent as v1_py
+
+    def _pyrow(m: list) -> jnp.ndarray:
+        r = jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32)
+        for i, mv in enumerate(m[:MAX_LAUNCHES_PER_AGENT]):
+            r = r.at[i].set(jnp.asarray([mv[0], mv[1], mv[2]], dtype=jnp.float32))
+        return r
+
+    state = reset(seed=0, num_agents=2)
+    checkpoints = {60, 120, 152, 180}
+    mism = []
+    for t in range(181):
+        if t in checkpoints:
+            w = build_world(state_to_obs(state, player=0))
+            px, py, pr, ps, mine, enemy = _planet_arrays(w)
+            for tp in w.planets:
+                rm, re = w.reaction_times(tp.id)
+                jm, je = fjax.reaction_times(
+                    jnp.asarray(tp.x),
+                    jnp.asarray(tp.y),
+                    jnp.asarray(tp.radius),
+                    px,
+                    py,
+                    pr,
+                    ps,
+                    mine,
+                    enemy,
+                )
+                if int(rm) != int(jm) or int(re) != int(je):
+                    mism.append((t, tp.id, (rm, re), (int(jm), int(je))))
+        o0 = state_to_obs(state, player=0)
+        o1 = state_to_obs(state, player=1)
+        actions = (
+            empty_actions().at[0].set(_pyrow(v1_py(o0))).at[1].set(_pyrow(v1_py(o1)))
+        )
+        state, _r, term = step(state, actions)
+        if bool(term):
+            break
+    assert not mism, f"mid-game reaction_times mismatch: {mism[:5]}"
