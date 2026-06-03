@@ -32,3 +32,11 @@ user 指示「現状実装されている rulebase モデルを全て JAX 化」
 - **stateful 機能 (STAY, anti-ping-pong, rollout) は stateless JAX に faithful port 不可**。
   omit の影響は機能が Python で有益(case6 -17pp)か有害(case7 +優位)かで符号が変わる。
 - CI: format/lint/mypy green、e2e tests は slow marker。
+
+## 最終検証 (2026-06-03 ~14:55)
+
+- sed 生成した lineage 結合テストが **pytest で実 pass** を確認 (case7 smoke seed0,
+  1 passed 45s) — collect だけでなく実行も健全、latent CI failure リスク解消。
+- case6 の初回 33% は n=6 noise と判明 → 通算 62.5% (10/16) に訂正済。
+- 全 8 case 非劣化確定、CI (format/lint/mypy) green。**feature 完了**。
+- 残: case5 (ユーザー判断で見送り)、PR 作成 (対外的、ユーザー指示待ち)。
