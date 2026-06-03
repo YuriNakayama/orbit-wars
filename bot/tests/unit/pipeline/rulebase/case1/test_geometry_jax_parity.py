@@ -16,8 +16,6 @@ import pytest
 from pipeline.rulebase.case1.baseline.core import geometry as gpy
 from pipeline.rulebase.case1.baseline_jax.core_jax import geometry_jax as gjax
 
-jax.config.update("jax_enable_x64", True)
-
 RTOL = 1e-9
 ATOL = 1e-9
 

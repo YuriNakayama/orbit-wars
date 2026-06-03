@@ -6,7 +6,6 @@ The aim_with_prediction refinement loop is ported/tested separately.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -14,8 +13,6 @@ import pytest
 from pipeline.rulebase.case1.baseline.core import physics as ppy
 from pipeline.rulebase.case1.baseline.core.types import Planet
 from pipeline.rulebase.case1.baseline_jax.core_jax import physics_jax as pjax
-
-jax.config.update("jax_enable_x64", True)
 
 RTOL = 1e-9
 ATOL = 1e-9

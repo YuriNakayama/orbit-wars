@@ -1082,3 +1082,26 @@ swarm (win-rate↓) / ships-only-2ndaim (5.7×遅延+win-rate↓) / 他は低ROI
 - ✅ full JAX (vmap clean) / RL opponent 登録+rollout e2e
 - ✅ **GPU throughput 実測 (A100, B=256 で 217 env-steps/s, 31× batch スケール)**
 - byte-parity 49.6% (局所最適、swarm/2nd-aim は cost/win-rate で見送り確定)
+
+---
+
+# 経過 44 (2026-06-03 ~16:15) 🐛 — x64 test 汚染 (CI-breaking) を発見・修正
+
+## 全体 suite で 3 failed (随所で確認が捕捉)
+
+- case1 + reinforce を一括実行 → reinforce の rollout test が 3 failed (noop/lite/
+  faithful 全て、= 自 agent でなく共有問題)。
+- 原因: 7 つの *_jax_parity test が **module-level で jax_enable_x64=True を set**、
+  pytest-xdist worker 内で **後続 test に x64 が leak**。x64 下で agent の int32/float
+  混在が scatter TypeError (int64→int32 cast)。個別実行では通るが一括で落ちる。
+- → `dev/test-bot` を確実に落とす latent CI bug (自分で作り込んだ)。
+
+## 修正: conftest autouse fixture で x64 を parity test に scope + restore
+
+- case1 conftest に `_x64_parity_isolation` 追加: module 名が `_jax_parity` で終わる時のみ
+  x64 を ON、test 後に prev 値へ restore。7 test の module-level update を削除。
+- 検証: case1 (156) + reinforce 一括で **156 passed** (was 3 failed)。lint+mypy clean。
+
+## 教訓
+jax_enable_x64 は global mutable state。test で使うなら module-level でなく
+fixture で set+restore (xdist worker 共有のため leak する)。memory 候補。

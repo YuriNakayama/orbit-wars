@@ -9,7 +9,6 @@ only the slow 10-game e2e guards it).
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,8 +16,6 @@ import pytest
 from pipeline.rulebase.case1.baseline.core import safety as spy
 from pipeline.rulebase.case1.baseline.core.types import Planet
 from pipeline.rulebase.case1.baseline_jax.core_jax import safety_jax as sjax
-
-jax.config.update("jax_enable_x64", True)
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])

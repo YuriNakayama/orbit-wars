@@ -7,7 +7,6 @@ apply_score_modifiers match. Real reset boards (turn 0) over several seeds.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,8 +16,6 @@ from orbit_wars_jax.reset import reset
 from pipeline.rulebase.case1.baseline import strategy_helpers as sh
 from pipeline.rulebase.case1.baseline.agent import build_world
 from pipeline.rulebase.case1.baseline_jax.core_jax import missions_jax as mj
-
-jax.config.update("jax_enable_x64", True)
 
 RTOL = 1e-7
 

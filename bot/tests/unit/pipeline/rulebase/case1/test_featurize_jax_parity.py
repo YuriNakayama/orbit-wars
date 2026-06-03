@@ -7,7 +7,6 @@ follow from the same reaction times.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -16,8 +15,6 @@ from orbit_wars_jax.reset import reset
 
 from pipeline.rulebase.case1.baseline.agent import build_world
 from pipeline.rulebase.case1.baseline_jax.core_jax import featurize_jax as fjax
-
-jax.config.update("jax_enable_x64", True)
 
 
 def _planet_arrays(world):

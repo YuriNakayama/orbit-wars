@@ -8,7 +8,6 @@ matches Python None-vs-result.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -16,8 +15,6 @@ import pytest
 from pipeline.rulebase.case1.baseline.core import physics as ppy
 from pipeline.rulebase.case1.baseline.core.types import Planet
 from pipeline.rulebase.case1.baseline_jax.core_jax import aim_jax
-
-jax.config.update("jax_enable_x64", True)
 
 RTOL = 1e-7
 ATOL = 1e-7
