@@ -1132,3 +1132,29 @@ pytest 26 passed (logic 不変)。dev/test-bot を通る状態に。
 source module だけでなく **test module も mypy 対象** (dev/test-bot は `mypy .`)。
 新規 test は最初から型注釈 + 全体 gate で確認すべき。memory feedback_jax_x64 と同系の
 「source だけ verify して test/CI 全体を見落とす」パターン。
+
+---
+
+# 経過 46 (2026-06-03 ~17:35) ✅ — dev/test-bot 完走: 全 repo CI green
+
+## 全 gate を end-to-end で完走確認
+
+`dev/test-bot` (format → lint → mypy → pytest, repo 全体):
+- format ✅ / lint All checks passed ✅ / mypy Success ✅
+- **pytest: 2039 passed, 4 skipped (9m42s)** — 新規 jax parity 8 module + reinforce
+  opponent + e2e が既存 2000+ test と共に全 pass、回帰ゼロ。
+
+## feature 完成の最終確認
+
+| 要求 | 状態 |
+|------|------|
+| 結合テスト (JAX vs 元Python, jit, <10分, gate GREEN) | ✅ |
+| 劣化なし (tripwire 8/10, over-fire/reaction unit lock) | ✅ |
+| full JAX (vmap clean, GPU-ready) | ✅ |
+| RL opponent (case6 mode7) 登録 + rollout e2e | ✅ |
+| GPU throughput 実測 (A100, 217 env-steps/s @ B=256) | ✅ |
+| **dev/test-bot 全 gate (2039 passed)** | ✅ |
+| byte-parity 49.6% | 局所最適 (swarm は win-rate トレードオフで保留) |
+
+→ **rulebase→JAX port (case1) は実装・テスト・統合・CI・GPU実測すべて完了。PR 可能。**
+残: byte-parity 100% (要 swarm + win-rate gate 再定義の判断) のみ、これは別途。
