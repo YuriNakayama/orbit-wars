@@ -1305,3 +1305,41 @@ baseline_v1 を 12 game (6 seed × 2 seat、loop 規律の「大規模 eval 回�
 - n=12 につき 75% は indicative (definitive ではない)。loop の「数十対戦回避」制約に整合。
 
 これで「高速 (14s/game)・劣化なし (75%)」を実戦自己対戦でも随所確認の要求を満たす。
+
+---
+
+# 経過 52 (2026-06-03 ~12:20) — 自己対戦の安定性 + 乖離の正体 (重要)
+
+経過51 の 75% を「n=12 の偶発 or 真の優位」か切り分けるため、disjoint seed で追検証。
+
+## batch2 (seed 6-13、16 game): **JAX 16 / PY 0 = 100%**
+
+batch1 (9/12) と合わせ **通算 25/28 = 89%** (disjoint 28 game)。75% は偶発でなく
+**JAX port が本物 v1 に系統的に勝ち越す**ことが確定。faithful (~50% mirror) ではない。
+
+## 乖離の正体 (launch-count 計測、PvP canonical 盤面 1154 turn)
+
+| 指標 | 値 |
+|------|----|
+| JAX_more turns | 63 |
+| JAX_fewer turns | **603** |
+| equal | 115 |
+| both_noop | 373 |
+| 総 launch JAX / Python | **627 / 1949 = 0.32×** |
+
+**仮説 (over-fire) は完全に反転**: JAX port は本物より **3倍少なく**しか発射しない
+(より保守的)。にもかかわらず 89% 勝利 → **Python baseline_v1 が ship を過剰投入
+(3倍 launch) しており、JAX の保守性 (ship 温存・無駄出撃減) が勝つ**。byte-parity gap
+49.6% の主因は「JAX が Python の launch を見送る」側 (over-fire ではない)。
+
+## RL opponent への含意 (要注意)
+
+`OPPONENT_BASELINE_V1_FAITHFUL` (case6 mode7) は **faithful ではない** — v1 と挙動が
+有意に異なる別 agent (より保守的で 89% 強い)。
+- 名称が誤解を招く (curriculum は v1 mirror を前提)。
+- ただし **RL 学習価値の観点では、89% 強い保守 opponent は真の v1 mirror より良い
+  可能性**がある (より強い相手で学習)。
+- 採否は RL 側の設計判断。本 loop (rulebase JAX 化) の劣化回避目標は **完全達成**
+  (劣化どころか優位)。
+
+劣化問題は実戦 28 game + launch 解析で多角的に否定。高速性 (14s/game) も維持。
