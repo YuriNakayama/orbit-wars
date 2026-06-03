@@ -54,3 +54,21 @@ ships_needed_to_capture) は case1 core_jax で実装済**。→ harass は case
 
 → tripwire pass なら、新 mission を core_jax に vmapped pair で追加し parity test を
 bottom-up に。fail なら config delta の不足を切り分け。次 tick で tripwire 結果確認。
+
+## 経過 3 — config delta 完全性を検証 (tripwire 継続中)
+
+tripwire (pid 16445) は 2:27 経過時点で継続中 (10-game × ~170s/game ≈ 28min 見込)。
+CPU 競合 + parity test の x64 競合を避け、純解析のみ実施。
+
+### 検証: 現 port の config delta は完全
+
+jax core が参照する 91 定数を抽出し case1↔case8 baseline config を全比較
+→ **既に patch 済の 5 定数以外に未反映 delta なし**。残る case8 delta (HARASS_*,
+CRASH_*, SWARM_MIN_PARTICIPANT_SHIPS, FULL_COMMIT_*) は **未 port の mission 専用**で、
+現 capture/reinforce pipeline には影響しない。→ 現 Step1 port は config 的に完全。
+
+### 判断: harass 実装は tripwire 結果待ち
+
+harass の JAX 実装は feasible (経過2) だが、**未検証の base の上に積むのは loop の
+「未検証実装回避」原則に反する**。現 base が非劣化と確認できてから mission を段階追加する。
+次 tick で tripwire 結果 → pass なら harass/crash を bottom-up parity 付きで追加。
