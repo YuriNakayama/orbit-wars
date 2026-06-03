@@ -596,19 +596,21 @@ def _rollout_one_env(
 
         # Update history AFTER featurize, mirroring the torch loop's
         # `update_history(history, obs, actions=actions_list)` call at the
-        # end of the step. The history pytree needs the planet snapshot
-        # at the current state and any launch events.
-        # For the W4 spike, we pass empty actions to history (no launches
-        # tracked); a follow-up will track real launches.
-        empty_pid = jnp.full((4,), -1, dtype=jnp.int32)
-        empty_ships = jnp.zeros((4,), dtype=jnp.int32)
-        empty_valid = jnp.zeros((4,), dtype=jnp.bool_)
+        # end of the step. Record the agent's REAL launches this turn so the
+        # history's memory/timeline features match the eval path (closes the
+        # train/eval gap; "memory features" per arXiv 2507.06825). The agent
+        # controls `seat`; its env_actions row is (MAX_LAUNCHES, 3) =
+        # [from_pid, angle, ships] with from_pid == -1 for non-fire slots.
+        my_launch_row = env_actions[seat]  # (MAX_LAUNCHES, 3)
+        launch_pid = my_launch_row[:, 0].astype(jnp.int32)
+        launch_ships = my_launch_row[:, 2].astype(jnp.int32)
+        launch_valid = launch_pid >= 0
         new_history = update_history_jax(
             history,
             state,
-            empty_pid,
-            empty_ships,
-            empty_valid,
+            launch_pid,
+            launch_ships,
+            launch_valid,
             player=seat,
         )
 
