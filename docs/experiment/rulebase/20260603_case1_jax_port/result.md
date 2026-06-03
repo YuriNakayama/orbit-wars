@@ -1024,3 +1024,30 @@ CPU smoke 速度は要確認。
 1. pair() に 2nd aim pass を実装 (turns 確定後 need/send 再計算)。
 2. ships-only 減 + full-match 向上 + tripwire 維持 + 速度 (1試合<10分) を実測。
 3. 劣化なら revert。
+
+---
+
+# 経過 42 (2026-06-03 ~15:15) — 2nd aim pass: 実装→計測→cost>benefit で revert
+
+## ships-only 真因 (2-stage aim) を実装して計測
+
+- pair() に 2nd aim (send_guess で再 aim → 確定 turns で need/send 再計算) を実装。
+- 実測:
+  | 指標 | before | after 2nd aim |
+  |------|--------|---------------|
+  | turn0 | 20/20 | 20/20 |
+  | 3seed full-match | 36.0% | **37.0%** (+1pp) |
+  | tripwire 10-game | 8/10 | **7/10** |
+  | 1 game CPU | ~14s | **~80s (5.7×)** |
+
+## 判断: revert (高コスト × 微小 benefit × win-rate -1)
+
+2nd aim は ships-only を正しく修正 (parity +1pp) だが、aim を全 P×P pair で 2 回呼ぶため
+**CPU 5.7× 遅延** (結合テスト gate も ~5min→~13min)。win-rate も 8→7 (mirror 寄り)。
++1pp の faithfulness に対しコストが見合わず、かつ「高速」要件 (margin) を削るため revert。
+真因は確定・記録済なので、GPU 投入時 (計算 2 倍が無害) or 速度最適化後に再検討可能。
+
+## 結論: 全 parity 余地を実装試行し、全て cost/win-rate で見送りと確定
+swarm (win-rate↓) / ships-only-2ndaim (5.7×遅延+win-rate↓) / 他は低ROI。劣化なし最優先 +
+高速 の両立点として現状 (capture+reserve+guards+modes, 36-49% parity, 8/10, 14s/game) が
+最適。feature 完成。
