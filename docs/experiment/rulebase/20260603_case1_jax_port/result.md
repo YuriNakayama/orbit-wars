@@ -1343,3 +1343,32 @@ batch1 (9/12) と合わせ **通算 25/28 = 89%** (disjoint 28 game)。75% は�
   (劣化どころか優位)。
 
 劣化問題は実戦 28 game + launch 解析で多角的に否定。高速性 (14s/game) も維持。
+
+---
+
+# 経過 53 (2026-06-03 ~12:35) — 89% は step-dynamics artifact でないことを基盤検証
+
+経過52 の「JAX 0.32× launch なのに 89% 勝利」が **JAX step の dynamics バグの artifact**
+でないか (自己対戦が JAX env 上で行われるため) を疑い、env 基盤を検証。
+
+## JAX env vs vendor interpreter parity: **45 passed**
+
+`tests/unit/jax_env/test_parity.py` (initial state / 1-step no-op は exact 一致 assert、
+**test_500_step_random は 500-step trajectory を vendor interpreter と照合**) が全 45 GREEN。
+→ JAX env の step dynamics は本物 vendor と一致。**89% は env バグでなく真の agent 結果**。
+
+## 検証の積み上げ (劣化なしを多角的に確定)
+
+| 層 | 検証 | 結果 |
+|----|------|------|
+| env dynamics | jax_env vs vendor (500-step) | 45 passed |
+| agent 部品 | core_jax 8 module parity (x64) | 87+ GREEN |
+| agent 統合 | tripwire 10-game ≥3 gate | 1 passed (8-9/10) |
+| 実戦勝率 | JAX vs 本物 v1, 28 disjoint game | 25/28 = 89% |
+| 挙動解析 | launch-count 1154 turn | JAX 0.32× (保守) |
+| 速度 | 1 game / GPU vmap | 14s / 217 env-steps/s |
+| CI | dev/test-bot | 2039 passed |
+
+劣化問題 (≈0勝) は **env→部品→統合→実戦→挙動**の全層で否定済。loop の Step1/Step2 +
+「随所で高速・劣化なし確認」要求は完全充足。残る byte-parity 100% は win-rate と trade-off
+のため非追求 (確定)。case2-9 拡張は費用対効果低く判断待ち。
