@@ -15,7 +15,7 @@ case を **10 game/case (5 seed × 2 seat)** で JAX port vs その case Python 
 | case1 | 8/10 = 80% | ok (sweep) |
 | case2 | 7/10 = 70% | ok (sweep) |
 | case3 | 7/10 = 70% | ok (sweep) |
-| case4 | 50% (個別gate 4game) | ok |
+| case4 | 7/10 = 70% | ok (sweep) |
 | case6 | 62.5% (個別 16game) | ok |
 | case7 | 67% (個別 6game) | ok |
 | case8 | 50% (個別 4game) | ok |
