@@ -1241,3 +1241,38 @@ canonical 値。build_modes +56行/turn の影響込みで 217/s を達成して
 
 残課題は byte-parity 100% (swarm) のみだが、これは win-rate と trade-off で user judgment 待ち
 (自走対象外)。外部依存の宿題は無し。
+
+---
+
+# 経過 50 (2026-06-03 ~11:55) — scope 再確認: 全 case 化の費用対効果
+
+ループ文言は「rulebase を全て JAX 化」だが、feature-plan の research 段階で **case1
+(baseline_v1) に scope 確定**していた (RL self-play の高速 GPU opponent が JAX 化の動機)。
+
+## 現状の port 網羅性
+
+| case | full JAX port |
+|------|---------------|
+| case1 | ✅ core_jax (agent_full_jax, tripwire 8/10, 217/s) |
+| case2 | △ primitives のみ (geometry/physics/aim、agent 未) |
+| case0,3-9 | ✗ なし |
+
+## 全 case 化の費用対効果評価
+
+- case8 (memory 上の最良 heuristic) ですら case1/baseline から **924行 diff + 新規
+  module (lookahead/opponent_model/capture/harass/swarm/movements)** の深い fork。
+  faithful port は case1 並 (~49 tick) の労力。
+- かつ case8 の実勝率 edge は case4 比 +0pp 級 (noise floor 50%、memory
+  [[project_heuristic_search_saturation]])。case7=t14 trap、case9=anti_ping_pong 棄却
+  済で、多くは実験的 dead-end。
+- → **全 case の faithful port は labor 甚大 vs 運用価値小**。operationally 意味があるのは
+  RL opponent の case1 のみで、それは達成済。
+
+## 確認
+
+anti-degradation tripwire を再実行 → **1 passed (259s)**、劣化なし維持。
+
+## 判断待ち
+
+case1 (planned scope) は完了。case2-9 への拡張は scope 超過 + 費用対効果が低いため、
+ユーザー判断を仰ぐ。自走では planned scope 完了をもってループのゴール達成とみなす。
