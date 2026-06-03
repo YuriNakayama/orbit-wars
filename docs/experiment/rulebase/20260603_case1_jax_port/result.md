@@ -1158,3 +1158,19 @@ source module だけでなく **test module も mypy 対象** (dev/test-bot は 
 
 → **rulebase→JAX port (case1) は実装・テスト・統合・CI・GPU実測すべて完了。PR 可能。**
 残: byte-parity 100% (要 swarm + win-rate gate 再定義の判断) のみ、これは別途。
+
+---
+
+# 経過 47 (2026-06-03 ~17:55) — seat=1 equivalence を検証・lock-in
+
+## PFSP は両 seat を使う → seat=1 の正しさを保証
+
+- 既存 e2e equivalence test は seat=0 のみ。seat-indexing bug があれば self-play の
+  半分が silent に壊れる (PFSP は agent を seat 0/1 両方で使う、rollout_jax の opp_seat=1-seat)。
+- seat=1 turn0 を本物 (player=1 obs) と比較: **20/20 一致**。対称性が正しいと確認。
+- `test_jax_port_seat1_equivalence_turn0` (5 seed) として lock-in。fast (no full game)。
+  lint/mypy/format clean。
+
+## 価値
+PFSP self-play の両 seat 正しさを回帰防止。case1 port の test カバレッジを seat 対称性に拡張。
+劣化なし維持、CI green 継続。

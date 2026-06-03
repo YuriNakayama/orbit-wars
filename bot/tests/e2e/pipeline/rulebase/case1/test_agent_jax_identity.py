@@ -100,6 +100,23 @@ def test_jax_port_action_equivalence_over_selfplay(seed: int) -> None:
     )
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 7])
+def test_jax_port_seat1_equivalence_turn0(seed: int) -> None:
+    """seat=1 must match Python on player=1's obs (PFSP self-play uses both seats).
+
+    The main equivalence test only checks seat 0; a seat-indexing bug would
+    silently break half of self-play. This guards the symmetric correctness at
+    turn 0 (cheap, no full game).
+    """
+    state = reset(seed=seed, num_agents=2)
+    py_moves = v1_py(state_to_obs(state, player=1))
+    jax_row = compute_actions_jax(state, seat=1)
+    assert _actions_equal(jax_row, py_moves), (
+        f"seed={seed}: seat=1 JAX action != Python (player=1) at turn 0"
+    )
+
+
 def _play_jax_vs_python(seed: int, jax_seat: int) -> int:
     """Play JAX port (jax_seat) vs real Python (other seat). Return winner seat or -1."""
     state = reset(seed=seed, num_agents=2)
