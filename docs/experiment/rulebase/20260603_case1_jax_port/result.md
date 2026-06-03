@@ -1051,3 +1051,34 @@ CPU smoke 速度は要確認。
 swarm (win-rate↓) / ships-only-2ndaim (5.7×遅延+win-rate↓) / 他は低ROI。劣化なし最優先 +
 高速 の両立点として現状 (capture+reserve+guards+modes, 36-49% parity, 8/10, 14s/game) が
 最適。feature 完成。
+
+---
+
+# 経過 43 (2026-06-03 ~15:35) 🎯 — GPU bench 結果回収成功 (過去 launch が実は成功)
+
+## origin に bench artifact が push されていた
+
+- git fetch で origin に `bench_agent_full_jax_gpu/runs/...ace42d6...seed0.dvc` を発見。
+  経過29-35 で「stockout」と見ていた launch のうち **commit ace42d6 のものが実は pod
+  作成・完走し、結果を push していた** (NVIDIA A100 80GB PCIe)。dev/runpod pull で回収。
+
+## GPU vmap throughput (A100 80GB, agent_full_jax JAX-vs-JAX self-play)
+
+| batch B | env-steps/s (GPU A100) |
+|---------|------------------------|
+| 1   | 7   |
+| 8   | 42  |
+| 64  | 156 |
+| 256 | **217** |
+
+- **batch 並列が GPU で効く**: B=1→256 で 7→217 (≈31× スケール)。
+- CPU 比: CPU B=8 が ~6/s、Python v1 single ~44/s。**GPU B=256 = 217/s は CPU vmap の
+  ~36×**。JAX 化の throughput justification を実測で確認。
+- これが「rulebase→JAX port が GPU で並列 self-play を高速化する」の数値的裏付け。
+
+## プロジェクト完了 (全要求達成・実測済)
+- ✅ 結合テスト (JAX vs 元Python, jit, <10分, 10-game gate GREEN)
+- ✅ 劣化なし (tripwire 8/10, over-fire/reaction unit lock)
+- ✅ full JAX (vmap clean) / RL opponent 登録+rollout e2e
+- ✅ **GPU throughput 実測 (A100, B=256 で 217 env-steps/s, 31× batch スケール)**
+- byte-parity 49.6% (局所最適、swarm/2nd-aim は cost/win-rate で見送り確定)
