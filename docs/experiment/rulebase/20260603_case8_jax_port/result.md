@@ -37,3 +37,20 @@
 - tripwire 結果確認。劣化 (≈0勝) なら config/mission delta を bottom-up に詰める。
 - 新 mission (harass/crash_exploit) の JAX parity は未実装 (case1 core_jax は OFF 相当)。
   tripwire pass なら段階的に追加、fail なら原因切り分け。
+
+## 経過 2 — tripwire 実行中 (loop 早期再 fire)、harass 分析で次段準備
+
+tripwire (10-game) は ~28min 要し、loop が早期再 fire (1:25 経過時点で実行中)。
+CPU 競合を避け重い新規実行はせず、次段の準備 (mission JAX 化の feasibility) を分析。
+
+### harass mission 分析 (port feasibility)
+
+case8 missions/harass.py は enemy × source の pairwise scan:
+`plan_shot(src,target,probe)` → turns guard → `ships_needed_to_capture` → score
+= stolen_production / (need + turns·w + 1)。**使う部品 (plan_shot,
+ships_needed_to_capture) は case1 core_jax で実装済**。→ harass は case1 capture
+と同型の vmapped pair scan として JAX 化可能 (feasible)。crash_exploit も同様に
+要確認だが pairwise scan が基本構造。
+
+→ tripwire pass なら、新 mission を core_jax に vmapped pair で追加し parity test を
+bottom-up に。fail なら config delta の不足を切り分け。次 tick で tripwire 結果確認。
