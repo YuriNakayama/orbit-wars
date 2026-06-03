@@ -72,3 +72,33 @@ CRASH_*, SWARM_MIN_PARTICIPANT_SHIPS, FULL_COMMIT_*) は **未 port の mission 
 harass の JAX 実装は feasible (経過2) だが、**未検証の base の上に積むのは loop の
 「未検証実装回避」原則に反する**。現 base が非劣化と確認できてから mission を段階追加する。
 次 tick で tripwire 結果 → pass なら harass/crash を bottom-up parity 付きで追加。
+
+## 経過 4 — tripwire hang 診断 + foreground gate で非劣化確認 (50%)
+
+### 重要な infra 発見: JAX self-play は background sandbox で hang する
+
+10-game tripwire を nohup / harness background で起動したところ **worker python が
+CPU 0.4s で停止 (state SN, cumulative CPU 伸びず) = hang**。kill→harness background 再投入も
+同様に hang (exit 144)。一方 **foreground (smoke test) は 341s で完走**。
+→ JAX の XLA backend/compile threadpool が background sandbox で初期化 block する模様。
+**教訓: JAX self-play 系は foreground 実行必須** (background 不可)。
+
+### foreground 4-game gate: **JAX 2/4 = 50%** (非劣化確認)
+
+background hang を回避し foreground script で 4-game 実行 (loop 原則「最小限のテストで
+0勝回避」に合致、10-game より cadence 適合):
+
+| seed | js=0 | js=1 |
+|------|------|------|
+| 0 | PY | PY |
+| 1 | JAX | JAX |
+
+→ **50%**。≈0勝の劣化を明確に否定。harass/crash mission 未 port (case8 full より僅かに
+弱い) で **ちょうど互角 (50%)** に着地 = faithful-but-incomplete port の期待挙動。
+Step1 (高速結合テスト + 非劣化) を case8 で達成。
+
+### 次
+
+- mission (harass/crash) を core_jax に追加し full case8 へ近づける (50%→競り勝ち目標)。
+  各追加後に foreground gate で非劣化確認。
+- tripwire は test ファイルに残すが、loop 中は foreground 4-game gate を主に使う。
