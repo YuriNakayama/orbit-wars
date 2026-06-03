@@ -102,3 +102,31 @@ Step1 (高速結合テスト + 非劣化) を case8 で達成。
 - mission (harass/crash) を core_jax に追加し full case8 へ近づける (50%→競り勝ち目標)。
   各追加後に foreground gate で非劣化確認。
 - tripwire は test ファイルに残すが、loop 中は foreground 4-game gate を主に使う。
+
+## 経過 5 — harass mission を core_jax に追加 (非劣化維持、但し dormant)
+
+### 実装
+
+agent_full_jax の pair() に **harass 分岐**を追加 (capture > reinforce > harass の
+priority disjunction)。harass: enemy 高prod を一発捕獲、score = stolen_production
+/(need + turns·0.5 + 1)、stolen = prod·5·1.0。eligibility = enemy & prod≥2 & ships≥1
+& src_reserve≥10 & turns≤20 & ~very_late & need 範囲 (missions/harass.py 忠実)。
+定数も verbatim 追加。
+
+### 検証 (foreground、background hang 回避)
+
+- compile + 1-game clean (shape 48×3, NaN なし)。
+- **foreground 4-game gate: JAX 2/4 = 50%** — harass 追加前と per-game 結果まで同一。
+  → 非劣化維持。但し harass は当該 seed で **dormant** (capture/reinforce が pair を
+  先取り、harass eligibility が滅多に発火しない)。
+- launch-count (seed1 1game): **JAX 190 / Python 1103 = 0.17×**。case1 (0.32×) より
+  更に保守的。JAX port は case8 Python より大幅に under-launch。
+
+### 解釈と方針
+
+case1 と同じ構造的特性: JAX port は本物より大幅に発射控えめ。harass を足しても
+launch は増えず (dormant)。**非劣化 (50%) は維持**するが full case8 と byte 一致には
+程遠い。case1 では parity を詰める施策 (swarm/2nd-aim) が win-rate を上げず見送り確定済
+([[project_rulebase_jax_loop_flow]])。case8 も同じ diminishing returns が見込まれる。
+→ 非劣化を満たす Step1+harass を case8 の到達点とし、次は lineage 横展開 (case4 等、
+case8 と 2-file diff) の方が費用対効果が高い。

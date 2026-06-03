@@ -38,6 +38,16 @@ _REINFORCE_SAFETY_MARGIN = 5
 _REINFORCE_VALUE_MULT = 1.35
 _ATTACK_COST_TURN_WEIGHT = 0.55
 _FOLLOWUP_MIN_SHIPS = 8
+# harass mission (missions/harass.py): one-shot capture of high-prod enemies.
+_HARASS_MIN_TARGET_PRODUCTION = 2
+_HARASS_MIN_TARGET_SHIPS = 1
+_HARASS_MAX_TRAVEL_TURNS = 20
+_HARASS_MIN_SRC_RESERVE = 10
+_HARASS_COST_TURN_WEIGHT = 0.5
+_HARASS_VALUE_MULT = 1.0
+_HARASS_PRODUCTION_STEAL_TURNS = 5
+_VERY_LATE_CAPTURE_BUFFER = 3
+_VERY_LATE_REMAINING_TURNS = 25
 # build_modes thresholds/bonuses (strategy_helpers.build_modes)
 _AHEAD_DOMINATION = 0.18
 _BEHIND_DOMINATION = -0.2
@@ -385,14 +395,43 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             & (r_send >= r_need)
             & (r_value > 0)
         )
-        # prefer capture when both somehow apply (disjoint in practice: target is
-        # either mine-threatened or enemy/neutral).
+        # ---- harass alternative: one-shot capture of high-prod enemy ----------
+        # missions/harass.py: steal an enemy planet's production briefly. Uses the
+        # same need (ships_needed_to_capture) and angle; distinct score based on
+        # stolen production. send_cap = need (one-shot, no over-send).
+        is_very_late = remaining_steps < _VERY_LATE_REMAINING_TURNS
+        stolen = t_prod * _HARASS_PRODUCTION_STEAL_TURNS * _HARASS_VALUE_MULT
+        h_score = stolen / (need + turns * _HARASS_COST_TURN_WEIGHT + 1.0)
+        h_eligible = (
+            is_mine[src_i]
+            & is_enemy[tgt_i]
+            & aim_ok
+            & (src_i != tgt_i)
+            & ~is_very_late
+            & (t_prod >= _HARASS_MIN_TARGET_PRODUCTION)
+            & (t_ships >= _HARASS_MIN_TARGET_SHIPS)
+            & (ships[src_i] >= _HARASS_MIN_SRC_RESERVE)
+            & (turns <= _HARASS_MAX_TRAVEL_TURNS)
+            & (turns <= remaining_steps - _VERY_LATE_CAPTURE_BUFFER)
+            & (need > 0)
+            & (need < ships[src_i])
+            & (need <= ships[src_i] - _HARASS_MIN_SRC_RESERVE + (t_ships + 2))
+        )
+
+        # priority: capture > reinforce > harass (capture/reinforce disjoint;
+        # harass only fires when neither capture nor reinforce claims the pair).
         use_cap = cap_eligible
-        out_score = jnp.where(use_cap, score, r_score)
-        out_send = jnp.where(use_cap, send_cap, r_send)
-        out_need = jnp.where(use_cap, need, r_need)
-        eligible = cap_eligible | r_eligible
-        is_reinf = r_eligible & ~cap_eligible
+        use_reinf = r_eligible & ~cap_eligible
+        use_harass = h_eligible & ~cap_eligible & ~r_eligible
+        out_score = jnp.where(
+            use_cap, score, jnp.where(use_reinf, r_score, h_score)
+        )
+        out_send = jnp.where(
+            use_cap, send_cap, jnp.where(use_reinf, r_send, need)
+        )
+        out_need = jnp.where(use_cap, need, jnp.where(use_reinf, r_need, need))
+        eligible = cap_eligible | r_eligible | h_eligible
+        is_reinf = use_reinf
         return out_score, angle, out_send, out_need, eligible, is_reinf
 
     idx = jnp.arange(MAX_PLANETS)
