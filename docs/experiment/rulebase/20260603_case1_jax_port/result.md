@@ -998,3 +998,29 @@ build_modes 忠実 / parity 部品 87+ GREEN / lint+mypy+format clean。
 ## 価値
 ships-only の真因特定には至らずだが、(1) reaction_times の mid-game 忠実性を確認・固定、
 (2) 仮説を 1 つ消去。test カバレッジ拡張で安全。劣化なし維持。case1 parity 部品 88+ GREEN。
+
+---
+
+# 経過 41 (2026-06-03 ~14:35) — ships-only 真因 確定: 2-stage aim の 2段目欠落
+
+## t152 で確定
+
+- agent: rough_ships=6 → aim turns=**9**。need/send_cap を turns=9 で計算。
+- python option_collector は **2-stage**: ① rough_aim(rough_ships=6)→turns=9、
+  ② send_guess=preferred_send≈20 で再 aim → **turns=7** (ship 多→fleet 速→turns 減)。
+  最終 need/send_cap は **turns=7** ベース。
+- → 私の agent は **2段目の再 aim を省略**し、rough(turns=9) のまま need/send 計算。
+  turns 差 (9 vs 7) が need→preferred_send を 1 ずらし over-send。**これが ships-only の
+  真因** (reaction_times でも build_modes でもなかった、経過39-40 で消去済)。
+
+## 修正方針 (localized, in-pair)
+
+option_collector 通り pair() に 2nd aim を追加: rough aim → send_guess 算出 → send_guess
+で再 aim → 確定 turns で need/send_cap/value/score 再計算。resolver は不変 (回帰リスク低)。
+但し aim は 5-iter scan で重く、全 P×P pair に 2 回 aim は計算 2 倍。GPU では許容範囲、
+CPU smoke 速度は要確認。
+
+## NEXT
+1. pair() に 2nd aim pass を実装 (turns 確定後 need/send 再計算)。
+2. ships-only 減 + full-match 向上 + tripwire 維持 + 速度 (1試合<10分) を実測。
+3. 劣化なら revert。
