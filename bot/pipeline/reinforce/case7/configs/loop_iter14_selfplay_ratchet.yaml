@@ -1,0 +1,52 @@
+bc_warmstart:
+  enabled: false
+  weights_path: ''
+model:
+  attn_heads: 8
+  encoder_layers: 4
+  head_dropout: 0.0
+  hidden: 192
+  inducing_points: 24
+  no_op_bias: 8.0
+  ship_log_std_init: 0.5
+output:
+  metrics_filename: metrics.json
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  run_meta_filename: run.json
+  weights_filename: best.pt
+training:
+  clip_eps: 0.2
+  coef_planet: 0.0
+  coef_ship: 0.0
+  entropy_coef: 0.02
+  episodes_per_iter: 4
+  gae_lambda: 0.95
+  gamma: 0.995
+  horizon: 500
+  iterations: 20
+  kl_beta: 0.0
+  lr: 3.0e-05
+  lr_end: 3.0e-06
+  lr_schedule_steps: 5000
+  max_grad_norm: 0.5
+  minibatch_size: 128
+  opponent: curriculum
+  opponent_curriculum:
+    early: noop
+    late: pool
+    switch_iter: 1
+  opponent_pool:
+    cap: 6
+    late_full_prob: 0.0
+    priority: f_hard
+    priority_ema: 0.7
+    priority_p: 2.0
+    snapshot_every: 2
+  ppo_epochs: 2
+  resume_from: /Users/user/project/orbit-wars.worktrees/feature-reinforcement-learning-pooling-simple/data/output/models/reinforce/case7_train_jax/runs/local_20260603T031704Z/best.pt
+  seed: 0
+  shaping_coef: 1.0
+  shaping_mode: ratio
+  target_kl: 0.02
+  value_coef: 0.5
+  weight_decay: 1.0e-05

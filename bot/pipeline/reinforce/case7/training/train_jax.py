@@ -775,6 +775,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         # weights survive a mid-training host preempt (layer-1 safeguard).
         best_pt = run_dir / "best.pt"
         _save_best_pt(model, best_pt)
+        # Also keep a per-iter local checkpoint so the sweet-spot model is
+        # recoverable post-hoc. best.pt == latest, and self-play can overshoot
+        # the generalizing optimum (it overfits to the current pool); a later
+        # external eval (vs rl_v0 etc.) then picks the right iter's ckpt rather
+        # than being stuck with the last (possibly degraded) model.
+        _save_best_pt(model, run_dir / f"ckpt_i{it:03d}.pt")
         if row["win_rate"] >= best_win:
             best_win = row["win_rate"]
             _upload_best_to_s3(best_pt, row["iter"], best_win)
