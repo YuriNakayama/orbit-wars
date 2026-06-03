@@ -1174,3 +1174,19 @@ source module だけでなく **test module も mypy 対象** (dev/test-bot は 
 ## 価値
 PFSP self-play の両 seat 正しさを回帰防止。case1 port の test カバレッジを seat 対称性に拡張。
 劣化なし維持、CI green 継続。
+
+---
+
+# 経過 48 (2026-06-03 ~18:15) — HEAD で GPU bench 再実行 (build_modes 変更後)
+
+## 再実行の正当化
+
+ace42d6 の bench (217/s @ B256) 後、agent_full_jax は **build_modes 忠実化 (経過38, +56行:
+fleet strength sum + _owner_strength×4owner + finishing checks)** が入った。計算量増で
+throughput が変わり得る → HEAD (45557fce) で再計測は新情報。A100 Medium 在庫あり。
+
+## launch
+
+`dev/runpod train <HEAD> --case bench_agent_full_jax_gpu --volume-name orbit_wars_us
+--data-center-id US-KS-2 --watch` を background 起動。US-KS-2 offer は populate
+(3090/A6000/4090/A100PCIe)、A100 PCIe (Medium) 取得を期待。結果待ち。
