@@ -718,6 +718,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # bench_agent_full_jax_gpu: GPU bench for the faithful rulebase/case1 JAX
+    # agent (core_jax.agent_full_jax). Times vmapped JAX-vs-JAX self-play
+    # throughput (env-steps/sec) across batch sizes vs Python baseline_v1 single.
+    # Headline = GPU figure justifying the rulebase→JAX port.
+    "bench_agent_full_jax_gpu": {
+        "family": "reinforce",
+        "stage": "bench_agent_full_jax_gpu",
+        "train_module": "pipeline.reinforce._bench.agent_full_jax_gpu.run_bench",
+        "config_arg": "",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # bench_aim_jax_gpu: GPU bench for the case2 intercept solver — both the
     # (src,target) grid vmap (vs Python double loop) AND the act()-level turn
     # time (Python vs JAX aim backend, on jax_env obs). Same onstart shape as

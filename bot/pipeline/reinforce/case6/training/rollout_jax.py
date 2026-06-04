@@ -36,6 +36,9 @@ from orbit_wars_jax.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
+    compute_actions_jax as _baseline_v1_faithful_actions,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
 )
@@ -62,6 +65,11 @@ OPPONENT_SELF_SNAPSHOT: int = 3
 OPPONENT_PYTHON_V1: int = 4
 OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
+# Faithful pure-JAX baseline_v1 port (core_jax.agent_full_jax): capture + reserve
+# + plan_shot guards. vmap-friendly (no host roundtrip), 8/10 vs real v1 and
+# 49.6% action-parity — a fast in-JAX opponent that does NOT degrade to ~0-win
+# (unlike the lite port). Closes train throughput vs python_v1 host callback.
+OPPONENT_BASELINE_V1_FAITHFUL: int = 7
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -77,6 +85,7 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "python_v1": OPPONENT_PYTHON_V1,
     "python_v4": OPPONENT_PYTHON_V4,
     "python_v8": OPPONENT_PYTHON_V8,
+    "baseline_v1_faithful": OPPONENT_BASELINE_V1_FAITHFUL,
 }
 
 
@@ -401,10 +410,13 @@ def _rollout_one_env(
         )  # (L, 3) via pure_callback to real Python baseline_v1
         opp_python_v4_actions = _python_v4_opponent_actions(state, 1 - seat)  # (L, 3)
         opp_python_v8_actions = _python_v8_opponent_actions(state, 1 - seat)  # (L, 3)
+        opp_v1_faithful_actions = _baseline_v1_faithful_actions(
+            state, 1 - seat
+        )  # (L, 3) faithful pure-JAX v1 (no host roundtrip)
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
-        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → baseline_v1_faithful.
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 6),
+            jnp.clip(opponent_mode, 0, 7),
             [
                 lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
                 lambda: opp_lite_actions,
@@ -413,6 +425,7 @@ def _rollout_one_env(
                 lambda: opp_python_v1_actions,
                 lambda: opp_python_v4_actions,
                 lambda: opp_python_v8_actions,
+                lambda: opp_v1_faithful_actions,
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
