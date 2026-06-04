@@ -303,11 +303,22 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 # evaluation/snapshot_update.py and tests call into the untyped notebook port.
+# The case1 JAX-parity tests likewise call the untyped WorldModel / build_world
+# Python reference to diff against the JAX port.
 module = [
     "pipeline.rulebase.case5.evaluation.snapshot_update",
     "tests.unit.pipeline.rulebase.case5.test_core_physics",
     "tests.unit.pipeline.rulebase.case5.test_core_world_helpers",
     "tests.unit.pipeline.rulebase.case5.test_plan_shot_safety",
+    "tests.unit.pipeline.rulebase.case1.test_featurize_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_missions_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_worldmodel_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_aim_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_geometry_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_physics_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_safety_jax_parity",
+    "tests.unit.pipeline.rulebase.case1.test_swarm_jax_parity",
+    "tests.e2e.pipeline.rulebase.case1.test_agent_jax_identity",
 ]
 disallow_untyped_calls = false
 
