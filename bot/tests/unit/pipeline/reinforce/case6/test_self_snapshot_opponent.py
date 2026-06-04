@@ -57,6 +57,7 @@ def test_self_snapshot_requires_opp_model() -> None:
         )
 
 
+@pytest.mark.slow  # full JAX rollout (~25s); excluded from 5-min CI Bot budget
 def test_self_snapshot_rollout_runs_and_is_finite() -> None:
     model = _tiny_model()
     opp_model = _tiny_model()  # distinct frozen snapshot
@@ -74,6 +75,7 @@ def test_self_snapshot_rollout_runs_and_is_finite() -> None:
     assert bool(jnp.all(jnp.isfinite(batch.episode_outcomes)))
 
 
+@pytest.mark.slow  # full JAX rollout per opponent (~25s each); see CI Bot budget
 @pytest.mark.parametrize(
     "opponent", ["noop", "baseline_jax_lite", "baseline_v1_faithful"]
 )
