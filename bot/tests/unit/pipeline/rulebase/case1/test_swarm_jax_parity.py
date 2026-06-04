@@ -15,6 +15,10 @@ import pytest
 
 from pipeline.rulebase.case1.baseline_jax.core_jax import swarm_jax as sw
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 
 def _py_allocate_2(
     need: int,

@@ -16,6 +16,10 @@ import pytest
 from pipeline.rulebase.case1.baseline.core import geometry as gpy
 from pipeline.rulebase.case1.baseline_jax.core_jax import geometry_jax as gjax
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 RTOL = 1e-9
 ATOL = 1e-9
 

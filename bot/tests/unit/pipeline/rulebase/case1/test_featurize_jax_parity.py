@@ -18,6 +18,10 @@ from orbit_wars_jax.reset import reset
 from pipeline.rulebase.case1.baseline.agent import build_world
 from pipeline.rulebase.case1.baseline_jax.core_jax import featurize_jax as fjax
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 
 def _planet_arrays(world: Any) -> tuple[Any, ...]:
     xs, ys, rs, ships, mine, enemy = [], [], [], [], [], []

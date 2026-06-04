@@ -54,6 +54,10 @@ def test_resolve_arrival_event_parity(seed: int) -> None:
 
 from pipeline.rulebase.case1.baseline.core.types import Planet  # noqa: E402
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 HORIZON = 110
 MAX_SHIPS = 60
 

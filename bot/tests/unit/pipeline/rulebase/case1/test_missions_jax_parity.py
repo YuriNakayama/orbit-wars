@@ -19,6 +19,10 @@ from pipeline.rulebase.case1.baseline import strategy_helpers as sh
 from pipeline.rulebase.case1.baseline.agent import build_world
 from pipeline.rulebase.case1.baseline_jax.core_jax import missions_jax as mj
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 RTOL = 1e-7
 
 

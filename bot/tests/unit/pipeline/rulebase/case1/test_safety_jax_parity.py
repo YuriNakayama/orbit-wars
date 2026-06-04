@@ -17,6 +17,10 @@ from pipeline.rulebase.case1.baseline.core import safety as spy
 from pipeline.rulebase.case1.baseline.core.types import Planet
 from pipeline.rulebase.case1.baseline_jax.core_jax import safety_jax as sjax
 
+# Marked slow: x64 JAX recompilation makes these ~1-3s each; excluded from
+# the 5-min CI Bot budget (matches case2 parity convention). Run via dev/test-bot -m slow.
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 def test_is_trajectory_sun_safe_parity(seed: int) -> None:
