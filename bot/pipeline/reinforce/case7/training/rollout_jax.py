@@ -495,28 +495,26 @@ def _rollout_one_env(
         # For self_snapshot we featurize the opponent seat, run the frozen
         # opp_model forward, and take the deterministic (argmax) action.
         opp_seat = jnp.int32(1) - jnp.int32(seat)
-        opp_lite_actions = _baseline_jax_actions(state, 1 - seat)  # (L, 3)
-        opp_full_actions = _baseline_jax_full_actions(state, 1 - seat)  # (L, 3)
-        opp_snapshot_actions = _self_snapshot_opponent_actions(
-            opp_model, state, 1 - seat
-        )  # (L, 3)
-        opp_python_v1_actions = _python_v1_opponent_actions(
-            state, 1 - seat
-        )  # (L, 3) via pure_callback to real Python baseline_v1
-        opp_python_v4_actions = _python_v4_opponent_actions(state, 1 - seat)  # (L, 3)
-        opp_python_v8_actions = _python_v8_opponent_actions(state, 1 - seat)  # (L, 3)
+        # Compute ONLY the selected opponent's actions. Each python_v* branch is
+        # a `pure_callback` host hop (vmap_method='sequential'): computing it
+        # eagerly (outside the switch) fires the host round-trip every step even
+        # for a noop/pool run, which dominated rollout (~390s/iter, GPU idle).
+        # Wrapping every branch in a lambda so only the chosen one executes keeps
+        # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
         # 4 → python_v1, 5 → python_v4, 6 → python_v8.
         opp_actions = jax.lax.switch(
             jnp.clip(opponent_mode, 0, 6),
             [
-                lambda: jnp.full_like(opp_lite_actions, -1.0).at[:, 0].set(-1.0),
-                lambda: opp_lite_actions,
-                lambda: opp_full_actions,
-                lambda: opp_snapshot_actions,
-                lambda: opp_python_v1_actions,
-                lambda: opp_python_v4_actions,
-                lambda: opp_python_v8_actions,
+                lambda: jnp.full(
+                    (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
+                ),
+                lambda: _baseline_jax_actions(state, 1 - seat),
+                lambda: _baseline_jax_full_actions(state, 1 - seat),
+                lambda: _self_snapshot_opponent_actions(opp_model, state, 1 - seat),
+                lambda: _python_v1_opponent_actions(state, 1 - seat),
+                lambda: _python_v4_opponent_actions(state, 1 - seat),
+                lambda: _python_v8_opponent_actions(state, 1 - seat),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
