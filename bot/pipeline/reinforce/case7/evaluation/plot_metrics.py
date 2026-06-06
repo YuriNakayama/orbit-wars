@@ -58,6 +58,34 @@ def _plot_panel(ax: Axes, history: list[Row], keys: list[str], title: str) -> No
     ax.legend(fontsize=8)
 
 
+def _plot_win_by_opponent(
+    ax: Axes, history: list[Row], key: str, title: str, *, clamp01: bool = False
+) -> None:
+    """Plot a per-iter metric colored/segmented by the opponent of that iter.
+
+    Each iter's point is colored by its `opponent`, and a dashed horizontal line
+    marks each opponent's mean — so the effect of a curriculum/pool switch (e.g.
+    noop → baseline_jax_full → self_snapshot) is visible at a glance.
+    """
+    by_opp: dict[str, tuple[list[int], list[float]]] = {}
+    for row in history:
+        opp = str(row.get("opponent", "?"))
+        if key in row and row[key] is not None:
+            xs, ys = by_opp.setdefault(opp, ([], []))
+            xs.append(int(_num(row["iter"])))
+            ys.append(_num(row[key]))
+    for opp, (xs, ys) in sorted(by_opp.items()):
+        ax.scatter(xs, ys, label=opp, s=40)
+        mean = sum(ys) / len(ys)
+        ax.axhline(mean, linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_title(title)
+    ax.set_xlabel("iter")
+    if clamp01:
+        ax.set_ylim(-0.02, 1.02)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+
+
 @app.command()
 def main(metrics: Path = _METRICS_OPT, out: Path = _OUT_OPT) -> None:
     """Render learning curves from a (possibly in-flight) metrics.json."""
@@ -67,10 +95,10 @@ def main(metrics: Path = _METRICS_OPT, out: Path = _OUT_OPT) -> None:
         raise typer.BadParameter(f"no history rows in {metrics}")
 
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
-    _plot_panel(axes[0, 0], history, ["win_rate"], "win rate")
-    _plot_panel(
-        axes[0, 1], history, ["mean_reward", "reward_min", "reward_max"], "reward"
+    _plot_win_by_opponent(
+        axes[0, 0], history, "win_rate", "win rate by opponent", clamp01=True
     )
+    _plot_win_by_opponent(axes[0, 1], history, "mean_reward", "reward by opponent")
     _plot_panel(axes[0, 2], history, ["policy_loss", "value_loss"], "losses")
     _plot_panel(axes[1, 0], history, ["entropy"], "policy entropy")
     _plot_panel(axes[1, 1], history, ["approx_kl"], "approx KL")
