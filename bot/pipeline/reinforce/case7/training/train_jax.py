@@ -297,6 +297,44 @@ def _upload_best_to_s3(best_pt: Path, iteration: int, win_rate: float) -> None:
         )
 
 
+def _upload_artifact_to_s3(local: Path, key_suffix: str, iteration: int) -> None:
+    """Mirror an arbitrary run artifact to S3 every iter (crash-safe layer).
+
+    Unlike `_upload_best_to_s3` (best-win only), this fires regardless of win
+    improvement so the latest per-iter ckpt and metrics.json survive a host
+    preempt / OOM / destroy mid-run. Satisfies the long-running checkpoint
+    policy (intermediate artifacts must be S3-uploaded every iter). `key_suffix`
+    is appended under the per-run prefix (e.g. `ckpts/ckpt_i003.pt`,
+    `metrics.json`). Outside RunPod the env var is empty and we skip silently.
+    """
+    prefix = os.environ.get("ORBIT_WARS_BEST_S3_PREFIX", "").strip()
+    if not (prefix and prefix.startswith("s3://")):
+        return
+    bucket, _, key_prefix = prefix[len("s3://") :].rstrip("/").partition("/")
+    key = f"{key_prefix}/{key_suffix}"
+    try:
+        import boto3  # noqa: PLC0415
+
+        s3 = boto3.client("s3")
+        s3.upload_file(str(local), bucket, key)
+        logger.info(
+            json.dumps(
+                {
+                    "event": "artifact_s3_upload",
+                    "iter": iteration,
+                    "uri": f"s3://{bucket}/{key}",
+                }
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "artifact S3 upload failed iter=%d key=%s err=%s",
+            iteration,
+            key_suffix,
+            exc,
+        )
+
+
 def _build_optimizer_state(model: ActorCriticJax, cfg: PPOConfigJax) -> tuple[Any, Any]:
     """Returns (optimizer, opt_state)."""
     optimizer = make_optimizer(cfg)
@@ -780,7 +818,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         # the generalizing optimum (it overfits to the current pool); a later
         # external eval (vs rl_v0 etc.) then picks the right iter's ckpt rather
         # than being stuck with the last (possibly degraded) model.
-        _save_best_pt(model, run_dir / f"ckpt_i{it:03d}.pt")
+        ckpt_pt = run_dir / f"ckpt_i{it:03d}.pt"
+        _save_best_pt(model, ckpt_pt)
         if row["win_rate"] >= best_win:
             best_win = row["win_rate"]
             _upload_best_to_s3(best_pt, row["iter"], best_win)
@@ -789,14 +828,22 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         # reward/stat trace + opponent-pool distribution are readable mid-run
         # (tail / plot in flight). Pairs with the per-iter best.pt above so
         # both weights and stats are always retrievable before completion.
+        metrics_pt = run_dir / "metrics.json"
         _write_metrics(
-            run_dir / "metrics.json",
+            metrics_pt,
             iterations_run=it + 1,
             total_episodes=(it + 1) * episodes_per_iter,
             best_win_rate=best_win,
             runtime_seconds=time.perf_counter() - started,
             history=history,
         )
+        # Crash-safe layer: mirror this iter's ckpt + metrics to S3 EVERY iter
+        # (not just on best-win). A host preempt / OOM / destroy between here
+        # and the next iter then loses nothing — the latest weights and the
+        # full metrics trace are already on S3. Satisfies the long-running
+        # checkpoint policy (intermediate artifacts uploaded every iter).
+        _upload_artifact_to_s3(ckpt_pt, f"ckpts/{ckpt_pt.name}", row["iter"])
+        _upload_artifact_to_s3(metrics_pt, "metrics.json", row["iter"])
 
     runtime = time.perf_counter() - started
     logger.info(

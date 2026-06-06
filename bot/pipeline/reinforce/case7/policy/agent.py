@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +13,29 @@ from .featurizer import HistoryState, featurize
 from .model import ActorCritic, ModelConfig, load_bc_weights
 from .sampling import greedy_action
 
-_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights.pt"
+_DEFAULT_WEIGHTS_PATH = Path(__file__).resolve().parent / "weights.pt"
 
 _MODEL: ActorCritic | None = None
 _HISTORY: HistoryState | None = None
 
 
+def _weights_path() -> Path:
+    """Resolve the weights file. `ORBIT_WARS_CASE7_WEIGHTS` overrides the bundled
+    `weights.pt` so an arbitrary per-iter `ckpt_i*.pt` can be evaluated vs a
+    rulebase locally without copying over the canonical submit weights. The Kaggle
+    submit runtime never sets this var, so production still uses `weights.pt`.
+    """
+    override = os.environ.get("ORBIT_WARS_CASE7_WEIGHTS", "").strip()
+    return Path(override) if override else _DEFAULT_WEIGHTS_PATH
+
+
 def _load_model() -> ActorCritic:
     model = ActorCritic(ModelConfig())
-    if _WEIGHTS_PATH.exists():
+    weights = _weights_path()
+    if weights.exists():
         # Reuse the strict=False loader: handles both PPO checkpoints (full
         # state_dict) and BC warm-start weights (no value_head / ship_log_std).
-        load_bc_weights(model, str(_WEIGHTS_PATH))
+        load_bc_weights(model, str(weights))
     model.eval()
     return model
 
