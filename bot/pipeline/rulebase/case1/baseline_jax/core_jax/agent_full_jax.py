@@ -470,9 +470,14 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             jnp.where(fire, send, 0),
         )
 
+    # Bind carry float dtype to `ships` (== jnp.float_ at the active x64 config)
+    # so the scan carry init and body agree under both float32 and x64. A bare
+    # `jnp.float_` here was baked to float32 at import while the body computes in
+    # float64 under x64, tripping lax.scan's carry-dtype equality check.
+    _f = ships.dtype
     init = (
-        jnp.zeros(MAX_PLANETS, jnp.float_),  # spent[src]
-        jnp.zeros(MAX_PLANETS, jnp.float_),  # committed[tgt]
+        jnp.zeros(MAX_PLANETS, _f),  # spent[src]
+        jnp.zeros(MAX_PLANETS, _f),  # committed[tgt]
         jnp.zeros(MAX_PLANETS, jnp.int32),  # out[src] = launch count
     )
     (_spent, _committed, _out), (emit_src, emit_angle, emit_send) = jax.lax.scan(
@@ -481,9 +486,9 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
 
     # Pack all fired emissions (a source may fire twice: main + followup) into
     # the first free action slots, in score order.
-    out_pid = jnp.full(MAX_LAUNCHES_PER_AGENT, -1.0)
-    out_ang = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
-    out_snd = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
+    out_pid = jnp.full(MAX_LAUNCHES_PER_AGENT, -1.0, dtype=_f)
+    out_ang = jnp.zeros(MAX_LAUNCHES_PER_AGENT, _f)
+    out_snd = jnp.zeros(MAX_LAUNCHES_PER_AGENT, _f)
 
     def pack(
         carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array], k: jax.Array
