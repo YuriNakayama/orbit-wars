@@ -12,14 +12,17 @@
 set -euo pipefail
 RUN_ID="$1"
 CONFIG="$2"
+# Branch to deploy on the pod. Defaults to the current local branch so the helper
+# works from any worktree (pass an explicit 3rd arg to override).
+BRANCH="${3:-$(git rev-parse --abbrev-ref HEAD)}"
 S3_PREFIX="s3://orbit-wars-dvc-286854171013/remote/runpod_artifacts/${RUN_ID}"
 SSH="dev/runpod ssh ${RUN_ID} --case case7 --via direct --exec"
 
 # 1) ensure GPU jaxlib (dev pod ships CPU-only jax)
 $SSH "cd /workspace/orbit-wars/bot && .venv/bin/python -c 'import jax; print(jax.default_backend())' | grep -q gpu || uv pip install 'jax[cuda12]==0.10.0'"
 
-# 2) pull latest code
-$SSH "cd /workspace/orbit-wars && git fetch origin -q && git checkout -q feature/reinforcement-learning-pooling-simple && git pull -q origin feature/reinforcement-learning-pooling-simple"
+# 2) pull latest code on the requested branch
+$SSH "cd /workspace/orbit-wars && git fetch origin -q && git checkout -q ${BRANCH} && git pull -q origin ${BRANCH}"
 
 # 3) write tmux launcher + start
 $SSH "cat > /workspace/run_train.sh <<EOF
