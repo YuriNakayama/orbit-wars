@@ -156,3 +156,23 @@ JAX core は single-source (最大2発 followup) のみ。`swarm_jax.allocate_2`
 - **速度 176ms/call** (case8 24,000ms の 136倍速、host v8 39ms の ~4.5倍)。実用範囲。
 - 結論: action-parity 80% + win-rate 75% + 176ms。**RL 学習相手として十分忠実かつ高速**。
   残る数値微差は win-rate に影響せず (long tail)、ここで詰めるのは diminishing returns。
+
+## 段9: ⚠️ core_jax は v1 の忠実再現でなく「より強い別agent」(訂正)
+win-rate を精査した結果、重要な訂正:
+- core_jax x64 (cap除去) vs 本物 v1 = **27/30 (90%)** (n=30)
+- core_jax x64 (cap=2, 元) vs 本物 v1 = **13/16 (81%)** (n=16)
+→ **両 version とも v1 に ~80-90% 勝つ**。cap 除去は原因でなく、**core_jax は元々 v1 より強い**。
+- = core_jax は「v1 の 1:1 port」を謳うが実際は **action 80% 一致の "改良版 v1"**。
+  faithful parity (~50% vs v1) ではない。test_jax_port_action_equivalence が FAIL なのも整合。
+
+### 含意 (学習相手としての評価)
+- ❌ 「JAX変換前と同等の性能」= ~50% vs v1 ではない (core_jax は 80-90% で強い)。
+- ✅ ただし **RL 学習相手としては「忠実 or やや強い v1系 rule」で十分**: action 80% 一致 +
+  v1 系の戦略を踏襲 + 高速 (176ms)。H4 の baseline_jax_full (10% 一致・別物) より遥かに良い。
+- 完全 parity (action 100% / win 50%) には v1 の保守的 launch 制限まで含めた full port が必要
+  (大規模、win-rate parity と action-parity の両立は別の難問)。
+
+### 確定した成果 (commit 済)
+- x64 scan-carry dtype バグ修正 (9275b6d1): core_jax が x64 で動作。汎用的なコード改善。
+- per-source cap 除去 (cfbc677d): action-parity 70→80%。ただし win-rate は元々高く faithful化ではない。
+- 速度: 176ms/call (case8 24s の 136倍速)。RL rollout で実用可能な唯一の高 parity JAX rule。
