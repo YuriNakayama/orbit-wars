@@ -29,15 +29,23 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 ## 仮説リスト (priority 順)
 - [x] (P1) H1: handicap curriculum — REJECTED (iter1)。lite ですら勝てず entropy collapse、難度調整は無効。ボトルネックは reward 信号
 - [x] (P1) H2: dense差分報酬 — REJECTED (iter2)。max 0.375、H1と同じ振動+entropy collapse。reward shaping も plateau 破れず
-- [ ] (P1) H3: **BC warm-start** — imitation 学習済 policy から RL 開始。H1/H2 が示した「from-scratch PPO の探索失敗/entropy collapse」を回避。最有力
-- [ ] (P2) H4: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
-- [ ] (P2) H5: win-rate PFSP の cap/p 調整 — 強相手の混入率を勝率連動で制御
+- [x] (P1) H3: BC warm-start — REJECTED (iter3, harmful)。case9 imitation が case7 に転移せず vs noop 0.22/vs full 0.03。kl anchor が弱 policy に固定
+- [ ] (P1) H4: **scale-up** — 同設定(self_snapshot pool, dense差分)で iterations 20→150-200。memory `case1_aa_300iter` は 300iter で reward 0.50 到達。20iter ceiling を破れるか検証 (~$1-1.5)
+- [ ] (P2) H5: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
 - [ ] (P3) H6: asymmetric reward — 弱側(agent)の勝ち報酬増幅/負け減衰で初期正信号確保 (research 処方E)
 
-## 知見 (2026-06-08, H1/H2 後)
-- **H1(opponent難度) と H2(reward shaping) が同一失敗形**: vs baseline_jax_full で win ~0.26-0.32 振動、entropy 16→10 collapse、学習 trend なし。
-- 共通因子 = **from-scratch PPO の探索不足/早期 collapse**。20iter で mediocre 戦略に固着。
-- → opponent/reward をいじる前に **初期化(BC warm-start)** か **大幅な iter 増(200+)** が必要、という方向に絞る。
+## 知見 (2026-06-08, H1/H2/H3 後 — round 1 結論)
+- **3つの 20-iter 機構改変 (H1 opponent / H2 reward / H3 BC init) が全て rulebase を破れず**:
+  - H1 handicap: vs full ~0.32 (trend無)
+  - H2 dense差分: vs full mean 0.260/max 0.375
+  - H3 BC warm-start: vs full 0.03-0.06 (**逆効果**、case9→case7 転移失敗)
+- 共通: vs baseline_jax_full で **~0.3 が天井**、entropy collapse、学習 trend なし。
+- **結論**: 20-iter 規模では機構をどういじっても rulebase に勝てない (memory `case6_live_eval`
+  の「小規模 0/30 天井」を再確認)。ボトルネックは機構でなく **規模(iter数)**。
+- → **次ラウンドは scale-up (H4)**: 最も素直な設定 (self_snapshot pool + dense差分, BC無し,
+  kl_beta=0) で iterations を 150-200 に増やし、20iter ceiling が単なる under-training か
+  本質的天井かを判定する。これが分岐点。
+- 副産物の改善点: launch_poc.sh に BC scp 同梱、family=reinforce 明示で onstart 誤分類回避。
 
 ## 評価プロトコル(各 PoC 共通)
 1. fast_probe_gpu ベースで施策を1つ変更 → RunPod 4090 で ~20分学習(中間 ckpt+metrics は S3)。
@@ -52,3 +60,4 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 | (baseline) | 2026-06-06 | — | ...661d5ad | vs v8 0/10, self ~0.5 | — | docs/plans/case7-pool-rl/10 |
 | 1 | 2026-06-08 | H1 | ...90444c5 | vs full ~0.32 (trend無), lite ~0.22 | REJECTED | iter1_result.md |
 | 2 | 2026-06-08 | H2 | ...a1c5e8b | vs full mean 0.260/max 0.375 (trend無) | REJECTED | iter2_result.md |
+| 3 | 2026-06-08 | H3 | ...acbab5c | vs full 0.03-0.06 (BC init 逆効果) | REJECTED | iter3_result.md |
