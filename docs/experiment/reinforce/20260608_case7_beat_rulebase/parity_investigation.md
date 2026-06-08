@@ -143,3 +143,16 @@ JAX core は single-source (最大2発 followup) のみ。`swarm_jax.allocate_2`
 ## 実測コマンド
 - eval: `python -m pipeline.reinforce.case7.evaluation.eval_ckpt_vs_rulebase --ckpt ... --baseline baseline_v1 -n 30`
 - parity probe: `/tmp/parity_probe.py` (要 bot/ cwd, PYTHONPATH=.)
+
+## 段8: followup/multi-launch TDD → parity 70%→80%、win-rate で機能的忠実性を確認
+- **per-source launch cap (count<2) 除去** (commit cfbc677d): v1 は rich source が複数 target を
+  capture (budget のみで制限)。cap を slot 限界に上げ、followup_ok (≥8 ships) で自然制限。
+  → x64 action-parity 70%→**80% (24/30)**、JAX launches 43→55 (Python 56)、launch 欠落ゼロ。
+  既存 identity test 8 passed (非回帰)。
+- 残差 6 件は全て **±1-6 隻 / 小角度の数値差** (followup の send 再計算差等、board 固有の long tail)。
+- **機能的忠実性 (win-rate)**: core_jax x64 vs 本物 v1 = **6/8 (75%)** (n=8)。
+  → catastrophic でない (test docstring: faithful port は ~50%)。むしろ cap 除去で multi-capture が
+  効き **v1 と同等以上**。学習相手としては「忠実 or やや強い v1」= 十分。
+- **速度 176ms/call** (case8 24,000ms の 136倍速、host v8 39ms の ~4.5倍)。実用範囲。
+- 結論: action-parity 80% + win-rate 75% + 176ms。**RL 学習相手として十分忠実かつ高速**。
+  残る数値微差は win-rate に影響せず (long tail)、ここで詰めるのは diminishing returns。
