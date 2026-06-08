@@ -1,0 +1,68 @@
+# case7 H4: scale-up — the round-1 conclusion was that all 20-iter mechanism
+# tweaks (H1 opponent, H2 reward, H3 BC init) hit a ~0.3 ceiling vs the rulebase.
+# This tests whether that ceiling is just under-training: same healthy setup as
+# the original PoC (PFSP self_snapshot pool + baseline_jax_full mix, dense diff
+# reward) but iterations 20 → 150. memory case1_aa_300iter reached reward 0.50 at
+# 300 iters, so 150 should reveal whether the win-rate vs rulebase climbs with
+# scale or is an intrinsic small-scale ceiling.
+#
+# No BC warm-start, kl_beta=0 (H3 showed BC init is harmful here). f_hard PFSP
+# pool keeps the self-play opponent non-saturating (memory unbeatable_opponent).
+#
+# ~150 iter × ~24s = ~60min on RTX 4090. Crash-safe: per-iter ckpt+metrics to S3.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 150
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  # PFSP self_snapshot pool (f_hard) + baseline_jax_full mix — the healthiest
+  # opponent dynamics from the original PoC (self_snapshot recovered to ~0.5).
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8       # push current model every 8 iters (more snapshots over 150)
+    cap: 6                  # larger pool for the longer run
+    late_full_prob: 0.4     # 40% baseline_jax_full, else a pooled past self
+    priority: f_hard
+    priority_p: 2.0
+    priority_ema: 0.7
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
