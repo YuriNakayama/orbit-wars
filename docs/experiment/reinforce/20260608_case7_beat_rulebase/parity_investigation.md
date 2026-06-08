@@ -75,6 +75,54 @@ tie-break edge (memory `rulebase_jax_parity_failure_mode`) と推定。
 - **解決策 = 学習相手を parity-exact (~90%) な case8 baseline_jax に替える**。これで train/eval gap が大幅に縮む。
 - ただし「parity 良い相手なら本物に勝てる agent が学習できる」は **未だ実証前** — case8 を相手に学習し直して本物 v8 で評価する実験 (次) で確認する。
 
+## 段6: case8 in-JAX opponent は速度的に不可、host_callback が現実解
+case8 を rollout opponent に追加 (mode 7) し速度実測:
+- **case8 in-JAX: jit cached でも 24.5s/call** (single call!)。featurizer が all-mission で巨大。
+  500step×32games の rollout では非現実的 (compile 32s も別途)。→ **in-JAX case8 は速度的に不可**。
+- 対して **real python_v8 host_callback: 39ms/call** (~600× 速い)。これが parity 100% (本物そのもの)。
+  ただし vmap sequential なので games=32 で 629s/iter、**games=8 で 157s/iter, games=4 で 79s/iter**。
+→ **parity-faithful な学習相手 = python_v8 (host_callback)**、ただし episodes 削減必須。
+
+## ⚠️ 重要な帰結: parity を取ると「sparse-gradient vs 強相手」問題に戻る
+python_v8 (本物 v8) を学習相手にするのは、memory `project_reinforce_case6_pool_v1_rejected` /
+`case6_live_eval` が既に試して **0/30 だった構図** (host opponent で本物相手)。その失敗原因は
+parity でなく **sparse terminal reward + 強相手で勾配消失** (H1-H3 が 20iter で当たった天井と同根)。
+→ **parity 修正だけでは勝てない**。本物相手の sparse-gradient を別途解く必要がある
+(逆カリキュラム / handicap / dense reward の本物相手版 / BC warm-start with parity featurizer)。
+
+## 段7: 最良候補 core_jax の忠実化 (x64 修正 + swarm 統合)
+高速かつ高 parity な学習相手を作るため core_jax (case1 の 1:1 port狙い) を忠実化:
+
+### 速度比較 (CPU, cached run)
+| 候補 | 速度 | full exact | source |
+|---|---|---|---|
+| case8 baseline_jax | 24,250ms ❌ | 90% | 100% |
+| python_v8 host | 39ms | 100% | 100% |
+| **core_jax float32** | 107ms | 63% | 100% |
+| **core_jax x64 (修正後)** | 176ms | **70%** | 100% |
+
+### x64 scan-carry dtype バグ修正 (commit 9275b6d1)
+core_jax は x64 でクラッシュしていた (lax.scan carry が float32 input / float64 body)。
+原因: `jnp.float_` が import 時に float32 に baked + 一部 carry init が float32。
+修正: carry float dtype を upstream の ships.dtype / cur_x.dtype に bind、aim 入力を float_ に promote。
+→ x64 が動作、parity 63%→70% (mean angle diff 0.14°→0.069°)。float32 path は no-op。
+
+### 残差 30% の正体: swarm/multi-source 未実装
+mismatch 9/30 seeds のうち **7 が "Python が JAX より多く launch"** = swarm/multi-source 由来。
+agent_full_jax の docstring: "reinforce / swarm / crash / followup / evac **TODO**"。
+本物 v1 は build_swarm_missions (pair+trio source) + process_multi_source_mission を持つが
+JAX core は single-source (最大2発 followup) のみ。`swarm_jax.allocate_2` は port 済だが
+**compute_actions に未統合**。統合すれば parity ~70%→~93% 見込み (残 2/30 は numeric)。
+
+### swarm 統合の設計 (TDD で段階実施予定, task #30)
+1. vmap 後の grids (score/angle/send_cap/need/elig [P×P]) から per-target の source-pair 候補を
+   fixed-shape で構築 (neither alone covers need だが合算で達成、top-K pair)。
+2. `allocate_2` で 2-source 配分 + swarm score。
+3. **難所**: single-source scan と同じ score 順スキャンに swarm を merge。swarm は 2 launch を
+   atomic に emit する必要があり、現 scan は 1 launch/step。共有 committed ledger で source budget を競合。
+4. gate = `core_jax_parity.py` の exact率 (退化させない)。swarm_jax docstring が
+   "naive split は勝率回帰" と警告 → 慎重に。
+
 ## 正しい次の選択肢 (どれも「scale/機構」ではない)
 - **(A) 学習相手を action-parity 保証済みの相手にする**: case8 の JAX port は parity-exact
   (`test_agent_jax_identity` 通過)。`baseline_jax_case8` を学習相手にすれば train/eval gap が縮む。
