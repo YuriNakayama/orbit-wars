@@ -66,6 +66,7 @@ OPPONENT_PYTHON_V1: int = 4
 OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
 OPPONENT_BASELINE_CORE_JAX: int = 7
+OPPONENT_BASELINE_CORE_JAX_WEAK: int = 8
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -86,6 +87,9 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     # vmaps fast (~83ms/game). A v1-like opponent with NO host hop — the practical
     # high-parity training opponent vs the 10%-approx baseline_jax_full.
     "baseline_core_jax": OPPONENT_BASELINE_CORE_JAX,
+    # handicapped core_jax (60% ship sends): a beatable version for the gradient
+    # foothold before ramping to full core_jax (research 处方B handicapping).
+    "baseline_core_jax_weak": OPPONENT_BASELINE_CORE_JAX_WEAK,
 }
 
 
@@ -391,6 +395,26 @@ def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
+_CORE_JAX_HANDICAP_SHIP_MULT: float = 0.6  # weakened core_jax sends 60% of ships
+
+
+def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
+    """Handicapped core_jax: same target/angle decisions but scaled-down ship
+    sends (60%), so it captures less and the learner CAN win — creating the
+    gradient foothold that full core_jax (unbeatable from scratch) denies.
+    Research 处方B (handicapping); ramp to full core_jax via curriculum.
+    Only the ship column (index 2) of fired (from_pid>=0) rows is scaled.
+    """
+    a = _baseline_core_jax_actions(state, seat)
+    fired = a[:, 0] >= 0
+    ships = jnp.where(
+        fired,
+        jnp.maximum(1.0, jnp.floor(a[:, 2] * _CORE_JAX_HANDICAP_SHIP_MULT)),
+        a[:, 2],
+    )
+    return a.at[:, 2].set(ships)
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -511,9 +535,10 @@ def _rollout_one_env(
         # Wrapping every branch in a lambda so only the chosen one executes keeps
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
-        # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax.
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax,
+        # 8 → core_jax_weak (handicapped).
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 7),
+            jnp.clip(opponent_mode, 0, 8),
             [
                 lambda: jnp.full(
                     (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
@@ -525,6 +550,9 @@ def _rollout_one_env(
                 lambda: _python_v4_opponent_actions(state, 1 - seat),
                 lambda: _python_v8_opponent_actions(state, 1 - seat),
                 lambda: _baseline_core_jax_actions(state, 1 - seat).astype(jnp.float32),
+                lambda: _baseline_core_jax_weak_actions(state, 1 - seat).astype(
+                    jnp.float32
+                ),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.

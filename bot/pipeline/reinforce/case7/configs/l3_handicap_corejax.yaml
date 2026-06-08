@@ -1,0 +1,62 @@
+# case7 L3: handicap curriculum vs the FAITHFUL core_jax.
+#
+# L1 (direct core_jax) and L2 (f_hard pool + core_jax) both stalled: the agent
+# can't beat full-strength core_jax from scratch (win stuck at 0), and f_hard
+# over-concentrated on the unbeatable opponent (memory unbeatable_opponent_harmful).
+#
+# Fix = handicapping (research 处方B), now feasible with the in-JAX core_jax:
+# noop warmup → core_jax_weak (60% ship sends, BEATABLE → gradient foothold) →
+# core_jax (full strength, the target). The agent first learns to beat a weakened
+# v1-like rule, then ramps to full. NO f_hard pool (it traps on the 0-win
+# opponent). Eval vs REAL baseline_v1.
+#
+# 3-stage: iter 0-4 noop, 5-49 core_jax_weak, 50-99 core_jax. 100 iter.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 100
+  episodes_per_iter: 16
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5             # iter 0-4 noop
+    early: noop
+    mid: baseline_core_jax_weak  # iter 5-49 handicapped (beatable foothold)
+    mid_switch_iter: 50
+    late: baseline_core_jax       # iter 50-99 full strength (target)
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
