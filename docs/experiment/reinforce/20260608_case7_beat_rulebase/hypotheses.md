@@ -28,10 +28,16 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 
 ## 仮説リスト (priority 順)
 - [x] (P1) H1: handicap curriculum — REJECTED (iter1)。lite ですら勝てず entropy collapse、難度調整は無効。ボトルネックは reward 信号
-- [ ] (P1) H2: Minimax reward — case8 scoring を dense penalty 化(`R - αγ·max Q_opp`)。BC近似不要、sparse→dense (research 処方C)
-- [ ] (P2, depends on H1) H3: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
-- [ ] (P2) H4: win-rate PFSP の cap/p 調整 — 強相手の混入率を勝率連動で制御
-- [ ] (P3) H5: asymmetric reward — 弱側(agent)の勝ち報酬増幅/負け減衰で初期正信号確保 (research 処方E)
+- [x] (P1) H2: dense差分報酬 — REJECTED (iter2)。max 0.375、H1と同じ振動+entropy collapse。reward shaping も plateau 破れず
+- [ ] (P1) H3: **BC warm-start** — imitation 学習済 policy から RL 開始。H1/H2 が示した「from-scratch PPO の探索失敗/entropy collapse」を回避。最有力
+- [ ] (P2) H4: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
+- [ ] (P2) H5: win-rate PFSP の cap/p 調整 — 強相手の混入率を勝率連動で制御
+- [ ] (P3) H6: asymmetric reward — 弱側(agent)の勝ち報酬増幅/負け減衰で初期正信号確保 (research 処方E)
+
+## 知見 (2026-06-08, H1/H2 後)
+- **H1(opponent難度) と H2(reward shaping) が同一失敗形**: vs baseline_jax_full で win ~0.26-0.32 振動、entropy 16→10 collapse、学習 trend なし。
+- 共通因子 = **from-scratch PPO の探索不足/早期 collapse**。20iter で mediocre 戦略に固着。
+- → opponent/reward をいじる前に **初期化(BC warm-start)** か **大幅な iter 増(200+)** が必要、という方向に絞る。
 
 ## 評価プロトコル(各 PoC 共通)
 1. fast_probe_gpu ベースで施策を1つ変更 → RunPod 4090 で ~20分学習(中間 ckpt+metrics は S3)。
@@ -45,3 +51,4 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 |---|---|---|---|---|---|---|
 | (baseline) | 2026-06-06 | — | ...661d5ad | vs v8 0/10, self ~0.5 | — | docs/plans/case7-pool-rl/10 |
 | 1 | 2026-06-08 | H1 | ...90444c5 | vs full ~0.32 (trend無), lite ~0.22 | REJECTED | iter1_result.md |
+| 2 | 2026-06-08 | H2 | ...a1c5e8b | vs full mean 0.260/max 0.375 (trend無) | REJECTED | iter2_result.md |
