@@ -107,7 +107,18 @@ core_jax は x64 でクラッシュしていた (lax.scan carry が float32 inpu
 修正: carry float dtype を upstream の ships.dtype / cur_x.dtype に bind、aim 入力を float_ に promote。
 → x64 が動作、parity 63%→70% (mean angle diff 0.14°→0.069°)。float32 path は no-op。
 
-### 残差 30% の正体: swarm/multi-source 未実装
+### 残差 30% の正体 (訂正): per-source multi-launch 未実装
+当初 swarm と推定したが、mismatch seeds を精査すると **すべて「1 source が複数 target に launch」**:
+- s10: source 19 が **5発** / s20,21,23: source 7,15 が 4発 / s7,8,9: 3-4発、いずれも同一 source。
+- = swarm (複数 source → 1 target) ではなく **1 source が main + followup + reinforce + rear_guard を**
+  予算が許す限り複数 target に撃つ挙動。本物 v1 は per-source launch 数に上限なし (source_attack_left のみ)。
+- JAX core は `count < 2` で **per-source 最大2発に hard-cap** + single-source capture のみ実装。
+  docstring: "reinforce / swarm / crash / followup / evac TODO"。
+- swarm pass を試作したが誤診断で効果なし → revert (x64 fix は保持)。
+- **真の残差解消 = followup/reinforce/rear_guard の mission family を JAX に追加実装** (docstring の TODO 全部)。
+  = case1 JAX rulebase port の完成作業、大規模 (複数セッション規模)。swarm 単独より広い。
+
+### (旧推定) swarm/multi-source 未実装 — 上記で訂正
 mismatch 9/30 seeds のうち **7 が "Python が JAX より多く launch"** = swarm/multi-source 由来。
 agent_full_jax の docstring: "reinforce / swarm / crash / followup / evac **TODO**"。
 本物 v1 は build_swarm_missions (pair+trio source) + process_multi_source_mission を持つが
