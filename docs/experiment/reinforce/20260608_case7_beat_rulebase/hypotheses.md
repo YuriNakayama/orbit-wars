@@ -27,7 +27,7 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 - ある施策が paired で +有意なら n=300 + 別 rulebase で最終確認
 
 ## 仮説リスト (priority 順)
-- [ ] (P1) H1: handicap curriculum — baseline_jax_lite(弱)→full(強) の段階学習で foothold 獲得。勝てる難度から開始し勾配を確保
+- [x] (P1) H1: handicap curriculum — REJECTED (iter1)。lite ですら勝てず entropy collapse、難度調整は無効。ボトルネックは reward 信号
 - [ ] (P1) H2: Minimax reward — case8 scoring を dense penalty 化(`R - αγ·max Q_opp`)。BC近似不要、sparse→dense (research 処方C)
 - [ ] (P2, depends on H1) H3: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
 - [ ] (P2) H4: win-rate PFSP の cap/p 調整 — 強相手の混入率を勝率連動で制御
@@ -44,3 +44,4 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 | iter | 開始 | 仮説# | run_id | 主要メトリクス | 採否 | result |
 |---|---|---|---|---|---|---|
 | (baseline) | 2026-06-06 | — | ...661d5ad | vs v8 0/10, self ~0.5 | — | docs/plans/case7-pool-rl/10 |
+| 1 | 2026-06-08 | H1 | ...90444c5 | vs full ~0.32 (trend無), lite ~0.22 | REJECTED | iter1_result.md |

@@ -544,15 +544,19 @@ def _rollout_one_env(
         shaping = c_ship * (ship_diff - prev_ship_diff) + c_planet * (
             plt_diff - prev_plt_diff
         )
-        # H3: non-PBRS dense addition `c·mine_count` per turn. ⚠️ violates
-        # Ng et al. 1999 (biases the optimal policy toward hoarding/stalling)
-        # — used as a CONTROL group to confirm PBRS necessity. dense_coef=0
-        # is a no-op so every existing mode stays bit-identical.
-        ship_mine_count, _ = _ship_totals(state_for_next, seat)
-        plt_mine_count, _ = _planet_count_totals(state_for_next, seat)
-        dense_addition = (
-            dense_coef_ship * ship_mine_count + dense_coef_planet * plt_mine_count
-        )
+        # H2 (dense differential, 2026-06-08): non-PBRS dense reward on the
+        # NORMALIZED material *advantage* `c·(mine-enemy)/(mine+enemy)` per turn,
+        # bounded in [-c, +c]. Unlike the old `c·mine_count` (which biased toward
+        # hoarding — Ng et al. 1999), the differential rewards out-positioning
+        # the opponent, the behavior that actually beats a rulebase. It is dense
+        # (fires every turn, not just terminal) so it gives gradient where the
+        # sparse win/loss signal dies vs a strong rulebase. dense_coef=0 is a
+        # no-op so every existing mode stays bit-identical.
+        ship_mine, ship_enemy = _ship_totals(state_for_next, seat)
+        plt_mine, plt_enemy = _planet_count_totals(state_for_next, seat)
+        ship_adv = (ship_mine - ship_enemy) / (ship_mine + ship_enemy + 1.0)
+        plt_adv = (plt_mine - plt_enemy) / (plt_mine + plt_enemy + 1.0)
+        dense_addition = dense_coef_ship * ship_adv + dense_coef_planet * plt_adv
         shaping = shaping + dense_addition
         # H7: band-clip the per-turn shaping reward to [-clip, +clip] so the
         # early-game ratio spikes (when totals are tiny, ΔΦ swings ~±1) are

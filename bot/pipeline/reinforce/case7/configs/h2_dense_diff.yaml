@@ -1,0 +1,65 @@
+# case7 H2: dense differential reward — add a per-turn dense reward on the
+# normalized material advantage (mine-enemy)/(mine+enemy) for ships+planets.
+# H1 (handicap) showed opponent-difficulty tuning fails (entropy collapse, no
+# learning vs even lite). The bottleneck is the LEARNING SIGNAL: sparse terminal
+# + PBRS ratio can't teach rulebase-beating tactics. H2 densifies the reward
+# with a bounded advantage signal that fires every turn, giving gradient where
+# the win/loss signal dies vs a strong rulebase.
+#
+# Schedule (20 iter): noop(0-2) → baseline_jax_full(3-19). Train mostly vs the
+# TARGET rulebase now that a dense signal should make it learnable (no handicap).
+#
+# dense_coef_ship/planet = 0.003 each. The advantage is bounded ±1/turn, so over
+# a ~500-turn game the cumulative dense reward is ±0.003·500 ≈ ±1.5 — comparable
+# to (not dwarfing) the terminal ±1. A larger coef (e.g. 0.5) makes cumulative
+# dense ≈ ±250 and drowns the win/loss signal (confirmed in smoke: reward -22).
+# Kept ratio PBRS (coef=1.0) as the convergence-speed layer; dense differential
+# is the new teaching signal.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 5000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  # H2 dense differential teaching signal (scaled ~1/horizon so cumulative ≈ ±1.5)
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 3          # iter 0-2 noop warmup
+    early: noop
+    late: baseline_jax_full # iter 3-19 target rulebase (dense signal carries it)
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
