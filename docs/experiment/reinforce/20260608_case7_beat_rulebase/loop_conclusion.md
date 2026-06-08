@@ -38,3 +38,31 @@ parity 調査で「H4 の勝利は parity 10% の偽相手に勝っただけ」�
 ## 運用知見
 - core_jax_weak (handicap) opponent は iter5 で hang 多発 (重い graph)。scatter→stack で軽減試行。
 - 各施策で opponent が変わると JAX 再 compile (~30s) + hang リスク。短 run + 再起動が現実的。
+
+## 段追記: 逆カリキュラム (處方A) も無効 — 資源でなく "そもそも打てない" が壁
+agent_advantage (episode開始時に agent の planet ships を ×N) を実装し、未学習(ランダム)
+policy で win_rate を測定 (horizon 500, 4戦):
+| advantage | outcomes (cumulative) | win |
+|---|---|---|
+| 1.0 (なし) | -1.85〜-2.0 | 0/4 |
+| 4.0 | -2.0〜-2.3 | 0/4 |
+| **10.0** | -2.2〜-2.4 | **0/4** |
+
+- **10× の隻数優位でもランダム policy は core_jax に全敗**。outcomes は ±1 でなく -2.4 = terminal敗北
+  (-1) + 負の shaping。10倍の戦力を持っても**まともに打てないので負ける**。
+- = ボトルネックは資源(opponent handicap でも agent advantage でも)解決不能。**from-scratch の
+  ランダム policy が core_jax 相手に coherent な手を一切打てない**ことが根本。
+- 逆カリキュラム(處方A)も、agent が最低限打てる前提が崩れているので foothold を作れない。
+
+## 最終結論 (本ループ)
+**この RL 設定 (from-scratch PPO, 2-head, ratio shaping) は competent な相手に対して
+"競争力をブートストラップできない"。** noop には勝つ(0.8)が、core_jax(忠実 v1)には:
+- 直接(L1)/pool(L2)/opponent handicap 60%・25%(L3/L3b)/agent advantage 10×、**全て win 0**。
+全研究施策(處方A逆カリキュラム/處方B handicap/PFSP pool/scale)を忠実な相手で尽くした上での
+**確定的天井**。memory `case6_live_eval` を parity 交絡を除去して再現・強化した。
+
+**勝つために本質的に必要なもの (本ループのスコープ外)**:
+1. **同 featurizer の imitation BC warm-start** — sensible に打てる初期 policy。H3 は case9(別featurizer)で失敗。
+   case7 featurizer 対応の imitation 重みを作る必要がある (別タスク、大規模)。
+2. or 本物 env での大規模学習 (高速基盤要)。
+3. RL 単独・from-scratch・小〜中規模では rulebase 勝利は不可、が本プロジェクトの再確認された結論。

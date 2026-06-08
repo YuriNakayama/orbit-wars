@@ -413,6 +413,7 @@ def _run_iter(
     dense_coef_planet: float = 0.0,
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
+    agent_advantage: float = 1.0,
     opp_model: ActorCriticJax | None = None,
 ) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
@@ -435,6 +436,7 @@ def _run_iter(
         dense_coef_planet=dense_coef_planet,
         time_bonus_coef=time_bonus_coef,
         time_penalty_coef=time_penalty_coef,
+        agent_advantage=agent_advantage,
         opp_model=opp_model,
     )
     rollout.planet_feats.block_until_ready()
@@ -660,6 +662,20 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # pool progress transfers to the real rulebase.
     pool_full_opponent = str(pool_cfg.get("full_opponent", "baseline_jax_full"))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
+
+    # Reverse curriculum (research 处方A): the agent starts each episode with a
+    # ship advantage (agent_advantage_start×) so the game is winnable → it earns
+    # terminal-win reward and learns HOW to win, then the advantage ramps to 1.0
+    # (even start) over advantage_ramp_iters. Targets the STRATEGIC wall that
+    # opponent-resource handicapping (L3) could not. start=1.0 → disabled.
+    adv_start = float(t_cfg.get("agent_advantage_start", 1.0))
+    adv_ramp_iters = int(t_cfg.get("agent_advantage_ramp_iters", max(1, iterations)))
+
+    def _iter_advantage(it: int) -> float:
+        if adv_start <= 1.0:
+            return 1.0
+        frac = min(1.0, it / max(1, adv_ramp_iters))
+        return float(adv_start + (1.0 - adv_start) * frac)  # adv_start → 1.0
     # H4: when priority == "f_hard", pick the late opponent by (1-x)^p instead
     # of the uniform pool/full mix. priority == "uniform" reproduces H2.
     pool_priority = str(pool_cfg.get("priority", "uniform"))
@@ -780,6 +796,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             dense_coef_planet=dense_coef_planet,
             time_bonus_coef=time_bonus_coef,
             time_penalty_coef=time_penalty_coef,
+            agent_advantage=_iter_advantage(it),
             opp_model=iter_opp_model,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.

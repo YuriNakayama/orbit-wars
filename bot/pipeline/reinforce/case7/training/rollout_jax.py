@@ -752,6 +752,7 @@ def collect_rollout_jax(
     dense_coef_planet: float = 0.0,
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
+    agent_advantage: float = 1.0,
     opp_model: ActorCriticJax | None = None,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
@@ -793,6 +794,22 @@ def collect_rollout_jax(
     # parameters across the episode axis. This keeps the jit cache to
     # ONE compilation regardless of episode count.
     init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
+    if agent_advantage != 1.0:
+        # Reverse-curriculum head-start: scale the AGENT seat's planet ships so it
+        # starts ahead, making the game winnable → the agent gets terminal-win
+        # reward and learns HOW to convert a lead (the strategic skill that
+        # handicapping the opponent's resources could not teach). Ramp advantage
+        # → 1.0 (even start) as it learns. Host-side, pre-vmap, hang-free.
+        def _boost(st: EnvState) -> EnvState:
+            is_agent = st.planet_valid & (st.planet_owner == seat)
+            new_ships = jnp.where(
+                is_agent,
+                jnp.round(st.planet_ships.astype(jnp.float32) * agent_advantage),
+                st.planet_ships.astype(jnp.float32),
+            ).astype(st.planet_ships.dtype)
+            return st._replace(planet_ships=new_ships)
+
+        init_states = [_boost(st) for st in init_states]
     batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
     # vmap over (key, init_state); model + scalar args + opp_model broadcast.
