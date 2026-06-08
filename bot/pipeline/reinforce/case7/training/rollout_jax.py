@@ -395,7 +395,9 @@ def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
-_CORE_JAX_HANDICAP_SHIP_MULT: float = 0.6  # weakened core_jax sends 60% of ships
+_CORE_JAX_HANDICAP_SHIP_MULT: float = 0.25  # weakened core_jax sends 25% of ships
+# 0.6 left the opponent unbeatable from scratch (win 0); 0.25 cripples its
+# captures so the agent CAN win some games — the gradient foothold to ramp from.
 
 
 def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
