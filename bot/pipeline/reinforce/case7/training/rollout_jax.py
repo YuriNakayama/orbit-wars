@@ -409,12 +409,11 @@ def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
     """
     a = _baseline_core_jax_actions(state, seat)
     fired = a[:, 0] >= 0
-    ships = jnp.where(
-        fired,
-        jnp.maximum(1.0, jnp.floor(a[:, 2] * _CORE_JAX_HANDICAP_SHIP_MULT)),
-        a[:, 2],
-    )
-    return a.at[:, 2].set(ships)
+    scaled = jnp.maximum(1.0, jnp.floor(a[:, 2] * _CORE_JAX_HANDICAP_SHIP_MULT))
+    ships = jnp.where(fired, scaled, a[:, 2])
+    # Rebuild via column stack (avoid `.at[].set()` scatter, which deterministically
+    # hung the vmapped+scanned rollout at the first weak-opponent iter).
+    return jnp.stack([a[:, 0], a[:, 1], ships], axis=-1)
 
 
 def _rollout_one_env(
