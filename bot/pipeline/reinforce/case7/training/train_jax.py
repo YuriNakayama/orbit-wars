@@ -475,6 +475,51 @@ def _run_iter(
     )
 
 
+def _elo_update(agent_elo: float, ref_elo: float, score: float, k: float) -> float:
+    """One Elo step for the agent vs a fixed-rating reference.
+
+    `score` is the agent's actual result in [0,1] (= held-out win rate over the
+    eval batch). The reference opponent (baseline_jax_full) is treated as a fixed
+    anchor at `ref_elo`, so `agent_elo` becomes an absolute, matchmaking-free
+    skill curve: expected = 1/(1+10^((ref-agent)/400)); agent += k·(score-expected).
+    """
+    expected = 1.0 / (1.0 + 10.0 ** ((ref_elo - agent_elo) / 400.0))
+    return float(agent_elo + k * (score - expected))
+
+
+def _heldout_eval(
+    model: ActorCriticJax,
+    key: jax.Array,
+    *,
+    episodes: int,
+    horizon: int,
+    opponent: str,
+    eval_seed: int,
+) -> float:
+    """Fixed held-out win-rate vs a fixed opponent (no PPO update).
+
+    Independent of the training opponent schedule: under win-rate matchmaking
+    (f_var) the per-iter `win_rate` stays ~0.5 by design, so it is NOT a progress
+    signal. This rollout uses a FIXED opponent + FIXED `eval_seed` (the same seed
+    set every call) so the result is comparable across iters — a matchmaking-free
+    absolute progress curve (AlphaStar: track skill vs held-out, not vs league).
+    """
+    rollout = collect_rollout_jax(
+        model,
+        key,
+        episodes_per_iter=episodes,
+        horizon=horizon,
+        shaping_coef=0.0,
+        seat=0,
+        seed=eval_seed,
+        opponent=opponent,
+        shaping_mode="ratio",
+        opp_model=None,
+    )
+    outcomes = np.asarray(rollout.episode_outcomes)
+    return float(np.mean(outcomes > 0))
+
+
 class _OpponentPool:
     """H2 (PFSP): a host-side FIFO pool of frozen self snapshots.
 
@@ -512,21 +557,40 @@ class _OpponentEntry:
     win_ema: float  # current agent's win-rate EMA vs this entry (x in f_hard)
 
 
+def _pfsp_weight(x: float, p: float, mode: str) -> float:
+    """PFSP priority weight for an opponent with learner win-rate `x` (AlphaStar).
+
+    - f_hard(x) = (1 - x)^p   — concentrate on opponents we cannot beat (low x).
+      Right when the agent must climb against stronger opponents.
+    - f_var(x)  = (x·(1 - x))^p — concentrate on ~even opponents (x near 0.5),
+      where the learning signal is densest and win-rate-based matchmaking keeps
+      the agent near its current skill. Avoids wasting interactions on opponents
+      that are already trivially won (x→1) or hopeless (x→0).
+    """
+    if mode == "f_var":
+        return float((x * (1.0 - x)) ** p)
+    return float((1.0 - x) ** p)
+
+
 class _PrioritizedOpponentSelector:
-    """H4 (PFSP): pick opponents by f_hard(x) = (1 - x)^p.
+    """PFSP: pick opponents by a priority weight on the learner's win-rate.
 
     Entries = [baseline_jax_full] + the current snapshot pool. `x` is the
-    learner's EMA win-rate vs each entry (init 0.5 = unknown). Harder
-    opponents (low win-rate) get higher selection weight, concentrating
-    learning on what the agent cannot yet beat (AlphaStar main-agent recipe).
-    Selection is host-side; only the chosen (opponent, model) is threaded into
-    `collect_rollout_jax`, so the scan/vmap trace stays single.
+    learner's EMA win-rate vs each entry (init 0.5 = unknown). `mode` selects the
+    priority shape: `f_hard` weights hard opponents (climb), `f_var` weights
+    ~even opponents (keep the match near current skill — densest learning signal,
+    win-rate stays ~0.5 by design). Selection is host-side; only the chosen
+    (opponent, model) is threaded into `collect_rollout_jax`, so the scan/vmap
+    trace stays single.
     """
 
-    def __init__(self, p: float, ema: float, init_win: float = 0.5) -> None:
+    def __init__(
+        self, p: float, ema: float, init_win: float = 0.5, mode: str = "f_hard"
+    ) -> None:
         self._p = p
         self._ema = ema
         self._init_win = init_win
+        self._mode = mode
         self._entries: list[_OpponentEntry] = []
 
     def set_entries(
@@ -559,7 +623,9 @@ class _PrioritizedOpponentSelector:
         self._entries = new_entries
 
     def sample(self, rng: np.random.Generator) -> tuple[int, _OpponentEntry]:
-        weights = np.array([(1.0 - e.win_ema) ** self._p for e in self._entries])
+        weights = np.array(
+            [_pfsp_weight(e.win_ema, self._p, self._mode) for e in self._entries]
+        )
         total = weights.sum()
         probs = (
             weights / total
@@ -624,6 +690,13 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     dense_coef_planet = float(t_cfg.get("dense_coef_planet", 0.0))
     time_bonus_coef = float(t_cfg.get("time_bonus_coef", 0.0))
     time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
+    # Held-out eval: every `heldout_eval_every` iters, measure win-rate vs a
+    # FIXED opponent (matchmaking-free absolute progress). 0 disables.
+    heldout_cfg = t_cfg.get("heldout_eval", {}) or {}
+    heldout_eval_every = int(heldout_cfg.get("every", 0))
+    heldout_eval_opponent = str(heldout_cfg.get("opponent", "baseline_jax_full"))
+    heldout_eval_episodes = int(heldout_cfg.get("episodes", 32))
+    heldout_eval_seed = int(heldout_cfg.get("seed", 777_000))
 
     # Opponent curriculum (B2): use `early` opponent for iters < switch_iter,
     # `late` opponent afterwards. When `opponent` is not "curriculum" the
@@ -649,12 +722,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_cap = int(pool_cfg.get("cap", 5))
     pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
-    # H4: when priority == "f_hard", pick the late opponent by (1-x)^p instead
-    # of the uniform pool/full mix. priority == "uniform" reproduces H2.
+    # PFSP: priority="f_hard" weights (1-x)^p (hard opponents); priority="f_var"
+    # weights (x(1-x))^p (~even opponents, keeps the match near current skill —
+    # win-rate stays ~0.5 by design, so progress is read from held-out eval +
+    # Elo, not from this win-rate). priority="uniform" reproduces the flat mix.
     pool_priority = str(pool_cfg.get("priority", "uniform"))
     pool_priority_p = float(pool_cfg.get("priority_p", 2.0))
     pool_priority_ema = float(pool_cfg.get("priority_ema", 0.7))
-    use_priority = use_pool and pool_priority == "f_hard"
+    use_priority = use_pool and pool_priority in ("f_hard", "f_var")
 
     def _opponent_for_iter(it: int) -> str:
         if opponent != "curriculum":
@@ -718,13 +793,20 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool.push(model)
     pool_rng = np.random.default_rng(seed)
     # H4: prioritized selector over [baseline_jax_full] + pool snapshots.
-    selector = _PrioritizedOpponentSelector(pool_priority_p, pool_priority_ema)
+    selector = _PrioritizedOpponentSelector(
+        pool_priority_p, pool_priority_ema, mode=pool_priority
+    )
     if use_priority:
         selector.set_entries(pool.models(), include_full=True)
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
     key = jax.random.PRNGKey(seed)
     best_win = 0.0
+    # Elo anchored to the fixed held-out reference (rated _ELO_REF). agent_elo is
+    # the matchmaking-free skill curve; updated each held-out eval.
+    agent_elo = float(heldout_cfg.get("agent_elo_init", 1500.0))
+    elo_ref = float(heldout_cfg.get("ref_elo", 1500.0))
+    elo_k = float(heldout_cfg.get("elo_k", 32.0))
     for it in range(iterations):
         iter_opponent = _opponent_for_iter(it)
         iter_opp_model = opp_snapshot
@@ -792,6 +874,27 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         row["dense_coef_planet"] = dense_coef_planet
         row["time_bonus_coef"] = time_bonus_coef
         row["time_penalty_coef"] = time_penalty_coef
+        row["priority"] = pool_priority if use_priority else "none"
+        # Held-out eval: matchmaking-free absolute progress vs a fixed opponent.
+        # Runs every `heldout_eval_every` iters (and always on the last iter) with
+        # a fixed seed so the curve is comparable across iters. Under f_var the
+        # per-iter `win_rate` hovers ~0.5; THIS is the real progress signal.
+        if heldout_eval_every > 0 and (
+            it % heldout_eval_every == 0 or it == iterations - 1
+        ):
+            key, k_eval = jax.random.split(key)
+            heldout_win = _heldout_eval(
+                model,
+                k_eval,
+                episodes=heldout_eval_episodes,
+                horizon=horizon,
+                opponent=heldout_eval_opponent,
+                eval_seed=heldout_eval_seed,
+            )
+            agent_elo = _elo_update(agent_elo, elo_ref, heldout_win, elo_k)
+            row["heldout_win"] = heldout_win
+            row["heldout_opponent"] = heldout_eval_opponent
+            row["agent_elo"] = agent_elo
         history.append(row)
         logger.info(
             (

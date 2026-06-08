@@ -94,16 +94,26 @@ def main(metrics: Path = _METRICS_OPT, out: Path = _OUT_OPT) -> None:
     if not history:
         raise typer.BadParameter(f"no history rows in {metrics}")
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
-    _plot_win_by_opponent(
-        axes[0, 0], history, "win_rate", "win rate by opponent", clamp01=True
-    )
-    _plot_win_by_opponent(axes[0, 1], history, "mean_reward", "reward by opponent")
-    _plot_panel(axes[0, 2], history, ["policy_loss", "value_loss"], "losses")
-    _plot_panel(axes[1, 0], history, ["entropy"], "policy entropy")
-    _plot_panel(axes[1, 1], history, ["approx_kl"], "approx KL")
+    fig, axes = plt.subplots(3, 3, figsize=(16, 13))
+    # Row 0 — PROGRESS (matchmaking-free, the real signal under f_var):
     _plot_panel(
-        axes[1, 2], history, ["rollout_secs", "update_secs"], "per-iter time (s)"
+        axes[0, 0], history, ["heldout_win"], "★ held-out win vs fixed opponent"
+    )
+    axes[0, 0].axhline(0.5, ls="--", c="gray", alpha=0.6)
+    axes[0, 0].set_ylim(-0.02, 1.02)
+    _plot_panel(axes[0, 1], history, ["agent_elo"], "★ agent Elo (vs fixed ref)")
+    _plot_win_by_opponent(
+        axes[0, 2], history, "win_rate", "match win rate (≈0.5 by design)", clamp01=True
+    )
+    # Row 1 — HEALTH (collapse / divergence detectors):
+    _plot_panel(axes[1, 0], history, ["entropy"], "policy entropy (collapse if ↓<10)")
+    _plot_panel(axes[1, 1], history, ["value_loss"], "value loss")
+    _plot_panel(axes[1, 2], history, ["approx_kl"], "approx KL")
+    # Row 2 — context:
+    _plot_win_by_opponent(axes[2, 0], history, "mean_reward", "reward by opponent")
+    _plot_panel(axes[2, 1], history, ["policy_loss"], "policy loss")
+    _plot_panel(
+        axes[2, 2], history, ["rollout_secs", "update_secs"], "per-iter time (s)"
     )
 
     iters_run = int(data.get("iterations_run", len(history)))
