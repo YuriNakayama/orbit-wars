@@ -30,9 +30,10 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 - [x] (P1) H1: handicap curriculum — REJECTED (iter1)。lite ですら勝てず entropy collapse、難度調整は無効。ボトルネックは reward 信号
 - [x] (P1) H2: dense差分報酬 — REJECTED (iter2)。max 0.375、H1と同じ振動+entropy collapse。reward shaping も plateau 破れず
 - [x] (P1) H3: BC warm-start — REJECTED (iter3, harmful)。case9 imitation が case7 に転移せず vs noop 0.22/vs full 0.03。kl anchor が弱 policy に固定
-- [x] (P1) H4: **scale-up 150iter — BREAKTHROUGH** (iter4)。vs full 0.23→0.34→0.47 単調上昇、勝ち越し(0.50-0.62)到達。天井は under-training だった
-- [ ] (P1) H5: **scale-up 300iter** — H4 の climb を継続、勝ち越しを定着させる。最終 ckpt を paired 30戦で確定 (進行中)
-- [ ] (P3) H6: reverse curriculum — H4/H5 で勝てれば不要。勝ち足りなければ補助 (research 処方A)
+- [x] (P1) H4: scale-up 150iter — vs JAX-full 0.47 到達も **本物 baseline_v8 0/30・v1 0/12 全敗** (iter4)。scale は JAX近似相手のみ有効、本物に転移せず
+- [x] (P1) H5: scale-up 300iter — **中止** (iter28 で JAX hang、かつ H4 評価で parity gap 判明し scale は無意味と確定)
+- [ ] (P1) **H6: train/eval parity** — 本物 rulebase を host_callback で学習相手に混ぜる / featurizer parity。真のボトルネック。これが無いと scale も機構も無効
+- [ ] (P2) H7: reverse curriculum (research 処方A) — parity 解決後の補助
 - [ ] (P3) H6: asymmetric reward — 弱側(agent)の勝ち報酬増幅/負け減衰で初期正信号確保 (research 処方E)
 
 ## 知見 (2026-06-08, H1/H2/H3 後 — round 1 結論)
@@ -62,5 +63,5 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 | 1 | 2026-06-08 | H1 | ...90444c5 | vs full ~0.32 (trend無), lite ~0.22 | REJECTED | iter1_result.md |
 | 2 | 2026-06-08 | H2 | ...a1c5e8b | vs full mean 0.260/max 0.375 (trend無) | REJECTED | iter2_result.md |
 | 3 | 2026-06-08 | H3 | ...acbab5c | vs full 0.03-0.06 (BC init 逆効果) | REJECTED | iter3_result.md |
-| 4 | 2026-06-08 | H4 | ...500bc5d | vs full 0.23→0.47 climb, peak 0.62 | **BREAKTHROUGH** | iter4_result.md |
-| 5 | 2026-06-08 | H5 | ...500bc5d(再利用) | 300iter, 進行中 | running | — |
+| 4 | 2026-06-08 | H4 | ...500bc5d | vs JAX-full 0.47 / **本物 v8 0/30, v1 0/12** | parity gap判明 | iter4_result.md |
+| 5 | 2026-06-08 | H5 | ...500bc5d(再利用) | iter28 hang + parity gap で中止 | ABORTED | — |

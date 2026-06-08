@@ -1,4 +1,18 @@
-# iter4 result: H4 scale-up (150 iter) — BREAKTHROUGH (scale works)
+# iter4 result: H4 scale-up (150 iter) — train/eval gap (vs JAX proxy ✓, vs real rulebase ✗)
+
+## ⚠️ 重要な訂正 (外部 paired 評価後)
+学習中 win は **JAX近似相手 (baseline_jax_full)** に対する値。最終 ckpt を **本物 rulebase**
+で評価すると **全敗**:
+- ckpt_i131 × **baseline_v8** (本物, 30戦) = **0/30**
+- ckpt_i131 × **baseline_v1** (本物, 12戦) = **0/12**
+
+→ 「scale で rulebase を破った」は **誤り**。scale が破ったのは **JAX 近似opponent** のみ。
+本物 rulebase には全く転移しない = **train(JAX)/eval(本物) parity gap** が真のボトルネック
+(memory `project_reinforce_case6_live_eval` を精密に再現)。scale も機構も、この gap の前では無力。
+
+---
+
+## 当初の (proxy 相手の) 結果 — scale 自体は効く
 
 run_id: 20260608-064345...500bc5d / GPU: RTX 4090 / 137/150 iter (hung at iter137, result intact) / config: h4_scaleup.yaml
 
@@ -32,3 +46,13 @@ H1-H3 が示した「20-iter ~0.3 天井」が under-training か本質的天井
   (同 run_id で H5 が上書きするため)。
 
 ## コスト: ~$1.0 (4090 ~90分)
+
+## 真の結論 (訂正後)
+- scale は **JAX 近似相手** には効く (0.23→0.47) が、**本物 rulebase には 0勝** (train/eval gap)。
+- **ループの本質的ボトルネックは parity gap**: 学習は JAX sim + JAX featurizer、評価は本物
+  Python env。agent は JAX 固有の癖に過適合し本物に通用しない。
+- → 次の正しいレバーは **scale でも機構でもなく parity**:
+  (a) 学習相手に本物 rulebase を host_callback で混ぜる (rollout 重いが本物経験)、
+  (b) JAX featurizer ↔ 本物 featurizer の parity を取る、
+  (c) 本物 env での学習 (PufferLib 等で高速化) 。
+- H5 (300iter scale) は **この gap を埋めないので無意味** → 中止が正しい。
