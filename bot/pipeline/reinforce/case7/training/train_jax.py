@@ -523,16 +523,23 @@ class _PrioritizedOpponentSelector:
     `collect_rollout_jax`, so the scan/vmap trace stays single.
     """
 
-    def __init__(self, p: float, ema: float, init_win: float = 0.5) -> None:
+    def __init__(
+        self,
+        p: float,
+        ema: float,
+        init_win: float = 0.5,
+        full_opponent: str = "baseline_jax_full",
+    ) -> None:
         self._p = p
         self._ema = ema
         self._init_win = init_win
+        self._full_opponent = full_opponent
         self._entries: list[_OpponentEntry] = []
 
     def set_entries(
         self, pool_models: list[ActorCriticJax], include_full: bool
     ) -> None:
-        """Rebuild entries from the current pool (+ baseline_jax_full).
+        """Rebuild entries from the current pool (+ the full rulebase opponent).
 
         Preserves the win_ema of carried-over snapshot entries by index from
         the tail (FIFO pool), and seeds new entries at init_win.
@@ -541,11 +548,11 @@ class _PrioritizedOpponentSelector:
         new_entries: list[_OpponentEntry] = []
         if include_full:
             full_prev = next(
-                (e for e in self._entries if e.opponent == "baseline_jax_full"), None
+                (e for e in self._entries if e.opponent == self._full_opponent), None
             )
             new_entries.append(
                 _OpponentEntry(
-                    "baseline_jax_full",
+                    self._full_opponent,
                     None,
                     full_prev.win_ema if full_prev else self._init_win,
                 )
@@ -648,6 +655,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_snapshot_every = int(pool_cfg.get("snapshot_every", 10))
     pool_cap = int(pool_cfg.get("cap", 5))
     pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
+    # The "full" (rulebase) opponent mixed into the pool. Default baseline_jax_full
+    # (10% v1-approx); set to baseline_core_jax for a faithful ~80% v1 opponent so
+    # pool progress transfers to the real rulebase.
+    pool_full_opponent = str(pool_cfg.get("full_opponent", "baseline_jax_full"))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
     # H4: when priority == "f_hard", pick the late opponent by (1-x)^p instead
     # of the uniform pool/full mix. priority == "uniform" reproduces H2.
@@ -718,7 +729,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool.push(model)
     pool_rng = np.random.default_rng(seed)
     # H4: prioritized selector over [baseline_jax_full] + pool snapshots.
-    selector = _PrioritizedOpponentSelector(pool_priority_p, pool_priority_ema)
+    selector = _PrioritizedOpponentSelector(
+        pool_priority_p, pool_priority_ema, full_opponent=pool_full_opponent
+    )
     if use_priority:
         selector.set_entries(pool.models(), include_full=True)
     history: list[dict[str, Any]] = []
@@ -739,7 +752,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 )
             elif pool_rng.random() < pool_late_full_prob:
                 # H2: uniform full/pool mix.
-                iter_opponent = "baseline_jax_full"
+                iter_opponent = pool_full_opponent
             else:
                 iter_opponent = "self_snapshot"
                 iter_opp_model = pool.sample(pool_rng)
