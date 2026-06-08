@@ -38,6 +38,43 @@ H4 の学習相手 `baseline_jax_full` は **baseline_v1 の JAX 近似**。評�
 3. **「parity さえ直せば JAX=Python」は未検証**: 段3 (agent ckpt の JAX↔torch parity) は未実施。
    仮に opponent parity を完全に取っても、featurizer/agent 側に別の差が残る可能性は排除できていない。
 
+## 段4: parity ズレは env か agent か (切り分け実測)
+`state_to_obs(jax_state)` の faithfulness と agent-layer の差を分離 (`/tmp/env_agent_split.py`):
+- **ENV層は健全**: `obs_planets == state_planets` 全行一致 (s0:32=32, s1:20=20, ...)。state_to_obs は正しい。
+- **差分は AGENT層 (JAX rule 実装)**:
+  - source-planet 一致 19/30 (63%) — 狙う planet が半分強しか合わない。
+  - fire-rate: JAX rule 16/30 vs Python 27/30 — **JAX rule は保守的で撃たない盤面が多い**。
+  - shared launch = 0 (JAX 16発 / Python 56発で重複ゼロ) — 同 source でも angle/ships が全て違う。
+→ **parity ズレは env(シミュレータ)でなく agent(JAX rule)由来**。2層の差: ①target選択 ②aim/allocation。
+
+## どの JAX rule も parity-exact でない (test 状況)
+- **action 100% 一致 test は case1 にのみ存在**、対象は `baseline_jax/core_jax/agent_full_jax` (1:1狙い)。
+  だが **その test は FAIL** (5/5 seed, `test_jax_port_action_equivalence_over_selfplay`)。
+- case2-9 の `test_agent_jax_identity` は "jax_wins>=3" の弱い勝率 test のみ (action 一致не検証)。
+- baseline_jax_full には action-parity test 自体が無い。
+→ **リポジトリ内に「本物と action 完全一致」が検証された JAX rule は存在しない** (memory rulebase_jax_parity_failure_mode の float32 tie-break 発散)。
+
+## 段5: 各 JAX rule の parity 実測 — case8 はほぼ parity-exact ★
+同手法で case8 JAX rule (`build_world_features_from_state`→`compute_actions`) vs 本物 v8 を実測
+(`/tmp/case8_parity.py`):
+
+| 指標 | case1 baseline_jax_full vs v1 (H4が使用) | **case8 baseline_jax vs v8** |
+|---|---|---|
+| full exact | ~10% | **90% (27/30)** |
+| source match | 63% | **100% (30/30)** |
+| fire-rate (JAX/Py) | 16/27 (保守的すぎ) | **27/27 (一致)** |
+| shared launches | 0/56 | **52/56** |
+
+s1-s3 はサンプルレベルで完全一致 (`jax=[(15,3,19)] py=[(15,3,19)]`)。残り ~10% は float32
+tie-break edge (memory `rulebase_jax_parity_failure_mode`) と推定。
+→ **case8 baseline_jax は本物 v8 のほぼ忠実な port (~90%)**。H4 が使った baseline_jax_full
+(v1 の ~10% 近似) とは雲泥の差。**(A) の学習相手は case8 が正解**。
+
+## 結論 (段1-5 を総合)
+- H4 0/30 の原因は **学習相手 baseline_jax_full が本物 v1 の粗い近似 (action 10%)** だったこと。env は健全、agent rule の差。
+- **解決策 = 学習相手を parity-exact (~90%) な case8 baseline_jax に替える**。これで train/eval gap が大幅に縮む。
+- ただし「parity 良い相手なら本物に勝てる agent が学習できる」は **未だ実証前** — case8 を相手に学習し直して本物 v8 で評価する実験 (次) で確認する。
+
 ## 正しい次の選択肢 (どれも「scale/機構」ではない)
 - **(A) 学習相手を action-parity 保証済みの相手にする**: case8 の JAX port は parity-exact
   (`test_agent_jax_identity` 通過)。`baseline_jax_case8` を学習相手にすれば train/eval gap が縮む。
