@@ -36,6 +36,9 @@ from orbit_wars_jax.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
+    compute_actions_jax as _baseline_core_jax_actions,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
 )
@@ -62,6 +65,7 @@ OPPONENT_SELF_SNAPSHOT: int = 3
 OPPONENT_PYTHON_V1: int = 4
 OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
+OPPONENT_BASELINE_CORE_JAX: int = 7
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -77,6 +81,11 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "python_v1": OPPONENT_PYTHON_V1,
     "python_v4": OPPONENT_PYTHON_V4,
     "python_v8": OPPONENT_PYTHON_V8,
+    # core_jax: in-JAX faithful-ish port of baseline_v1 (action-parity ~80% x64 /
+    # ~63% float32, source 100%). Unlike case8 in-JAX (24s/call, infeasible) it
+    # vmaps fast (~83ms/game). A v1-like opponent with NO host hop — the practical
+    # high-parity training opponent vs the 10%-approx baseline_jax_full.
+    "baseline_core_jax": OPPONENT_BASELINE_CORE_JAX,
 }
 
 
@@ -502,9 +511,9 @@ def _rollout_one_env(
         # Wrapping every branch in a lambda so only the chosen one executes keeps
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
-        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax.
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 6),
+            jnp.clip(opponent_mode, 0, 7),
             [
                 lambda: jnp.full(
                     (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
@@ -515,6 +524,7 @@ def _rollout_one_env(
                 lambda: _python_v1_opponent_actions(state, 1 - seat),
                 lambda: _python_v4_opponent_actions(state, 1 - seat),
                 lambda: _python_v8_opponent_actions(state, 1 - seat),
+                lambda: _baseline_core_jax_actions(state, 1 - seat).astype(jnp.float32),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
