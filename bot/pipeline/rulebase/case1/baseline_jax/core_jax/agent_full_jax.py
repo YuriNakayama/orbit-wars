@@ -38,6 +38,11 @@ _REINFORCE_SAFETY_MARGIN = 2
 _REINFORCE_VALUE_MULT = 1.35
 _ATTACK_COST_TURN_WEIGHT = 0.55
 _FOLLOWUP_MIN_SHIPS = 8
+# v1's main capture resolver has NO per-source launch cap (a rich source can
+# capture many targets, bounded only by source_attack_left budget). The 2-cap
+# under-fired (parity: src fired 2 vs v1's 4-5). Raise to the slot limit; the
+# followup_ok budget gate (>= FOLLOWUP_MIN_SHIPS for the 2nd+) still bounds it.
+_MAX_LAUNCHES_PER_SOURCE = MAX_LAUNCHES_PER_AGENT
 # build_modes thresholds/bonuses (strategy_helpers.build_modes)
 _AHEAD_DOMINATION = 0.18
 _BEHIND_DOMINATION = -0.2
@@ -456,7 +461,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             & (send >= need_now)
             & (send >= 1)
             & ~already
-            & (count < 2)
+            & (count < _MAX_LAUNCHES_PER_SOURCE)
             & followup_ok
             & ~(is_followup & f_reinf[oi])  # followup is capture-only
         )
