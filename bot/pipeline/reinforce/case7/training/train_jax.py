@@ -552,9 +552,10 @@ class _OpponentPool:
 class _OpponentEntry:
     """One selectable opponent: a rule mode name + optional self-snapshot model."""
 
-    opponent: str  # "baseline_jax_full" or "self_snapshot"
+    opponent: str  # rule mode (baseline_jax_full/lite) or "self_snapshot"
     model: ActorCriticJax | None  # None for rule opponents
-    win_ema: float  # current agent's win-rate EMA vs this entry (x in f_hard)
+    win_ema: float  # current agent's win-rate EMA vs this entry (x in f_var/f_hard)
+    count: int = 0  # number of times this entry has been played (for fast warmup)
 
 
 def _pfsp_weight(x: float, p: float, mode: str) -> float:
@@ -594,32 +595,41 @@ class _PrioritizedOpponentSelector:
         self._entries: list[_OpponentEntry] = []
 
     def set_entries(
-        self, pool_models: list[ActorCriticJax], include_full: bool
+        self,
+        pool_models: list[ActorCriticJax],
+        include_full: bool,
+        include_lite: bool = False,
     ) -> None:
-        """Rebuild entries from the current pool (+ baseline_jax_full).
+        """Rebuild entries from the current pool (+ fixed rule opponents).
 
-        Preserves the win_ema of carried-over snapshot entries by index from
-        the tail (FIFO pool), and seeds new entries at init_win.
+        Preserves the win_ema / count of carried-over entries (rule opponents by
+        name, snapshots by FIFO index from the tail), and seeds new entries at
+        init_win. `include_lite` adds baseline_jax_lite as a weaker fixed anchor
+        so f_var has a ~even opponent to fall back on as the agent improves.
         """
         prev_snaps = [e for e in self._entries if e.opponent == "self_snapshot"]
         new_entries: list[_OpponentEntry] = []
+
+        def _carry_rule(name: str) -> _OpponentEntry:
+            prev = next((e for e in self._entries if e.opponent == name), None)
+            return _OpponentEntry(
+                name,
+                None,
+                prev.win_ema if prev else self._init_win,
+                prev.count if prev else 0,
+            )
+
+        if include_lite:
+            new_entries.append(_carry_rule("baseline_jax_lite"))
         if include_full:
-            full_prev = next(
-                (e for e in self._entries if e.opponent == "baseline_jax_full"), None
-            )
-            new_entries.append(
-                _OpponentEntry(
-                    "baseline_jax_full",
-                    None,
-                    full_prev.win_ema if full_prev else self._init_win,
-                )
-            )
+            new_entries.append(_carry_rule("baseline_jax_full"))
         # Align pool models to the tail of prev snapshot EMAs (FIFO order).
         carried = prev_snaps[-len(pool_models) :] if pool_models else []
         pad = len(pool_models) - len(carried)
         for i, m in enumerate(pool_models):
             ema = carried[i - pad].win_ema if i >= pad else self._init_win
-            new_entries.append(_OpponentEntry("self_snapshot", m, ema))
+            cnt = carried[i - pad].count if i >= pad else 0
+            new_entries.append(_OpponentEntry("self_snapshot", m, ema, cnt))
         self._entries = new_entries
 
     def sample(self, rng: np.random.Generator) -> tuple[int, _OpponentEntry]:
@@ -637,7 +647,15 @@ class _PrioritizedOpponentSelector:
 
     def update(self, idx: int, win_rate: float) -> None:
         e = self._entries[idx]
-        e.win_ema = self._ema * e.win_ema + (1.0 - self._ema) * win_rate
+        e.count += 1
+        # Count-based learning rate: a fixed EMA (alpha=ema, ~0.7) barely moves
+        # win_ema off its init 0.5 in the first few plays, so f_var never learns
+        # which opponents are actually ~even and the match win-rate drifts away
+        # from 0.5. Use lr = max(1/count, 1-ema): the first play sets win_ema to
+        # the observed value (lr=1), the next averages 2 samples (lr=1/2), etc.,
+        # until the rate floors at the steady-state EMA. Fast warmup, stable tail.
+        lr = max(1.0 / e.count, 1.0 - self._ema)
+        e.win_ema = (1.0 - lr) * e.win_ema + lr * win_rate
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -721,6 +739,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_snapshot_every = int(pool_cfg.get("snapshot_every", 10))
     pool_cap = int(pool_cfg.get("cap", 5))
     pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
+    # include_lite: add baseline_jax_lite as a weaker fixed selector entry so
+    # f_var has a ~even opponent to fall back on as the agent outgrows full.
+    pool_include_lite = bool(pool_cfg.get("include_lite", False))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
     # PFSP: priority="f_hard" weights (1-x)^p (hard opponents); priority="f_var"
     # weights (x(1-x))^p (~even opponents, keeps the match near current skill —
@@ -797,7 +818,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         pool_priority_p, pool_priority_ema, mode=pool_priority
     )
     if use_priority:
-        selector.set_entries(pool.models(), include_full=True)
+        selector.set_entries(
+            pool.models(), include_full=True, include_lite=pool_include_lite
+        )
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
     key = jax.random.PRNGKey(seed)
@@ -859,7 +882,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         if use_pool and (it + 1) % pool_snapshot_every == 0:
             pool.push(model)
             if use_priority:
-                selector.set_entries(pool.models(), include_full=True)
+                selector.set_entries(
+                    pool.models(), include_full=True, include_lite=pool_include_lite
+                )
         row["opponent"] = iter_opponent
         # Pool state for this iter: how many past-self snapshots are live and
         # which one (if any) was sampled, so the opponent distribution can be
