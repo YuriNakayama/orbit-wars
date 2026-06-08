@@ -30,8 +30,9 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 - [x] (P1) H1: handicap curriculum — REJECTED (iter1)。lite ですら勝てず entropy collapse、難度調整は無効。ボトルネックは reward 信号
 - [x] (P1) H2: dense差分報酬 — REJECTED (iter2)。max 0.375、H1と同じ振動+entropy collapse。reward shaping も plateau 破れず
 - [x] (P1) H3: BC warm-start — REJECTED (iter3, harmful)。case9 imitation が case7 に転移せず vs noop 0.22/vs full 0.03。kl anchor が弱 policy に固定
-- [ ] (P1) H4: **scale-up** — 同設定(self_snapshot pool, dense差分)で iterations 20→150-200。memory `case1_aa_300iter` は 300iter で reward 0.50 到達。20iter ceiling を破れるか検証 (~$1-1.5)
-- [ ] (P2) H5: reverse curriculum — 中盤有利局面から開始し勝ち切り学習→序盤へ後退 (research 処方A)
+- [x] (P1) H4: **scale-up 150iter — BREAKTHROUGH** (iter4)。vs full 0.23→0.34→0.47 単調上昇、勝ち越し(0.50-0.62)到達。天井は under-training だった
+- [ ] (P1) H5: **scale-up 300iter** — H4 の climb を継続、勝ち越しを定着させる。最終 ckpt を paired 30戦で確定 (進行中)
+- [ ] (P3) H6: reverse curriculum — H4/H5 で勝てれば不要。勝ち足りなければ補助 (research 処方A)
 - [ ] (P3) H6: asymmetric reward — 弱側(agent)の勝ち報酬増幅/負け減衰で初期正信号確保 (research 処方E)
 
 ## 知見 (2026-06-08, H1/H2/H3 後 — round 1 結論)
@@ -61,3 +62,5 @@ RL agent を、短時間GPU PoC(~20-30分/run)の反復で実現する。
 | 1 | 2026-06-08 | H1 | ...90444c5 | vs full ~0.32 (trend無), lite ~0.22 | REJECTED | iter1_result.md |
 | 2 | 2026-06-08 | H2 | ...a1c5e8b | vs full mean 0.260/max 0.375 (trend無) | REJECTED | iter2_result.md |
 | 3 | 2026-06-08 | H3 | ...acbab5c | vs full 0.03-0.06 (BC init 逆効果) | REJECTED | iter3_result.md |
+| 4 | 2026-06-08 | H4 | ...500bc5d | vs full 0.23→0.47 climb, peak 0.62 | **BREAKTHROUGH** | iter4_result.md |
+| 5 | 2026-06-08 | H5 | ...500bc5d(再利用) | 300iter, 進行中 | running | — |
