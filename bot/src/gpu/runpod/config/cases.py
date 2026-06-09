@@ -550,6 +550,28 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8: PFSP f_var + held-out=python_v8 (real rulebase case8) +
+    # Elo の case7 コピー。`algo: ppo|vmpo` フラグで PPO (既存流用) と V-MPO (H1
+    # 新規) を同一 harness で A/B する。pool=case1(lite/full)+case8(python_v8)+self。
+    # h0_ppo_short: H0 wiring 検証 (PPO 短 run, held-out vs python_v8 + Elo 記録)。
+    "reinforce_case8_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/h0_ppo_short.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case8_kaggle_jax_smoke: short wiring smoke (2 iter, algo=ppo).
+    # Verifies the case7→case8 copy + algo flag + f_var 3-opp pool launch on RunPod.
+    "reinforce_case8_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/h0_smoke.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head

@@ -1,0 +1,62 @@
+# Kaggle/RunPod JAX training config (200 iter) for reinforce/case8 — H1.
+#
+# case6 = PFSP (Prioritized Fictitious Self-Play) 系。case3 の確立済み学習レシピ
+# (shaping=planets/0.50, lr decay, episodes=128, gamma 0.995, entropy 0.02,
+# target_kl 0.02, 200 iter) をそのまま継承し、対戦相手の構成だけを変える。
+#
+# H1 (PFSP foundation): 対戦相手 curriculum の late を self_snapshot に差し替え。
+#   - early=noop          — 勝ち体験で初期学習を安定化 (case3 と同じ)
+#   - switch_iter=5        — baseline 期を最大化 (case3 H4 optimum)
+#   - late=self_snapshot   — 学習開始時点の凍結 snapshot を相手に自己対戦
+# snapshot は学習開始 model に固定 (pool / 周期更新 / 優先 sampling は H2+)。
+#
+# 期待: 凍結 snapshot を相手にしても reward が崩れず学習が成立し、
+#       case3 (late=baseline_jax_lite) と同等以上の reward trend が得られるか。
+#       これが成立すれば H2 以降の pool / PFSP の土台となる。
+#
+# wall-clock 見積: RunPod RTX 3090/A6000 cu12 ~1-3h。A4000 16GB は OOM 実績 (避ける)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 200
+  episodes_per_iter: 128
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 100000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 256
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: self_snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

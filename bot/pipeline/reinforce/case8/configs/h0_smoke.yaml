@@ -1,0 +1,68 @@
+# case8 H0 smoke: scaffold wiring check (2 iter, algo=ppo). Verifies the case7→
+# case8 copy + algo flag + held-out=python_v8 + f_var 3-opp pool (case1+case8+
+# self) all import and run a couple of PPO updates locally. NOT a strength run.
+# algo=vmpo is intentionally NOT exercised here (raises NotImplementedError until
+# H1). Keep iterations/episodes tiny so this finishes on CPU in a few minutes.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  algo: ppo
+  seed: 0
+  iterations: 2
+  episodes_per_iter: 4
+  horizon: 500
+  lr: 3.0e-5
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 1
+    opponent: python_v8       # held-out = real rulebase case8
+    episodes: 4
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 1
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 1
+    cap: 4
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 2.0
+    priority_ema: 0.7
+    include_lite: true        # case1 lite
+    include_v8: true          # case8 (real rulebase) in the train pool
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

@@ -50,6 +50,7 @@ AGENT_REGISTRY: dict[str, str] = {
     "rl_v5": "pipeline.reinforce.case5.policy.agent:agent",
     "rl_v6": "pipeline.reinforce.case6.policy.agent:agent",
     "rl_v7": "pipeline.reinforce.case7.policy.agent:agent",
+    "rl_v8": "pipeline.reinforce.case8.policy.agent:agent",
     "random": "random",
 }
 

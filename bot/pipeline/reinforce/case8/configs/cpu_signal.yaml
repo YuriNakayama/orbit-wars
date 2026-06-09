@@ -1,0 +1,41 @@
+# CPU 中規模 config — RL signal の有無を確認するための local 検証用。
+#
+# 20 iter × 4 ep vs baseline_v1。smoke 4×4 比で 5×、エピソード長 ~500 turn を
+# 想定すると ≈ 40 000 transitions 程度。所要時間は smoke (93s) を基準に
+# 20/4 = 5× ≈ 8 分前後の見込み。
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 4
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.003
+  kl_beta: 0.1
+  ppo_epochs: 4
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  opponent: baseline_v1
+
+output:
+  run_dir: data/output/models/reinforce/case8/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

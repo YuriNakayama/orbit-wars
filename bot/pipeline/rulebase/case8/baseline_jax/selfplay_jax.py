@@ -178,8 +178,16 @@ def _play_one(
     agent0_fn: ActionFn,
     agent1_fn: ActionFn,
 ) -> tuple[
-    jax.Array, jax.Array, jax.Array, jax.Array,
-    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
 ]:
     """Run one self-play game via `lax.scan` over `horizon` turns.
 
@@ -287,9 +295,19 @@ def run_selfplay_batch(
     init_states = [reset(seed=s, num_agents=2) for s in seeds]
     batched_state = _stack_states(init_states)
 
-    def play(state: EnvState) -> tuple[
-        jax.Array, jax.Array, jax.Array, jax.Array,
-        jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array,
+    def play(
+        state: EnvState,
+    ) -> tuple[
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
     ]:
         return _play_one(state, horizon, a0, a1)
 

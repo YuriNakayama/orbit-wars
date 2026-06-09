@@ -1,0 +1,47 @@
+# CPU 安定化検証: trust region を守るために PPO 慣習値に寄せる。
+#
+# 変更点 (cpu_noop.yaml 比):
+#   episodes_per_iter: 4 → 16   advantage 推定の variance 低減
+#   ppo_epochs:        4 → 2    同一データの過剰更新を抑制
+#   kl_beta:           0.1 → 0.5  BC reference からの drift 抑止強化
+#   entropy_coef:      0.003 → 0.001  BC が暴れているので探索より stability 優先
+#   minibatch_size:    64 → 128   1 epoch の更新回数を半減
+#
+# 期待: approx_kl が 0.05 程度に収まり win_rate が iter を追って単調改善
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 16
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.5
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  opponent: random_noop
+
+output:
+  run_dir: data/output/models/reinforce/case8/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

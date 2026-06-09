@@ -1,0 +1,56 @@
+# RunPod JAX training config for reinforce/case8 — opponent=python_v1 (本物).
+#
+# 背景 (2026-06-01):
+# - case6 H4 (vs baseline_jax_full) は live baseline_v1 30戦で 0/30 完敗 = train/eval ギャップ。
+# - 原因: baseline_jax/baseline_jax_full は近似 rule (本物 v1 と target 一致 44%)。
+# - 対策: opponent="python_v1" (新規, sha dc13a25) で本物 v1 を pure_callback で seat1 に注入。
+#   train 相手 = eval 相手 になり、原理的に train/eval gap が消える。
+#
+# ローカル smoke (CPU, 9ac7ea4): iter=2 episodes=4 horizon=50 で 14.7s完走 / win=0.250、
+# 配線 OK + 全敗でないシグナル確認済。
+#
+# コスト方針 (v2): 初回 A100 試走で iter=0 rollout=383s/iter 観測 (CPU smoke 比 57x)。
+# 50 iter 完走は $8.6 で cap 超過のため即 destroy ($1.62)。
+# v2: episodes 32→8 (4x), iter 50→20 (2.5x) で完走 ~37min / $0.86 目標。
+# host callback は seat ごと逐次なので vmap 効かず、episodes 削減が最も効く。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 8
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 10000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
