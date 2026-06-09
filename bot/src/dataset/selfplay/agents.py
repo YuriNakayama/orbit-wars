@@ -24,6 +24,10 @@ AGENT_REGISTRY: dict[str, str] = {
     "baseline_v8": "pipeline.rulebase.case8.baseline.agent:agent",
     "baseline_v9": "pipeline.rulebase.case9.baseline.agent:agent",
     "jax_v4": "pipeline.rulebase.case4.baseline_jax.agent_jax:agent",
+    # jax_v6 = case8 strict base + STAY burst-hold (stay_jax). Single-turn parity
+    # 12/12; consecutive_holds cap (STAY_BURST_MAX_HOLD_TURNS) is host-side, so
+    # multi-turn play may hold one turn longer than Python at the 3-turn cap edge.
+    "jax_v6": "pipeline.rulebase.case6.baseline_jax.agent_jax:agent",
     "jax_v8": "pipeline.rulebase.case8.baseline_jax.agent_jax:agent",
     # jax_v9 = case8 strict base; ANTI_PING_PONG cross-turn cooldown not yet
     # wired (stateless single-turn parity 12/12, diverges in multi-turn play).
