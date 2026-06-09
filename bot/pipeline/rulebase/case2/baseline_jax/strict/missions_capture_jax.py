@@ -368,7 +368,14 @@ def _capture_cell(
     needed = _base_need(tgt_owner_at, tgt_ships_at, turns, player)
     opening_reject = opening_filter_jax(t, turns, needed, src_available, features)
 
-    send_cap = src_available
+    # case1 option_collector: send_cap = min(src_available, preferred_send(needed,
+    # turns, src_available)). case8 used raw src_available; case1 caps it by the
+    # margin-aware preferred_send, which changes eligibility (send_cap_reject /
+    # is_single) and the commit upper bound — a real ship-count divergence.
+    send_cap = jnp.minimum(
+        src_available,
+        preferred_send_jax(t, needed, turns, src_available, features, modes),
+    )
     send_cap_reject = (send_cap < 1) | (
         (send_cap < needed) & (send_cap < PARTIAL_SOURCE_MIN_SHIPS)
     )
@@ -411,9 +418,20 @@ def _capture_cell(
     )
 
 
-def build_capture_grid(features: WorldFeatures, modes: ModesArrays) -> CaptureGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid."""
-    owner_at, ships_at = _base_timelines(features)
+def build_capture_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> CaptureGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid.
+
+    `base_timelines` (per-planet owner_at/ships_at) may be passed in so the caller
+    computes it ONCE and shares it across the capture/snipe grids instead of each
+    builder recomputing the 48-planet HORIZON timeline. Same values either way.
+    """
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> CaptureGrid:
@@ -584,9 +602,19 @@ def _snipe_cell(
     )
 
 
-def build_snipe_grid(features: WorldFeatures, modes: ModesArrays) -> SnipeGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid."""
-    owner_at, ships_at = _base_timelines(features)
+def build_snipe_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> SnipeGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid.
+
+    `base_timelines` shared from the caller (see build_capture_grid) avoids a
+    redundant 48-planet timeline recompute. Same values either way.
+    """
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> SnipeGrid:
@@ -699,7 +727,11 @@ def _harass_cell(
     )
 
 
-def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid:
+def build_harass_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> HarassGrid:
     """Build the `(MAX_PLANETS, MAX_PLANETS)` harass-mission candidate grid.
 
     `modes` is unused (harass scores from raw production, no mode multiplier) but
@@ -712,7 +744,9 @@ def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid
     sees exactly one KIND_HARASS candidate per target, matching Python.
     """
     _ = modes
-    owner_at, ships_at = _base_timelines(features)
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> HarassGrid:

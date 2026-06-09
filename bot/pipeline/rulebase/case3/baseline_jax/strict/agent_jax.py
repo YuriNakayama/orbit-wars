@@ -49,6 +49,7 @@ from .missions_capture_jax import (
     build_harass_grid,
     build_snipe_grid,
 )
+from .missions_capture_jax import _base_timelines as _base_timelines  # noqa: PLC0414
 from .scoring_jax import ModesArrays
 from .world_features import WorldFeatures, build_world_features
 
@@ -159,13 +160,17 @@ def compute_actions(features: WorldFeatures, modes: ModesArrays) -> jax.Array:
     `features` / `modes` are produced by `build_world_features(obs)` on the host.
     Pure & jit/vmap-able given the resolved features.
     """
-    capture = build_capture_grid(features, modes)
-    snipe = build_snipe_grid(features, modes)
+    # Compute the per-planet base timelines ONCE and share across grid builders
+    # (doc#1 hoist): each builder otherwise recomputes the 48-planet HORIZON
+    # timeline. Same values, fewer redundant scans.
+    base_tl = _base_timelines(features)
+    capture = build_capture_grid(features, modes, base_tl)
+    snipe = build_snipe_grid(features, modes, base_tl)
     # HARASS_ENABLED is a static Python bool (False for case1). When disabled the
     # harass grid emits only invalid (score -inf) rows that never commit, so the
     # whole 2304-cell harass scan (~20% of per-turn compute, doc profile) is pure
     # waste. Skip it entirely — the candidate table is identical without it.
-    harass = build_harass_grid(features, modes) if HARASS_ENABLED else None
+    harass = build_harass_grid(features, modes, base_tl) if HARASS_ENABLED else None
     table = _combine_single_table(capture, snipe, harass)
     res = run_mission_and_followup(table, features, modes)
     return _alloc_to_action_tensor(res, features)

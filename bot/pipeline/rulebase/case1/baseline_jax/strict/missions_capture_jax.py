@@ -418,9 +418,20 @@ def _capture_cell(
     )
 
 
-def build_capture_grid(features: WorldFeatures, modes: ModesArrays) -> CaptureGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid."""
-    owner_at, ships_at = _base_timelines(features)
+def build_capture_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> CaptureGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid.
+
+    `base_timelines` (per-planet owner_at/ships_at) may be passed in so the caller
+    computes it ONCE and shares it across the capture/snipe grids instead of each
+    builder recomputing the 48-planet HORIZON timeline. Same values either way.
+    """
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> CaptureGrid:
@@ -591,9 +602,19 @@ def _snipe_cell(
     )
 
 
-def build_snipe_grid(features: WorldFeatures, modes: ModesArrays) -> SnipeGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid."""
-    owner_at, ships_at = _base_timelines(features)
+def build_snipe_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> SnipeGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid.
+
+    `base_timelines` shared from the caller (see build_capture_grid) avoids a
+    redundant 48-planet timeline recompute. Same values either way.
+    """
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> SnipeGrid:
@@ -706,7 +727,11 @@ def _harass_cell(
     )
 
 
-def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid:
+def build_harass_grid(
+    features: WorldFeatures,
+    modes: ModesArrays,
+    base_timelines: tuple[jax.Array, jax.Array] | None = None,
+) -> HarassGrid:
     """Build the `(MAX_PLANETS, MAX_PLANETS)` harass-mission candidate grid.
 
     `modes` is unused (harass scores from raw production, no mode multiplier) but
@@ -719,7 +744,9 @@ def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid
     sees exactly one KIND_HARASS candidate per target, matching Python.
     """
     _ = modes
-    owner_at, ships_at = _base_timelines(features)
+    owner_at, ships_at = (
+        _base_timelines(features) if base_timelines is None else base_timelines
+    )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> HarassGrid:
