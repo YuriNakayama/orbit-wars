@@ -79,6 +79,22 @@ opponent に使う場合、ping-pong 抑制の差は出る (case9 の核心 feat
 - [x] case4: copy + parity 12/12 + registry (jax_v4) + commit (50a0d485)
 - [x] case9: case8 base copy + 単発 parity 12/12 + registry (jax_v9, caveat 付き)。
       残: ANTI_PING_PONG history array 入力 + harass/reinforce mask + host update + multi-turn parity。
-- [ ] case6: case8 base copy → STAY mission → parity
+- [x] case6: case8 base + stay_jax.burst_held_mask + parity 12/12 + registry (jax_v6) + commit (a550fcb6)。
+      base 11/12 → STAY burst-hold mask 適用で 12/12 (s1 planet15 hold が一致)。
+      ★ハマり: world_features に builder が 2 つ (build_world_features=obs / build_world_features_from_state=JAX state)。
+      両方に burst-hold を適用しないと parity probe (from_state 使用) で効かない。
+      残: STAY_BURST_MAX_HOLD_TURNS cap (cross-turn) は host 側 (3連続 hold 上限)。
 - [ ] case2/3/7: 個別構造移植 (高工数、各 parity 検証必須)
 - [ ] case1: archive (別 planner 構造、strict port 対象外)
+
+## strict port 進捗サマリ (2026-06-09)
+
+| case | strict port | parity | registry | 戦略の個性 |
+|------|:--:|:--:|:--|:--|
+| case4 | ✅ | 12/12 (100%) | jax_v4 | case8 と同一 (cache のみ差) |
+| case8 | ✅ (既存) | 27/30 (90%) | jax_v8 | base 戦略 |
+| case9 | ✅ base | 単発 12/12 | jax_v9 | +ANTI_PING_PONG (未配線) |
+| case6 | ✅ | 12/12 (100%) | jax_v6 | **+STAY burst-hold (配線済)** ← 初の別戦略 |
+| case2/3/7 | ❌ | — | — | 高工数 (physics/rollout/ACCUMULATE) |
+
+→ GPU opponent pool に **戦略バリエーション** (case6 の STAY) が初めて追加された。
