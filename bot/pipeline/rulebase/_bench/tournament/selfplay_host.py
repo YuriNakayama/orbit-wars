@@ -72,7 +72,10 @@ def _make_turn_step(
         new_done = done | term
         return state_next, new_done, new_final, new_turns
 
-    return jax.jit(jax.vmap(one_game))
+    # G2 (donate_argnums): the host loop overwrites all 4 carry buffers each turn,
+    # so XLA may reuse them in-place — eliminates per-turn carry copies. Donation
+    # changes only memory layout, never numerics (results are identical).
+    return jax.jit(jax.vmap(one_game), donate_argnums=(0, 1, 2, 3))
 
 
 def run_host_batch(
@@ -108,20 +111,30 @@ def run_host_batch(
     turns = jnp.zeros((b,), dtype=jnp.int32)
 
     turn_step = _make_turn_step(agent0_fn, agent1_fn)
-    sync_every = max(1, sync_every)
 
-    for t in range(horizon):
-        batched, done, final_rewards, turns = turn_step(
-            batched, done, final_rewards, turns
-        )
-        # Sync (and check early-break) only every `sync_every` turns: the
-        # intermediate steps stay queued on-device without a host round-trip.
-        if (t + 1) % sync_every == 0 or t == horizon - 1:
-            done.block_until_ready()
-            if on_turn is not None:
-                on_turn(t, done)
-            if bool(jnp.all(done)):
-                break
+    if sync_every <= 0:
+        # G1 (full async enqueue): queue ALL horizon turns with NO mid-loop host
+        # sync, then block once. Per JAX async-dispatch docs, the host enqueues
+        # faster than the device runs, so the accelerator never waits on Python.
+        # No early-break (terminated games are frozen by the step fn, so running
+        # the full horizon costs only cheap no-op turns) — results are identical.
+        for _t in range(horizon):
+            batched, done, final_rewards, turns = turn_step(
+                batched, done, final_rewards, turns
+            )
+        done.block_until_ready()
+    else:
+        # Throttled sync: check the all-done early-break every `sync_every` turns.
+        for t in range(horizon):
+            batched, done, final_rewards, turns = turn_step(
+                batched, done, final_rewards, turns
+            )
+            if (t + 1) % sync_every == 0 or t == horizon - 1:
+                done.block_until_ready()
+                if on_turn is not None:
+                    on_turn(t, done)
+                if bool(jnp.all(done)):
+                    break
 
     r0 = final_rewards[:, 0]
     r1 = final_rewards[:, 1]
