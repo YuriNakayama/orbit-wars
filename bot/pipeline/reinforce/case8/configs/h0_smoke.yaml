@@ -58,8 +58,8 @@ training:
     priority: f_var
     priority_p: 2.0
     priority_ema: 0.7
-    include_lite: true        # case1 lite
-    include_v8: true          # case8 (real rulebase) in the train pool
+    include_lite: true        # case1 lite (in-JAX, fast)
+    include_v8: false         # python_v8 host-callback => GPU stall; held-out only
 
 output:
   run_dir: data/output/models/reinforce/case8_train_jax/runs
