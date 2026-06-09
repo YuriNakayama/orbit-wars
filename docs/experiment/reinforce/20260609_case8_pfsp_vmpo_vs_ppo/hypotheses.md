@@ -67,6 +67,7 @@ case7 (`pipeline/reinforce/case7/`) が既に必要機構をほぼ保有して�
 
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
+| 1 | 2026-06-09 | H0 | iter1_plan.md | 20260609-062331__feature-poc-v-mpo__0c08b8a__seed0 | scaffold動作: algo flag/PFSP/held-out(baseline_jax_full)/Elo GPU確認, held-out iter0=0.25 iter4=0.375 | adopted (analysis 未実施) | iter1_result.md |
 
 ## 参考 (References)
 
