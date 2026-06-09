@@ -572,6 +572,34 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 1 R1: PPO 実験条件探索。f_var priority_p を {1.0,2.0,4.0}
+    # で A/B (他は ppo_base と同一: pool=full+lite+self, 20 iter,
+    # held-out=baseline_jax_full every=1)。目標 = pool 勝率~0.5 / held-out 0→
+    # 滑らか増加 / 20 iter ≤30分。
+    "reinforce_case8_phase1_r1_p1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p1",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p1.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase1_r1_p2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p2",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p2.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase1_r1_p4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p4",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p4.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
