@@ -23,8 +23,11 @@ episode outcomes for logging.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from typing import NamedTuple
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as _np
@@ -754,19 +757,89 @@ def collect_rollout_jax(
     init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
     batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
-    # vmap over (key, init_state); model + scalar args + opp_model broadcast.
-    # in_axes mirrors _rollout_one_env's positional signature: model(None),
-    # key(0), init_state(0), then every scalar shaping arg(None), and the
-    # broadcast opp_model(None) last.
+    # W7: jit the vmapped rollout. Without jit the vmap(lax.scan over `horizon`
+    # steps) runs eager — every per-step op dispatches from Python and syncs back
+    # to host, so GPU util sits ~8% and a slow-CPU pod stalls at ~60s/iter
+    # (observed 20260609 R5: GPU mem 18GB but util 8%, load 21). Wrapping in jit
+    # compiles the whole vmap(scan) into ONE XLA executable that runs end-to-end
+    # on device, killing the host round-trips. `horizon` / `seat` are static
+    # (horizon = lax.scan length via jnp.arange; seat = an index), so the jitted
+    # fn is built once per (horizon, seat) via _vmapped_rollout_jit's lru_cache.
+    return _vmapped_rollout_jit(horizon, seat)(
+        model,
+        keys,
+        batched_state,
+        shaping_coef,
+        opponent_mode,
+        shaping_mode_int,
+        coef_ship,
+        coef_planet,
+        shaping_clip,
+        dense_coef_ship,
+        dense_coef_planet,
+        time_bonus_coef,
+        time_penalty_coef,
+        effective_opp_model,
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBatch]:
+    """Build (once per horizon/seat) the jitted, vmapped single-env rollout.
+
+    `horizon` / `seat` are closed over as Python constants (static), so the
+    returned callable's signature drops them — every remaining arg is a JAX
+    array / traced scalar. eqx.filter_jit traces array leaves and treats the
+    model pytree's non-array fields as static, mirroring `_ppo_update_jit`.
+    lru_cache keeps exactly ONE compiled executable per (horizon, seat), so we
+    never recompile per call (the per-seed recompile blowup that the seed→
+    init_state refactor fixed must not regress here).
+    """
+
+    # Reduced-arity wrapper: horizon / seat are closed over (static); the
+    # remaining args keep _rollout_one_env's relative order minus those two.
+    def _reduced(
+        model: ActorCriticJax,
+        key: jax.Array,
+        init_state: EnvState,
+        shaping_coef: float,
+        opponent_mode: int,
+        shaping_mode: int,
+        coef_ship: float,
+        coef_planet: float,
+        shaping_clip: float,
+        dense_coef_ship: float,
+        dense_coef_planet: float,
+        time_bonus_coef: float,
+        time_penalty_coef: float,
+        opp_model: ActorCriticJax,
+    ) -> JaxRolloutBatch:
+        return _rollout_one_env(
+            model,
+            key,
+            init_state,
+            horizon,
+            shaping_coef,
+            seat,
+            opponent_mode,
+            shaping_mode,
+            coef_ship,
+            coef_planet,
+            shaping_clip,
+            dense_coef_ship,
+            dense_coef_planet,
+            time_bonus_coef,
+            time_penalty_coef,
+            opp_model,
+        )
+
     vmapped = jax.vmap(
-        _rollout_one_env,
+        _reduced,
         in_axes=(
             None,  # model
             0,  # key
             0,  # init_state
-            None,  # horizon
             None,  # shaping_coef
-            None,  # seat
             None,  # opponent_mode
             None,  # shaping_mode
             None,  # coef_ship
@@ -779,24 +852,7 @@ def collect_rollout_jax(
             None,  # opp_model
         ),
     )
-    return vmapped(
-        model,
-        keys,
-        batched_state,
-        horizon,
-        shaping_coef,
-        seat,
-        opponent_mode,
-        shaping_mode_int,
-        coef_ship,
-        coef_planet,
-        shaping_clip,
-        dense_coef_ship,
-        dense_coef_planet,
-        time_bonus_coef,
-        time_penalty_coef,
-        effective_opp_model,
-    )
+    return eqx.filter_jit(vmapped)
 
 
 __all__ = [

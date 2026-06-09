@@ -626,6 +626,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 1 jit速度検証: iterations=30。rollout を eqx.filter_jit
+    # 化した後の GPU util 上昇 / rollout_secs 短縮を実証する。学習結果は jit 前と
+    # 不変 (同計算を GPU で一気通貫実行するだけ)。
+    "reinforce_case8_phase1_jit_iter30": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_jit_iter30",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase1_jit_iter30.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
