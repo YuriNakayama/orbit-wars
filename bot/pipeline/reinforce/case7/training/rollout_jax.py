@@ -506,9 +506,7 @@ def _rollout_one_env(
         opp_actions = jax.lax.switch(
             jnp.clip(opponent_mode, 0, 6),
             [
-                lambda: jnp.full(
-                    (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
-                ),
+                lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
                 lambda: _baseline_jax_actions(state, 1 - seat),
                 lambda: _baseline_jax_full_actions(state, 1 - seat),
                 lambda: _self_snapshot_opponent_actions(opp_model, state, 1 - seat),
