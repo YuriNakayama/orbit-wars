@@ -30,22 +30,59 @@ import time
 import traceback
 from itertools import combinations
 from pathlib import Path
-from typing import Any
-
-import jax
-import jax.numpy as jnp
+from typing import TYPE_CHECKING, Any
 
 from evaluate.vs_baseline import wilson_ci
-from pipeline.rulebase._bench.tournament.agents_jax import action_fn, list_agents
-from pipeline.rulebase._bench.tournament.selfplay_host import (
-    OUTCOME_DRAW,
-    OUTCOME_SEAT0_WIN,
-    OUTCOME_SEAT1_WIN,
-    run_host_batch,
-)
 from utils.gpu_bench import install_cuda_jax, reload_jax, run_dir
 
+if TYPE_CHECKING:  # type-only; avoid binding jax at module import (cuda reload)
+    import jax
+
+# jax-binding symbols are imported LAZILY inside main() after install_cuda_jax()
+# + reload_jax() so the cuda12 plugin is picked up cleanly (importing jax at
+# module top before the reinstall crashes abseil: "SetTimeZone already called").
+# They are bound as module globals by `_bind_jax_symbols()`.
+jnp: Any = None
+action_fn: Any = None
+list_agents: Any = None
+run_host_batch: Any = None
+OUTCOME_SEAT0_WIN: int = 0
+OUTCOME_SEAT1_WIN: int = 1
+OUTCOME_DRAW: int = 2
+
 HORIZON = 500  # must be 500 — games run ~497 turns; <500 drops terminal reward.
+
+
+def _bind_jax_symbols() -> None:
+    """Import jax-binding tournament symbols into module globals (post-reload)."""
+    global jnp, action_fn, list_agents, run_host_batch
+    global OUTCOME_SEAT0_WIN, OUTCOME_SEAT1_WIN, OUTCOME_DRAW
+    import jax.numpy as _jnp
+
+    from pipeline.rulebase._bench.tournament.agents_jax import (
+        action_fn as _action_fn,
+    )
+    from pipeline.rulebase._bench.tournament.agents_jax import (
+        list_agents as _list_agents,
+    )
+    from pipeline.rulebase._bench.tournament.selfplay_host import (
+        OUTCOME_DRAW as _DRAW,
+    )
+    from pipeline.rulebase._bench.tournament.selfplay_host import (
+        OUTCOME_SEAT0_WIN as _S0,
+    )
+    from pipeline.rulebase._bench.tournament.selfplay_host import (
+        OUTCOME_SEAT1_WIN as _S1,
+    )
+    from pipeline.rulebase._bench.tournament.selfplay_host import (
+        run_host_batch as _run_host_batch,
+    )
+
+    jnp = _jnp
+    action_fn = _action_fn
+    list_agents = _list_agents
+    run_host_batch = _run_host_batch
+    OUTCOME_SEAT0_WIN, OUTCOME_SEAT1_WIN, OUTCOME_DRAW = _S0, _S1, _DRAW
 
 
 def _log(msg: str) -> None:
@@ -207,9 +244,13 @@ def main() -> int:
     cuda_jax = args.cuda_jax or bool(cfg.get("cuda_jax", False))
     agents_spec = args.agents or cfg.get("agents", "")
 
+    # Install the cuda12 jax wheel BEFORE any jax import, then reload + bind the
+    # jax-binding tournament symbols. The agent case modules bind jax at import,
+    # so evict them too (reload_jax prefixes) before _bind_jax_symbols re-imports.
     if cuda_jax:
         install_cuda_jax()
-        reload_jax()
+    reload_jax(extra_prefixes=("pipeline.rulebase",))
+    _bind_jax_symbols()
 
     if isinstance(agents_spec, list):
         agents = [str(a).strip() for a in agents_spec if str(a).strip()]
