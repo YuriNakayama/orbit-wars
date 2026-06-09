@@ -31,6 +31,7 @@ import jax
 import jax.numpy as jnp
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 
+from ._config_compat import HARASS_ENABLED
 from .allocator_jax import (
     KIND_HARASS,
     KIND_SINGLE,
@@ -65,57 +66,55 @@ def _modes_from_features(features: WorldFeatures) -> ModesArrays:
 
 
 def _combine_single_table(
-    capture: CaptureGrid, snipe: SnipeGrid, harass: HarassGrid
+    capture: CaptureGrid, snipe: SnipeGrid, harass: HarassGrid | None
 ) -> SingleMissionTable:
-    """Flatten capture "single" + snipe + harass cells into one candidate table.
+    """Flatten capture "single" + snipe (+ harass) cells into one candidate table.
 
     Each family contributes a `(P*P,)` block. Capture rows where `is_single`
     (Python emits a "single" Mission); snipe / harass rows where their grid is
     valid. `turns` is the option arrival turn; `send_cap` is the per-option cap
     (capture: src_available; snipe / harass option.send_cap == `needed`).
     The greedy scan dispatches on `kind` (capture → preferred_send, snipe/harass
-    → exact `missing`).
+    → exact `missing`). When `harass is None` (HARASS_ENABLED off) its block is
+    omitted — those rows are all-invalid so the resulting table is identical.
     """
     p = capture.valid.shape[0]
     n = p * p
     src_idx = jnp.repeat(jnp.arange(p, dtype=jnp.int32), p)
     tgt_idx = jnp.tile(jnp.arange(p, dtype=jnp.int32), p)
 
-    valid = jnp.concatenate(
-        [capture.is_single.reshape(n), snipe.valid.reshape(n), harass.valid.reshape(n)]
-    )
-    score = jnp.concatenate(
-        [capture.score.reshape(n), snipe.score.reshape(n), harass.score.reshape(n)]
-    )
-    kind = jnp.concatenate(
-        [
-            jnp.full((n,), KIND_SINGLE, dtype=jnp.int32),
-            jnp.full((n,), KIND_SNIPE, dtype=jnp.int32),
-            jnp.full((n,), KIND_HARASS, dtype=jnp.int32),
-        ]
-    )
-    src_slot = jnp.concatenate([src_idx, src_idx, src_idx])
-    target_slot = jnp.concatenate([tgt_idx, tgt_idx, tgt_idx])
-    angle = jnp.concatenate(
-        [capture.angle.reshape(n), snipe.angle.reshape(n), harass.angle.reshape(n)]
-    )
-    turns = jnp.concatenate(
-        [capture.turns.reshape(n), snipe.turns.reshape(n), harass.turns.reshape(n)]
-    )
-    # capture send_cap is the source-available cap; snipe/harass send_cap == needed.
-    send_cap = jnp.concatenate(
-        [capture.send_cap.reshape(n), snipe.needed.reshape(n), harass.needed.reshape(n)]
-    )
+    valid_blocks = [capture.is_single.reshape(n), snipe.valid.reshape(n)]
+    score_blocks = [capture.score.reshape(n), snipe.score.reshape(n)]
+    kind_blocks = [
+        jnp.full((n,), KIND_SINGLE, dtype=jnp.int32),
+        jnp.full((n,), KIND_SNIPE, dtype=jnp.int32),
+    ]
+    src_blocks = [src_idx, src_idx]
+    tgt_blocks = [tgt_idx, tgt_idx]
+    angle_blocks = [capture.angle.reshape(n), snipe.angle.reshape(n)]
+    turns_blocks = [capture.turns.reshape(n), snipe.turns.reshape(n)]
+    # capture send_cap is the source-available cap; snipe send_cap == needed.
+    send_cap_blocks = [capture.send_cap.reshape(n), snipe.needed.reshape(n)]
+
+    if harass is not None:
+        valid_blocks.append(harass.valid.reshape(n))
+        score_blocks.append(harass.score.reshape(n))
+        kind_blocks.append(jnp.full((n,), KIND_HARASS, dtype=jnp.int32))
+        src_blocks.append(src_idx)
+        tgt_blocks.append(tgt_idx)
+        angle_blocks.append(harass.angle.reshape(n))
+        turns_blocks.append(harass.turns.reshape(n))
+        send_cap_blocks.append(harass.needed.reshape(n))
 
     return SingleMissionTable(
-        valid=valid,
-        score=score,
-        kind=kind,
-        src_slot=src_slot,
-        target_slot=target_slot,
-        angle=angle,
-        turns=turns,
-        send_cap=send_cap,
+        valid=jnp.concatenate(valid_blocks),
+        score=jnp.concatenate(score_blocks),
+        kind=jnp.concatenate(kind_blocks),
+        src_slot=jnp.concatenate(src_blocks),
+        target_slot=jnp.concatenate(tgt_blocks),
+        angle=jnp.concatenate(angle_blocks),
+        turns=jnp.concatenate(turns_blocks),
+        send_cap=jnp.concatenate(send_cap_blocks),
     )
 
 
@@ -162,7 +161,11 @@ def compute_actions(features: WorldFeatures, modes: ModesArrays) -> jax.Array:
     """
     capture = build_capture_grid(features, modes)
     snipe = build_snipe_grid(features, modes)
-    harass = build_harass_grid(features, modes)
+    # HARASS_ENABLED is a static Python bool (False for case1). When disabled the
+    # harass grid emits only invalid (score -inf) rows that never commit, so the
+    # whole 2304-cell harass scan (~20% of per-turn compute, doc profile) is pure
+    # waste. Skip it entirely — the candidate table is identical without it.
+    harass = build_harass_grid(features, modes) if HARASS_ENABLED else None
     table = _combine_single_table(capture, snipe, harass)
     res = run_mission_and_followup(table, features, modes)
     return _alloc_to_action_tensor(res, features)
