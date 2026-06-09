@@ -37,6 +37,14 @@ dev/runpod dev <commit> --case tournament_rulebase_jax_smoke   # interactive (SS
 - GPU は既に飽和（89-93% util、mem 18/24 GB）。律速は **per-turn の絶対 compute コスト**で、
   host-loop の sync オーバーヘッドではない（G1/G2 で wall-clock 不変を確認済）。
 
+### post-hoist 実測確認（2026-06-10 / RTX 4090）
+
+3 hoist（harass-skip / base_timelines 共有 / snipe-ETA 集約、全て 12/12 一致）適用後に
+GPU で再計測したところ、**batch8 × 30 turn が 9 分超**（= **~18.5 s/turn**）。doc の
+warm-single 16.3 s/turn とほぼ同じで、hoist による runtime 改善は**僅少**（XLA が既に CSE
+していたか compile が支配的）。→ **1 ゲーム（~309 turn）= ~95 分、500 turn = ~154 分**。
+300 ゲームは数百時間規模で、**20 分制約に対し ~300x 不足が実測で確定**。
+
 ### ゲーム長
 
 both-rulebase self-play の終了 turn: `[498, 175, 481, 282, 125, 295]`（mean 309, max 498）。
