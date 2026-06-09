@@ -57,7 +57,8 @@ docs/
 | Rule file | Auto-loaded for | When to read manually |
 |-----------|----------------|----------------------|
 | `.claude/rules/python.md` | `**/*.py`, `**/*.ipynb` | Python language general rules |
-| `.claude/rules/bot/pipeline.md` | `bot/pipeline/**` | Submit structure for case directories |
+| `.claude/rules/bot/pipeline.md` | `bot/pipeline/**` | Case directory layout, experiment discipline, long-running training, evaluation |
+| `.claude/rules/bot/submit.md` | `bot/src/submit/**`, `dev/submit` | Kaggle submit structure (main.py entrypoint, relative imports, .submitignore, dry-run) |
 | `.claude/rules/bot/tests.md` | `bot/tests/**` | Pytest conventions |
 | `.claude/rules/infra.md` | `infra/**` | Terraform / cloud infrastructure (AWS, etc.) |
 | `.claude/rules/data.md` | `data/**` | data/ 4-layer structure (lake/processed/mart/output), DVC management, worktree symlink rules |
