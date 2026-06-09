@@ -13,10 +13,8 @@ Kaggle [Orbit Wars](https://www.kaggle.com/competitions/orbit-wars) competition 
 ## Technology Stack
 
 - **Language**: Python 3.13
-- **Simulator**: `kaggle-environments` (Orbit Wars env)
-- **Numerics**: NumPy, Pandas, Polars
-- **AI / RL** (optional): PyTorch, Stable-Baselines3, etc. as needed
-- **Testing**: Pytest + pytest-cov, Ruff, Mypy
+- **ML**: PyTorch
+- **Testing**: Pytest, Ruff, Mypy
 - **Package Management**: UV
 
 ## Folder Structure
@@ -26,15 +24,8 @@ bot/                    Python implementation (pyproject.toml / uv.lock live her
   src/                  Shared dev libs (submit, dataset, evaluate, utils, gpu/{vast,runpod,kaggle})
   pipeline/             Agent families only: rulebase / imitation / reinforce (reinforce/_bench は dev-only ベンチ)
   tests/                Pytest unit tests
-simulator/              Orbit Wars simulator backends + adapter (bot 非依存の純粋シミュレータ層)
-  python/               Apache-2.0 vendored copy of kaggle_environments/envs/orbit_wars (orbit_wars_vendor)
-  rust/                 PyO3 + maturin Rust simulator (orbit_wars_rust._lib)
-  jax/                  JAX-native reimplementation (orbit_wars_jax, jit + vmap, parity-tested)
-  adapter/              Backend-agnostic env adapter (orbit_wars_sim, ORBIT_WARS_BACKEND で rust/python 切替)
+simulator/              Orbit Wars simulator backends + adapter
 infra/                  Terraform-based infrastructure (AWS, etc.)
-  environment/          Per-environment root modules (dev / staging / prod)
-  module/               Reusable shared modules
-  runtime/              Container build assets (Dockerfile, buildspec, scripts)
 data/                   4 layers (lake / processed / mart / output) (gitignored, symlinked to the main repo, DVC-managed)
   lake/                 Raw data (selfplay matches, kaggle_episodes, etc.)
   processed/            Pre-processed data

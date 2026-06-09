@@ -164,8 +164,8 @@ case<N>/
 | `evaluation/` | typer wrappers around `src/evaluate/*` | yes |
 | `training/`   | imitation cases only — preprocess/train scripts | yes |
 | `eda/`, `notebook/` | exploratory analysis | yes |
-| `configs/`    | per-case YAML kept locally (params.yaml集約はしない) | yes |
-| `planner/` (under `baseline/`) | decomposition target for big strategy.py — case1 採用例 | no (submission-bound, must use relative imports) |
+| `configs/`    | per-case YAML kept locally (no params.yaml consolidation) | yes |
+| `planner/` (under `baseline/`) | decomposition target for big strategy.py — adopted in case1 | no (submission-bound, must use relative imports) |
 
 ### Cross-case independence rule
 
