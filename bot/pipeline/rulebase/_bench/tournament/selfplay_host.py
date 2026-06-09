@@ -82,11 +82,21 @@ def run_host_batch(
     horizon: int = EPISODE_STEPS,
     *,
     on_turn: Callable[[int, jax.Array], None] | None = None,
+    sync_every: int = 16,
 ) -> dict[str, jax.Array]:
     """Play one game per seed, host-driven. Returns batched outcome arrays.
 
-    ``on_turn(turn_idx, done_array)`` is invoked each turn (after the device
-    call blocks) for live progress — e.g. log how many games have finished.
+    Speed: a large ``seeds`` batch amortizes the per-turn ``compute_actions``
+    grid+allocator cost (case8 bench: 2092 ms/state at batch 8 → 283 ms/state at
+    batch 64, a 7.4x win — fill the batch). The all-done early-break (#3b) and the
+    per-turn host sync (#2) are throttled to every ``sync_every`` turns: checking
+    ``jnp.all(done)`` each turn forces a device→host sync that serializes the
+    async dispatch pipeline. Throttling lets ``sync_every`` turns queue on the GPU
+    before one sync — terminated games are frozen by the step fn, so running a few
+    extra turns is harmless to the outcome (results are identical).
+
+    ``on_turn(turn_idx, done_array)`` is invoked at each sync point for live
+    progress (e.g. log how many games have finished).
     """
     if not seeds:
         raise ValueError("seeds must be a non-empty list of ints")
@@ -98,16 +108,20 @@ def run_host_batch(
     turns = jnp.zeros((b,), dtype=jnp.int32)
 
     turn_step = _make_turn_step(agent0_fn, agent1_fn)
+    sync_every = max(1, sync_every)
 
     for t in range(horizon):
         batched, done, final_rewards, turns = turn_step(
             batched, done, final_rewards, turns
         )
-        if on_turn is not None:
+        # Sync (and check early-break) only every `sync_every` turns: the
+        # intermediate steps stay queued on-device without a host round-trip.
+        if (t + 1) % sync_every == 0 or t == horizon - 1:
             done.block_until_ready()
-            on_turn(t, done)
-        if bool(jnp.all(done)):
-            break
+            if on_turn is not None:
+                on_turn(t, done)
+            if bool(jnp.all(done)):
+                break
 
     r0 = final_rewards[:, 0]
     r1 = final_rewards[:, 1]
