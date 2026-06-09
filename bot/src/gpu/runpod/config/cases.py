@@ -613,6 +613,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 1 観測性検証: 10 iter (~8min)。本番 (iter50) 前に
+    # REQ1-5 (incremental local logs/metrics, S3 per-iter durability, resource
+    # telemetry, oneshot SSH) が GPU 上で成立するか確認する事前検証 run。
+    "reinforce_case8_phase1_validate": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_validate",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase1_validate.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head

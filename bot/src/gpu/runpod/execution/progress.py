@@ -244,6 +244,37 @@ def list_artifacts(
     return files
 
 
+def fetch_metrics(
+    run_id: str,
+    *,
+    profile: str | None = None,
+    bucket: str = PROGRESS_BUCKET,
+    prefix: str = ARTIFACT_PREFIX,
+    s3_client: Any | None = None,
+) -> dict[str, Any] | None:
+    """Fetch + parse `runpod_artifacts/<RUN_ID>/metrics.json` from S3.
+
+    Returns the parsed dict (summary fields + ``history`` list) or None when the
+    object does not exist yet. Because the training loop uploads metrics.json
+    after EVERY iter (train_jax `_upload_artifact_to_s3`), this reads the live
+    per-iter trace mid-run — no SSH or pod access required, so `dev/runpod
+    metrics` works from a local machine while the GPU run is still in flight.
+    """
+    import json as _json
+
+    client = s3_client if s3_client is not None else _build_s3_client(profile)
+    key = f"{prefix}/{run_id}/metrics.json"
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except Exception:  # noqa: BLE001 — NoSuchKey / ClientError 全部 (未生成 = None)
+        return None
+    try:
+        parsed = _json.loads(obj["Body"].read())
+    except (ValueError, KeyError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def write_progress_marker(
     step: str,
     *,
