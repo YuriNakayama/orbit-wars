@@ -36,3 +36,35 @@ CPU 24,000ms/call で遅く、memory `case_jax_phase0` では GPU bench が XLA 
 ## 次のステップ
 - GPU pod で case8 compute_actions の 実 compile時間 + runtime を実測。
 - compile が現実的なら runtime短縮を、2hハング再現なら grid の nested vmap 削減を優先。
+
+## GPU 実測結果 (2026-06-09, RTX 4090 SECURE)
+
+bench: `pipeline/rulebase/case8/baseline_jax/_gpu_bench.py` (commit 7516d2f2)。
+RunPod RTX 4090 24GB に CUDA jaxlib (`jax[cuda12]==0.10.0`) を venv 導入し実測。
+
+| 測定 | 値 | 意味 |
+|---|---|---|
+| platform | gpu (cuda:0) | GPU 認識 OK |
+| **compile_s** | **28.4s** | ★2h ハングは再現せず。GPU では ~30s でコンパイル完了 |
+| warm_single_ms | **16,291ms** | 1 call ~16.3s。CPU 24s からほぼ改善せず (per-cell scan は逐次) |
+| vmap8 compile | 32.8s | batch 化しても compile は ~30s 据え置き |
+| vmap8 per_state_ms | 2,092ms | 8 並列は 4090 を使い切れず |
+| vmap64 compile | 34.8s | |
+| **vmap64 per_state_ms** | **283ms** | ★batch64 で 1 state あたり 283ms = single の 57倍速 |
+
+### 結論 (2 つの問いへの回答)
+1. **compile は 2h ハングしない** — GPU で 28-35s。memory `case_jax_phase0` の「2h ハング」は
+   CPU compile の値であり、GPU では現実的。XLA 巨大グラフ説は「compile が長い」点は正しいが
+   「実用不能」は誤り。
+2. **GPU vmap は効く (ただし batch 必須)** — single call は 16.3s で CPU 24s からほぼ改善なし
+   (nested scan が逐次なため)。**batch64 vmap で 283ms/state まで短縮 (57倍)**。
+   → case8 を学習/評価の opponent に使うなら **必ず vmap で複数 env を束ねる**こと。
+   self-play harness は元々 vmapped なので構造的に整合する。
+
+### 含意
+- **最適化(grid 分割 / HORIZON 短縮 / base timeline hoist)は必須ではない**。batch vmap で
+  283ms/state は実用域 (1 turn 1s 予算に対し margin あり、学習 rollout なら GPU 並列で更に償却)。
+- 単発 actTimeout=1s の Kaggle submit 用途では single 16.3s が致命的 → **submit には不向き**、
+  あくまで **GPU 上の学習/評価 opponent (batch 前提)** としての用途に限る。
+- 次に optimize するなら per_state を更に下げる余地: vmap128/256 で 283ms から漸減するか、
+  HORIZON cutoff で compile グラフ縮小 (compile 30s→数s) が候補。だが現状でも opponent 用途は成立。
