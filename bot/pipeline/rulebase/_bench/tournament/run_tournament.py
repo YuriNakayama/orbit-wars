@@ -163,9 +163,23 @@ def _play_pair(
     return a_rec, b_rec, timing
 
 
+def _load_config(path: str) -> dict[str, Any]:
+    """Load a tournament YAML config (seeds/horizon/agents/cuda_jax)."""
+    import yaml
+
+    with Path(path).open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"tournament config at {path} must be a YAML mapping")
+    return data
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seeds", type=int, default=300, help="seeds per seat half")
+    # The RunPod onstart only allows ``--config <path>`` (config_arg validator),
+    # so the pod path passes a YAML; CLI flags override it for local use.
+    ap.add_argument("--config", type=str, default="", help="YAML config path")
+    ap.add_argument("--seeds", type=int, default=None, help="seeds per seat half")
     ap.add_argument(
         "--out",
         type=str,
@@ -173,7 +187,7 @@ def main() -> int:
         help="run_dir for artifacts (default: $ORBIT_WARS_RUN_DIR via run_dir())",
     )
     ap.add_argument(
-        "--horizon", type=int, default=HORIZON, help="turns per game (must be 500)"
+        "--horizon", type=int, default=None, help="turns/game (must be 500)"
     )
     ap.add_argument(
         "--agents", type=str, default="", help="comma list (default: all 7)"
@@ -185,18 +199,26 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if args.cuda_jax:
+    cfg = _load_config(args.config) if args.config else {}
+    seeds_n = args.seeds if args.seeds is not None else int(cfg.get("seeds", 300))
+    horizon = (
+        args.horizon if args.horizon is not None else int(cfg.get("horizon", HORIZON))
+    )
+    cuda_jax = args.cuda_jax or bool(cfg.get("cuda_jax", False))
+    agents_spec = args.agents or cfg.get("agents", "")
+
+    if cuda_jax:
         install_cuda_jax()
         reload_jax()
 
-    horizon = args.horizon
-    agents = (
-        [s.strip() for s in args.agents.split(",") if s.strip()]
-        if args.agents
-        else list_agents()
-    )
+    if isinstance(agents_spec, list):
+        agents = [str(a).strip() for a in agents_spec if str(a).strip()]
+    elif agents_spec:
+        agents = [s.strip() for s in str(agents_spec).split(",") if s.strip()]
+    else:
+        agents = list_agents()
     out_dir = Path(args.out) if args.out else run_dir()
-    seeds = list(range(args.seeds))
+    seeds = list(range(seeds_n))
     pairs = list(combinations(agents, 2))
     records: dict[str, dict[str, int]] = {
         a: {"wins": 0, "losses": 0, "draws": 0} for a in agents
@@ -204,15 +226,13 @@ def main() -> int:
     matrix: list[dict[str, Any]] = []
     started = time.time()
 
-    _log(
-        f"tournament: {len(agents)} agents, {len(pairs)} pairs, {args.seeds} seeds/half"
-    )
+    _log(f"tournament: {len(agents)} agents, {len(pairs)} pairs, {seeds_n} seeds/half")
     _log(f"agents: {agents}")
 
     payload: dict[str, Any] = {
         "status": "running",
         "agents": agents,
-        "seeds_per_half": args.seeds,
+        "seeds_per_half": seeds_n,
         "horizon": horizon,
         "total_pairs": len(pairs),
         "pairs_done": 0,

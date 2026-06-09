@@ -1,0 +1,10 @@
+# Observability pre-validation (~10 min on GPU). 3 agents, few seeds, short
+# horizon — confirms incremental flush + S3 + nvidia-smi/system_monitor + SSH
+# all work BEFORE the full run (pipeline.md "Dry-run before the real run").
+cuda_jax: true
+seeds: 8
+horizon: 120
+agents:
+  - jax_v1
+  - jax_v4
+  - jax_v8

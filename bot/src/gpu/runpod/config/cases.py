@@ -753,7 +753,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "stage": "tournament_rulebase_jax_smoke",
         "train_module": "pipeline.rulebase._bench.tournament.run_tournament",
         "config_arg": (
-            "--cuda-jax --seeds 8 --horizon 120 --agents jax_v1,jax_v4,jax_v8"
+            "--config pipeline/rulebase/_bench/tournament/configs/smoke.yaml"
         ),
         "preprocess_cmd": "",
         "canonical_weights": "",
@@ -766,7 +766,7 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "family": "reinforce",
         "stage": "tournament_rulebase_jax",
         "train_module": "pipeline.rulebase._bench.tournament.run_tournament",
-        "config_arg": "--cuda-jax --seeds 300 --horizon 500",
+        "config_arg": "--config pipeline/rulebase/_bench/tournament/configs/full.yaml",
         "preprocess_cmd": "",
         "canonical_weights": "",
     },

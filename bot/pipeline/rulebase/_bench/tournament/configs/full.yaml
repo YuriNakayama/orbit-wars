@@ -1,0 +1,14 @@
+# Full round-robin over the 7 in-JAX rule agents. 300 seeds/half × both seat
+# assignments, horizon 500. Win-rate + Wilson CI leaderboard. Run ONLY after
+# smoke.yaml validates observability.
+cuda_jax: true
+seeds: 300
+horizon: 500
+agents:
+  - jax_v1
+  - jax_v2
+  - jax_v3
+  - jax_v4
+  - jax_v6
+  - jax_v8
+  - jax_v9
