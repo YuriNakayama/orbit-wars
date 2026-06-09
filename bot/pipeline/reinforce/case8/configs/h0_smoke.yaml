@@ -40,7 +40,9 @@ training:
   target_kl: 0.02
   heldout_eval:
     every: 1
-    opponent: python_v8       # held-out = real rulebase case8
+    # in-JAX held-out (on-device). python_v8 host-callback stalls GPU (see
+    # h0_ppo_short.yaml note); real case8 comparison is an offline paired check.
+    opponent: baseline_jax_full
     episodes: 4
     seed: 777000
     ref_elo: 1500.0

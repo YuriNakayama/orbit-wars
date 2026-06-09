@@ -52,7 +52,12 @@ training:
   target_kl: 0.02
   heldout_eval:
     every: 4
-    opponent: python_v8       # held-out = real rulebase case8 (fixed anchor)
+    # held-out = in-JAX baseline_jax_full (case1-full proxy, on-device, fast).
+    # python_v8 (real rulebase case8) is a sequential host-callback: 32ep×500turn
+    # = 16k host round-trips per eval => GPU stalls >11min/iter (post-mortem
+    # 2026-06-09). The real case8 comparison is done OFFLINE on best.pt via paired
+    # 300 games (hypotheses.md exception condition), not in the training loop.
+    opponent: baseline_jax_full
     episodes: 32
     seed: 777000
     ref_elo: 1500.0

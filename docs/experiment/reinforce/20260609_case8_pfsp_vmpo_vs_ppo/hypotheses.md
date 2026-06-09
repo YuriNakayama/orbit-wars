@@ -50,13 +50,14 @@ case7 (`pipeline/reinforce/case7/`) が既に必要機構をほぼ保有して�
 
 ### 例外条件
 - V-MPO が PPO に paired で +有意に勝った場合のみ、その設定を n=300 + 別 rulebase (case4/case1) で最終確認
+- **本物 rulebase case8 (python_v8) との比較は学習ループ外の offline paired 300戦で行う** (iter1 で判明: python_v8 は sequential host-callback で JAX rollout に通すと iter0 が GPU 0% で停滞。memory `python_v8_train_pool_gpu_stall`)。in-loop の held-out 進捗は in-JAX `baseline_jax_full` (case1-full proxy) で代用する
 
 ## 仮説リスト (priority 順)
 
-- [ ] (P1) H0: **case8 scaffold** — `pipeline/reinforce/case8/` を case7 コピーで作成し、`training/` に `algo: ppo|vmpo` フラグを通す。PFSP `f_var` / held-out / Elo の wiring を case8 向け(held-out=`baseline_v8`, pool=case1+case8+self-snapshot)に組み替え。smoke (1-ep) が両 algo で通ることが受入条件。— V-MPO/PPO を公平に A/B する同一 harness の土台
-- [ ] (P1, depends on H0) H1: **V-MPO loss 新規実装** — top-half advantage で非パラメトリック target ψ(温度 η の dual L_η, ε_η 制約) + 重み付き最尤の policy loss L_π + decoupled trust-region L_α(Lagrange α, ε_α, old policy に stop-gradient)。importance weight / entropy reg なしで PPO と同一 rollout・同一 PFSP・同一 held-out 上で A/B。— PPO の clip/entropy 依存を外し、policy collapse 耐性で held-out case8 勝率が PPO を上回るかが主問い
-- [ ] (P1, depends on H0) H2: **PFSP f_var pool** — 学習対戦相手 pool = `[case1 lite, case1 full, rulebase case8, self-snapshot FIFO]`、`f_var(x)=(x(1-x))^p` で勝率 0.5 付近の相手を優先選択。per-iter win_rate が ~0.5 に張り付くこと(設計通り)を確認。— 同実力対戦の非飽和維持が学習信号の前提(memory `unbeatable_opponent_harmful` 回避)
-- [ ] (P1, depends on H0) H3: **held-out case8 + Elo** — 固定 `baseline_v8` + 固定 `eval_seed` で `heldout_eval_every` ごとに勝率測定(PPO update なし)、固定 ref anchor で Elo 更新。f_var 下では per-iter win_rate は進捗信号にならないので held-out 曲線/Elo を唯一の進捗軸にする。— PPO arm / V-MPO arm の進捗を同一スケールで比較する評価基盤
+- [ ] (P1) H0: **case8 scaffold** — `pipeline/reinforce/case8/` を case7 コピーで作成し、`training/` に `algo: ppo|vmpo` フラグを通す。PFSP `f_var` / held-out / Elo の wiring を case8 向けに組み替え。smoke (1-ep) が両 algo で通ることが受入条件。— V-MPO/PPO を公平に A/B する同一 harness の土台。**iter1 で判明した制約**: 本物 rulebase (python_v8) は host-callback で JAX rollout に通せない → in-loop held-out = in-JAX `baseline_jax_full`、train pool = in-JAX (lite/full) + self、本物 case8 は offline paired 評価
+- [ ] (P1, depends on H0) H1: **V-MPO loss 新規実装** — top-half advantage で非パラメトリック target ψ(温度 η の dual L_η, ε_η 制約) + 重み付き最尤の policy loss L_π + decoupled trust-region L_α(Lagrange α, ε_α, old policy に stop-gradient)。importance weight / entropy reg なしで PPO と同一 rollout・同一 PFSP・同一 held-out 上で A/B。— PPO の clip/entropy 依存を外し、policy collapse 耐性で held-out 勝率が PPO を上回るかが主問い
+- [ ] (P1, depends on H0) H2: **PFSP f_var pool** — 学習対戦相手 pool = `[baseline_jax_lite (case1 lite), baseline_jax_full (case1 full), self-snapshot FIFO]`(全て in-JAX, on-device)、`f_var(x)=(x(1-x))^p` で勝率 0.5 付近の相手を優先選択。per-iter win_rate が ~0.5 に張り付くこと(設計通り)を確認。— 同実力対戦の非飽和維持が学習信号の前提(memory `unbeatable_opponent_harmful` 回避)。本物 case8 は host-callback のため pool に入れない(memory `python_v8_train_pool_gpu_stall`)
+- [ ] (P1, depends on H0) H3: **held-out + Elo** — in-loop = 固定 `baseline_jax_full` (in-JAX proxy) + 固定 `eval_seed` で `heldout_eval_every` ごとに勝率測定(PPO update なし)、固定 ref anchor で Elo 更新。f_var 下では per-iter win_rate は進捗信号にならないので held-out 曲線/Elo を進捗軸にする。**本物 case8 (baseline_v8) との最終比較は best.pt を学習後に offline paired 300戦**で取る。— PPO arm / V-MPO arm の進捗を同一スケールで比較する評価基盤
 - [ ] (P2, depends on H1) H4: **V-MPO HP sweep** — V-MPO が PPO に勝つ兆候が出たら ε_η / ε_α / top-k 割合(default 0.5)を sweep し勝ち筋の感度を確認。— V-MPO 採用時の頑健性確認(深掘り)
 - [ ] (P2, depends on H1) H5: **scale-up** — 勝った側 algo で iterations 20→150-200 にスケール(memory `case1_aa_300iter` は 300iter で reward 0.50 到達)。短 run の ceiling を破れるか、V-MPO の優位が長 run で太るか(賃 ~$1-1.5)。— 短 PoC の天井破りと優位の持続性検証
 
