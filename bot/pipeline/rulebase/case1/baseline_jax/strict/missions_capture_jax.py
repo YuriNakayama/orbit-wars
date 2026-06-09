@@ -480,12 +480,16 @@ def _snipe_cell(
     ships_at: jax.Array,
     src_idx: jax.Array,
     tgt_idx: jax.Array,
+    etas: jax.Array,
+    eta_valid: jax.Array,
 ) -> SnipeGrid:
     """Mirror `build_snipe_mission` for one (src, target) cell.
 
     Probes the target with `probe = min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS,
     ships+8))`, then walks `enemy_etas[:3]` and returns the FIRST eta that passes
-    every gate (Python `return`s on the first match).
+    every gate (Python `return`s on the first match). `(etas, eta_valid)` are the
+    TARGET's enemy ETAs, precomputed once per target by the caller (doc#3 hoist —
+    they depend only on `t`, not `s`, so recomputing per source was 48x waste).
     """
     s = src_idx
     t = tgt_idx
@@ -503,7 +507,6 @@ def _snipe_cell(
     tgt_owner_at = owner_at[t]
     tgt_ships_at = ships_at[t]
 
-    etas, eta_valid = _snipe_enemy_etas(features, t)
     any_eta = jnp.any(eta_valid)
 
     probe = jnp.minimum(
@@ -617,9 +620,22 @@ def build_snipe_grid(
     )
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
+    # doc#3 hoist: enemy ETAs depend only on the target, so compute them ONCE per
+    # target (48 calls) instead of once per (src, target) cell (2304 calls).
+    etas_grid, eta_valid_grid = jax.vmap(lambda t: _snipe_enemy_etas(features, t))(idx)
+
     def per_src(s: jax.Array) -> SnipeGrid:
         def per_tgt(t: jax.Array) -> SnipeGrid:
-            return _snipe_cell(features, modes, owner_at, ships_at, s, t)
+            return _snipe_cell(
+                features,
+                modes,
+                owner_at,
+                ships_at,
+                s,
+                t,
+                etas_grid[t],
+                eta_valid_grid[t],
+            )
 
         return jax.vmap(per_tgt)(idx)
 
