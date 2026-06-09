@@ -25,6 +25,10 @@ from . import safety_jax as sf
 from . import worldmodel_jax as wm
 from .aim_jax import aim_with_prediction
 
+# No per-source launch cap: the real agent fires >2 from a rich source
+# (count<2 under-fired). Match it; budget still bounds via followup_ok.
+_MAX_LAUNCHES_PER_SOURCE = MAX_LAUNCHES_PER_AGENT
+
 PARTIAL_SOURCE_MIN_SHIPS = 16
 _RESERVE_HORIZON = 110
 # keep_needed candidate cap. Bounds the parallel survival search; planets with
@@ -492,7 +496,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             & (send >= need_now)
             & (send >= 1)
             & ~already
-            & (count < 2)
+            & (count < _MAX_LAUNCHES_PER_SOURCE)
             & followup_ok
             & ~(is_followup & f_reinf[oi])  # followup is capture-only
         )

@@ -1,3 +1,8 @@
+---
+paths:
+  - "dev/**"
+---
+
 # Command Execution Rules
 
 Conventions for running scripts and tooling in this repository. Prefer the wrappers under `dev/` over invoking `uv` / `dvc` / package managers directly: the wrappers `cd` into `bot/` and pin the right interpreter, so the same command works from any worktree.
@@ -18,7 +23,7 @@ dev/kaggle            # Kaggle Notebook free-tier GPU (train / pull / promote / 
 
 ## Long-running Training Checkpoint Policy
 
-長時間学習 (1h 以上想定の RunPod / Kaggle / Vast 学習) は **iter ごとに best.pt 等の中間成果物を S3 (or DVC remote) に即 upload** すること。Kaggle Kernel は完走時のみ `/kaggle/working` を output コミットするため、timeout / ERROR で中間 weights が破棄される (RunPod は preempt で消える)。`ORBIT_WARS_BEST_S3_PREFIX` 等の env var を train script に渡し、新 best 更新ごとに `s3.upload_file()` を呼ぶ実装パターンを必ず採ること。新規学習基盤を追加する際もこの規約を満たしてから本番投入する。
+Long-running training (RunPod / Kaggle / Vast runs expected to exceed 1h) **must upload intermediate artifacts such as best.pt to S3 (or the DVC remote) on every iter, immediately**. A Kaggle Kernel only commits `/kaggle/working` to its output on a clean finish, so intermediate weights are discarded on timeout / ERROR (and lost to preemption on RunPod). Always pass an env var such as `ORBIT_WARS_BEST_S3_PREFIX` to the train script and adopt the implementation pattern of calling `s3.upload_file()` on every new best. When adding a new training platform, satisfy this convention before putting it into production use.
 
 ## DVC Commands
 
@@ -57,7 +62,7 @@ Candidate weights are saved to `data/output/models/imitation/case1/runs/<run_id>
 
 ## RunPod GPU Training
 
-RunPod 基盤は Vast.ai と並走するもう一つの GPU プロバイダ。Secure Cloud (T3/T4 DC + network volume 可) と Community Cloud (P2P, 安価) の 2 系統を `--cloud-type` で選べる。
+RunPod is a second GPU provider running alongside Vast.ai. You can choose between two tiers with `--cloud-type`: Secure Cloud (T3/T4 DC + network volume support) and Community Cloud (P2P, cheaper).
 
 ```bash
 # 1) commit & push, then launch on RunPod
@@ -70,142 +75,136 @@ dev/runpod pull <run_id> [--case case1]
 # 3) if adopted, promote to canonical weights
 dev/runpod promote <run_id> [--case case1] [--eval-results PATH]
 
-# Cost check (RunPod 専用、vast とは別ファイル)
+# Cost check (RunPod-specific, separate file from vast)
 dev/runpod cost-report --month 2026-05
 
-# Network volume 管理 (Secure Cloud 専用、Pod 作成時のみ attach 可能)
+# Network volume management (Secure Cloud only, can only be attached at Pod creation)
 dev/runpod volume list
 dev/runpod volume search [--data-center-id US-KS-2]
 dev/runpod volume create <name> --data-center-id US-KS-2 [--size 15]
 
-# 進捗確認 / 完了監視
-dev/runpod ps                         # 起動中 pod 一覧 (launch.json と突合)
-dev/runpod status <run_id>            # 単一 run の pod state + S3 marker + DVC 状況
-dev/runpod summary <run_id>           # status / cost / metrics / artifacts を 1 画面集約
+# Progress check / completion monitoring
+dev/runpod ps                         # list running pods (reconciled against launch.json)
+dev/runpod status <run_id>            # single run's pod state + S3 marker + DVC status
+dev/runpod summary <run_id>           # status / cost / metrics / artifacts in one screen
 
-# ライブ tail (pod RUNNING 中のみ、SSH 経由、永続化なし)
-dev/runpod tail <run_id> --source onstart  # /var/log/onstart.log を tail -F
-dev/runpod tail <run_id> --source train    # 学習プロセス stdout のみ
-dev/runpod tail <run_id> --source gpu      # nvidia-smi 10s サンプル
+# Live tail (only while pod is RUNNING, over SSH, not persisted)
+dev/runpod tail <run_id> --source onstart  # tail -F /var/log/onstart.log
+dev/runpod tail <run_id> --source train    # training process stdout only
+dev/runpod tail <run_id> --source gpu      # nvidia-smi 10s samples
 
-# 永続化済ログ (terminate 後でも S3 経由で参照可)
-dev/runpod logs <run_id>              # S3 progress marker を timestamp 順に表示
-dev/runpod logs <run_id> --source onstart  # /var/log/onstart.log 全文 (run_dir or S3 fallback)
-dev/runpod logs <run_id> --tail 5     # 末尾のみ
-dev/runpod logs <run_id> --grep done  # 行フィルタ
+# Persisted logs (viewable via S3 even after terminate)
+dev/runpod logs <run_id>              # show S3 progress markers in timestamp order
+dev/runpod logs <run_id> --source onstart  # full /var/log/onstart.log (run_dir or S3 fallback)
+dev/runpod logs <run_id> --tail 5     # tail only
+dev/runpod logs <run_id> --grep done  # line filter
 
-dev/runpod watch <run_id>             # 既存 pod の終了まで poll → 完了/失敗で desktop 通知
+dev/runpod watch <run_id>             # poll an existing pod until exit → desktop notify on success/failure
 
-# 成果物取得 (DVC 失敗時の S3 fallback あり)
-dev/runpod pull <run_id>              # auto: DVC → 失敗時 S3 artifacts へ自動切替
-dev/runpod pull <run_id> --from s3    # 強制 S3 artifacts 経由
-dev/runpod pull <run_id> --from dvc   # 強制 DVC 経由 (fallback なし)
+# Artifact retrieval (S3 fallback when DVC fails)
+dev/runpod pull <run_id>              # auto: DVC → falls back to S3 artifacts on failure
+dev/runpod pull <run_id> --from s3    # force S3 artifacts path
+dev/runpod pull <run_id> --from dvc   # force DVC path (no fallback)
 
-# `dev/runpod train --watch` で起動と同時に監視も開始可能 (推奨)。
-# 終了通知は macOS osascript / Linux notify-send / fallback stdout。
-# 観測性の詳細は docs/plans/runpod-basis/06_observability.md
+# `dev/runpod train --watch` can start monitoring at launch time (recommended).
+# Completion notifications use macOS osascript / Linux notify-send / fallback stdout.
+# Observability details: docs/plans/runpod-basis/06_observability.md
 ```
 
-Vast.ai 基盤と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` に成果物を保存し、DVC/S3 remote も共有。run.json には provider 別フィールド (`vast_*` / `runpod_*`) が記録され、両基盤の run を区別可能。`RUNPOD_API_KEY` は `backend/.env` に置き、key は <https://runpod.io/console/user/settings> で発行。デフォルト cost limit は $1.5/run (Vast の $1.0 より高め)。詳細は [`docs/plans/runpod-basis/`](../../docs/plans/runpod-basis/)。
+Artifacts are saved under the same `data/output/models/imitation/case<N>/runs/<run_id>/` as the Vast.ai platform, and the DVC/S3 remote is shared. `run.json` records provider-specific fields (`vast_*` / `runpod_*`), so runs from both platforms are distinguishable. `RUNPOD_API_KEY` goes in `backend/.env`; the key is issued at <https://runpod.io/console/user/settings>. The default cost limit is $1.5/run (higher than Vast's $1.0). See [`docs/plans/runpod-basis/`](../../docs/plans/runpod-basis/) for details.
 
-両基盤の使い分け方針は [`docs/plans/runpod-basis/README.md`](../../docs/plans/runpod-basis/README.md) の「Vast.ai 基盤との使い分け」表を参照。
+For the policy on when to use which platform, see the "Choosing between Vast.ai and RunPod" table in [`docs/plans/runpod-basis/README.md`](../../docs/plans/runpod-basis/README.md).
 
 ### Interactive Mode (dev / debug pods)
 
-`dev/runpod dev` は **インタラクティブモード** で pod を確保し、`sleep infinity` で
-保持する。auto-cleanup / 8h timeout guard / `trap cleanup_destroy EXIT` を全て無効化
-するので、SSH 接続でコード変更・再実行・デバッグを繰り返せる。終了は明示的に
-`dev/runpod destroy <run_id>` で行う必要がある (放置すると課金が止まらない)。
+`dev/runpod dev` reserves a pod in **interactive mode** and keeps it alive with `sleep infinity`. It disables all of auto-cleanup / the 8h timeout guard / `trap cleanup_destroy EXIT`, so you can repeatedly edit code, re-run, and debug over an SSH connection. You must terminate it explicitly with `dev/runpod destroy <run_id>` (leaving it running keeps incurring charges).
 
 ```bash
-# 起動 (commit を origin に push 済みであること)
+# Launch (the commit must already be pushed to origin)
 dev/runpod dev <commit-sha> [--case caseN] [--cloud-type SECURE|COMMUNITY|ALL]
 
-# 状態確認 (50_interactive_ready が出れば SSH 接続可)
+# Status check (SSH-ready once 50_interactive_ready appears)
 dev/runpod status <run_id> --case caseN
 
-# SSH 接続 (proxy=ssh.runpod.io 既定、direct=TCP/22 公開 port も可)
+# SSH connection (proxy=ssh.runpod.io by default; direct=TCP/22 public port also possible)
 dev/runpod ssh <run_id> [--case caseN] [--via proxy|direct] [--key PATH] [--exec "<cmd>"]
 
-# コード同期 (rsync 経由、bot/ のみ。.venv / data / __pycache__ 等は exclude)
+# Code sync (over rsync, bot/ only; excludes .venv / data / __pycache__ etc.)
 dev/runpod sync <run_id> [--case caseN] --push [--dry-run] [--delete]
 dev/runpod sync <run_id> [--case caseN] --pull
 
-# 明示的に terminate (interactive モードでは必須)
+# Explicit terminate (mandatory in interactive mode)
 dev/runpod destroy <run_id> [--case caseN] [-y]
 ```
 
-oneshot モード (`dev/runpod train`) と interactive モード (`dev/runpod dev`) の比較や
-proxy SSH 用 key の登録方法は [`docs/plans/runpod-basis/07_interactive_mode.md`](../../docs/plans/runpod-basis/07_interactive_mode.md)
-を参照。`dev/runpod ps` は interactive pod を黄色で表示し destroy リマインダを出す。
+For a comparison of oneshot mode (`dev/runpod train`) vs interactive mode (`dev/runpod dev`) and how to register a key for proxy SSH, see [`docs/plans/runpod-basis/07_interactive_mode.md`](../../docs/plans/runpod-basis/07_interactive_mode.md). `dev/runpod ps` shows interactive pods in yellow and prints a destroy reminder.
 
 ## Kaggle Kernel GPU Training (Free Tier)
 
-Vast.ai / RunPod と並ぶ第三の GPU 学習基盤。Kaggle Notebooks (Save & Run All のバッチ実行) の **無料 GPU 枠 (T4x2 / P100、週 30h)** を利用してコスト 0 で学習を回す。9h GPU 上限 / ~5 同時 kernel 上限あり、長時間 RL には不向きだが imitation の小規模 case 向け。
+A third GPU training platform alongside Vast.ai / RunPod. It uses the **free GPU tier (T4x2 / P100, 30h/week)** of Kaggle Notebooks (Save & Run All batch execution) to run training at zero cost. It has a 9h GPU cap and a limit of ~5 concurrent kernels; unsuitable for long RL runs but good for small imitation cases.
 
 ```bash
-# 0) (初回のみ) Kaggle API key を bot/.env に追加
-#    https://www.kaggle.com/settings → Create New API Token で kaggle.json を取得し
-#    KAGGLE_USERNAME=<your-username> と KAGGLE_KEY=<your-key> を bot/.env に追記
-
-# 1) (初回のみ) bot/ を Kaggle Dataset として upload
+# 0) (first time only) Add the Kaggle API key to bot/.env
+#    https://www.kaggle.com/settings → Create New API Token to get kaggle.json, then
+#    add KAGGLE_USERNAME=<your-username> and KAGGLE_KEY=<your-key> to bot/.env
+# 1) (first time only) Upload bot/ as a Kaggle Dataset
 dev/kaggle dataset push --commit-sha "$(git rev-parse HEAD)"
 
 # 2) commit & push, then launch on Kaggle
 git push origin <branch>
 dev/kaggle train "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2 --watch
-#   → bot/ snapshot を dataset の新 version として push
-#   → notebook 自動生成 → kernel push
-#   → --watch で QUEUED → RUNNING → COMPLETE / ERROR まで polling
+#   → push the bot/ snapshot as a new dataset version
+#   → auto-generate the notebook → push the kernel
+#   → --watch polls QUEUED → RUNNING → COMPLETE / ERROR
 
-# 3) 成果物 pull (kaggle kernels output → ローカル dvc add)
+# 3) pull artifacts (kaggle kernels output → local dvc add)
 dev/kaggle pull <run_id> --case case1
 
-# 4) 採用なら canonical weights に昇格 (vast/runpod と同等)
+# 4) if adopted, promote to canonical weights (same as vast/runpod)
 dev/kaggle promote <run_id> --case case1 [--eval-results PATH]
 
-# 5) 月次 free GPU 時間レポート (金額は 0)
+# 5) monthly free GPU hours report (cost is 0)
 dev/kaggle cost-report --month 2026-05
 
-# 進捗確認 / ログ
-dev/kaggle ps                            # active kernel 一覧
-dev/kaggle status <run_id>               # 単一 run の launch + kernel status + run.json
-dev/kaggle watch <run_id>                # 終了まで polling、完了で desktop 通知
-dev/kaggle logs <run_id> [--tail N]      # 完了済 kernel の train.log (要事前 pull)
+# Progress check / logs
+dev/kaggle ps                            # list active kernels
+dev/kaggle status <run_id>               # single run's launch + kernel status + run.json
+dev/kaggle watch <run_id>                # poll until finished, desktop notify on completion
+dev/kaggle logs <run_id> [--tail N]      # train.log of a finished kernel (requires prior pull)
 
-# Dataset 管理
-dev/kaggle dataset push --label "<note>"  # commit SHA を version_notes に記録
-dev/kaggle dataset status                 # 現在の dataset の processing 状態
+# Dataset management
+dev/kaggle dataset push --label "<note>"  # record the commit SHA in version_notes
+dev/kaggle dataset status                 # current dataset's processing state
 ```
 
-Vast.ai / RunPod と同じ `data/output/models/imitation/case<N>/runs/<run_id>/` に成果物を保存し、DVC/S3 remote も共有。`run.json` の `kaggle_kernel_meta` field で kaggle 経由かを区別可能。`KAGGLE_USERNAME` / `KAGGLE_KEY` は `bot/.env` に置き、key は <https://www.kaggle.com/settings> で発行。
+Artifacts are saved under the same `data/output/models/imitation/case<N>/runs/<run_id>/` as Vast.ai / RunPod, and the DVC/S3 remote is shared. The `kaggle_kernel_meta` field in `run.json` distinguishes runs that went through Kaggle. `KAGGLE_USERNAME` / `KAGGLE_KEY` go in `bot/.env`; the key is issued at <https://www.kaggle.com/settings>.
 
-Kaggle Kernel は **学習用** であり、Kaggle competition への submit kernel ではない (submit は `dev/submit` の責務)。詳細は [`docs/plans/kaggle-kernel-basis/`](../../docs/plans/kaggle-kernel-basis/)。
+A Kaggle Kernel is for **training**, not the Kaggle competition submit kernel (submission is the responsibility of `dev/submit`). See [`docs/plans/kaggle-kernel-basis/`](../../docs/plans/kaggle-kernel-basis/) for details.
 
-### Interactive Mode (Kaggle Notebook を sleep loop で常駐 + S3 command channel)
+### Interactive Mode (Kaggle Notebook resident via a sleep loop + S3 command channel)
 
-Kaggle には SSH がないため、`dev/kaggle dev` で **S3 を双方向 channel として使う sleep-loop notebook** を push する。Claude (local) が S3 inbox にコマンドを put すると、kernel が拾って実行し outbox に結果を書き戻す。RunPod `dev/ssh/sync/destroy` と機能的に等価。**kernel が ERROR / OOM で死亡しても S3 に heartbeat + 直前の outbox が残るため、SSH なしで死亡直前の状況が掴める** のが核心。
+Since Kaggle has no SSH, `dev/kaggle dev` pushes a **sleep-loop notebook that uses S3 as a bidirectional channel**. When Claude (local) puts a command in the S3 inbox, the kernel picks it up, executes it, and writes the result back to the outbox. Functionally equivalent to RunPod's `dev/ssh/sync/destroy`. The core point: **even if the kernel dies on ERROR / OOM, a heartbeat + the last outbox remain in S3, so you can grasp the situation just before death without SSH.**
 
 ```bash
-# 1) interactive kernel 起動 (RunPod dev 相当)
+# 1) launch an interactive kernel (equivalent to RunPod dev)
 git push origin <branch>
 dev/kaggle dev "$(git rev-parse HEAD)" --case case1 --accelerator gpu-t4x2
 
-# 2) heartbeat 確認 (state=ready / running / idle / shutdown / voluntary_exit)
+# 2) check heartbeat (state=ready / running / idle / shutdown / voluntary_exit)
 dev/kaggle info <run_id>
 
-# 3) 任意 bash を kernel 上で実行 (S3 経由、ssh-exec 相当)
+# 3) run arbitrary bash on the kernel (via S3, equivalent to ssh-exec)
 dev/kaggle exec <run_id> -- python -c "import torch; print(torch.cuda.is_available())"
 dev/kaggle exec <run_id> --cwd /tmp/orbit-wars-repo/bot -- pytest tests/unit/
 
-# 4) ローカル file を kernel に転送 (rsync push 相当)
+# 4) transfer a local file to the kernel (equivalent to rsync push)
 dev/kaggle sync <run_id> --file bot/pipeline/imitation/case1/training/train.py
 
-# 5) 明示的に終了 (Kaggle 側は次の Quota cycle で自動停止、即時停止は Web UI から)
+# 5) explicit shutdown (Kaggle auto-stops on the next quota cycle; for immediate stop use the Web UI)
 dev/kaggle destroy <run_id> -y
 ```
 
-制約: Internet ON 必須 (S3 アクセスのため、submit kernel には流用不可)、AWS creds は kernel 側にも必要 (`bot/.env` を dataset に同梱 or Kaggle Secrets 登録)、Kaggle 9h 上限超過で kernel は強制停止 (`--max-idle-minutes` で voluntary exit を早めることが推奨)。
+Constraints: Internet ON is required (for S3 access, so it cannot be reused for a submit kernel); AWS creds are also needed on the kernel side (bundle `bot/.env` into the dataset or register it as a Kaggle Secret); the kernel is force-stopped past Kaggle's 9h cap (it is recommended to bring the voluntary exit forward with `--max-idle-minutes`).
 
 ## Kaggle Submission Policy
 

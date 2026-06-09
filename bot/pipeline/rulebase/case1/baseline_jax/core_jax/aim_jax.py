@@ -113,7 +113,14 @@ def aim_with_prediction(
     ang_vel: Arr,
 ) -> tuple[Arr, Arr, Arr, Arr, Arr]:
     """Return (angle, turns, ix, iy, valid) for a NON-COMET target."""
+    # Promote float inputs to the active default float (float64 under x64) so the
+    # lax.scan carry (cur_x/cur_y/t0/init_fb) matches the body, which computes in
+    # jnp.float_. Without this, a float32 caller + float64 body trip scan's
+    # carry-dtype check; float32 path is unaffected (no-op cast).
+    cur_x = cur_x.astype(jnp.float_)
+    cur_y = cur_y.astype(jnp.float_)
     _a0, t0, safe0 = estimate_arrival(sx, sy, sr, cur_x, cur_y, tr, ships)
+    t0 = t0.astype(jnp.float_)
 
     def refine_step(
         carry: tuple[Arr, Arr, Arr, Arr, Arr, tuple[Arr, Arr, Arr, Arr]], _i: Arr
@@ -150,11 +157,15 @@ def aim_with_prediction(
             (res_angle, res_turns, res_ix, res_iy),
         ), None
 
+    # Bind scalar carry float dtype to cur_x (the upstream working float dtype)
+    # so init and scan-body agree under both float32 and x64. A bare jnp.float_
+    # baked to float32 at import while the body runs float64 under x64.
+    _f = cur_x.dtype
     init_fb = (
-        jnp.asarray(0.0, dtype=jnp.float_),
+        jnp.asarray(0.0, dtype=_f),
         jnp.asarray(0, dtype=jnp.int32),
-        jnp.asarray(0.0, dtype=jnp.float_),
-        jnp.asarray(0.0, dtype=jnp.float_),
+        jnp.asarray(0.0, dtype=_f),
+        jnp.asarray(0.0, dtype=_f),
     )
     init = (cur_x, cur_y, t0, ~safe0, ~safe0, init_fb)
     (ftx, fty, fest, fdone, ffb, fres), _ = jax.lax.scan(

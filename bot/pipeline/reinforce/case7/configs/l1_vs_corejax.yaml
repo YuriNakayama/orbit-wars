@@ -1,0 +1,61 @@
+# case7 L1: train vs core_jax (faithful ~80% v1 port), eval vs real v1.
+#
+# The parity investigation established core_jax as the practical high-parity
+# training opponent: in-JAX (fast, no host hop), ~80% action-parity with real
+# v1, v1-like strategy. Unlike H4's baseline_jax_full (10% approx → 0/30 on real
+# v1), beating core_jax SHOULD transfer to real v1.
+#
+# Design (lessons from H1-H4): noop warmup (gradient) → core_jax (the target),
+# dense differential reward (gradient vs a strong opponent, H2), 50 iter (scale
+# helped, H4). core_jax wins ~80-90% vs v1 so it's a STRONG opponent — expect the
+# sparse-gradient wall; if win stays ~0, add self_snapshot pool next (L2).
+#
+# Eval: final ckpt vs REAL baseline_v1 (30 games). Nonzero/climbing win = the
+# faithful opponent let the policy transfer (the parity hypothesis confirmed).
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 50
+  episodes_per_iter: 16
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 12000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5            # iter 0-4 noop warmup
+    early: noop
+    late: baseline_core_jax   # iter 5-49 the faithful v1-like target
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
