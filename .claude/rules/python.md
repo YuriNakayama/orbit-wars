@@ -89,9 +89,8 @@ def distances(fleets_xy: np.ndarray, planet_xy: np.ndarray) -> np.ndarray:
     return np.linalg.norm(fleets_xy - planet_xy, axis=1)
 ```
 
-## Async & Error Handling
+## Error Handling
 
-- I/O bound operations (replay persistence, API access): use `async`/`await`
 - Parallel self-play: `asyncio.gather` or `multiprocessing.Pool`
 - Define appropriate exception classes
 - Output structured logs
@@ -117,12 +116,6 @@ uv run ruff format .
 uv run ruff check . --fix
 uv run mypy .
 ```
-
-## Notebooks (`.ipynb`)
-
-- Notebooks follow the same rules above. Even for EDA / experimentation, prefer `logging` over `print()`, or use the cell's last-expression evaluation for inline display
-- Extract finished logic into `.py` modules. Do not let business logic linger long in notebooks
-- Clear cell outputs before committing; do not push large execution results into git
 
 ## Code Quality Checklist
 

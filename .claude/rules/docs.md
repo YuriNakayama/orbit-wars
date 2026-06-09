@@ -49,20 +49,20 @@ docs/experiment/imitation/20260420_case1_pure_il_cycle/hypotheses.md     # case-
 
 Required sections:
 
-- **ヘッダ frontmatter** (Markdown blockquote): 作成日 / 最終更新 / 状態 (`in_progress` / `paused` / `stopped` / `completed`) / 最大 iteration / 主要メトリクス / 既定 episode 数。
+- **Header frontmatter** (Markdown blockquote): created date / last updated / state (`in_progress` / `paused` / `stopped` / `completed`) / max iterations / primary metrics / default episode count.
 - **`## 実施しない検証 / 評価 (skip list)`** — must always be present. Subsections:
-  - `### 評価` — e.g. `ローカル self-play 300 対戦を行わない (loss curve のみで採否)`, `Kaggle publicScore は引用しない`, `100 対戦のみで採否判定する`
-  - `### 分析` — e.g. `replay 分析は実施しない`, `n<300 結果で結論を出さない`
-  - `### 実行` — e.g. `smoke test (1-episode self-play) を skip` ⚠️, `dev/test-backend を skip` ⚠️, `RunPod GPU を使わない (local CPU only)`, `auto-recover loop を使わない`
-  - `### 例外条件` — hypothesis 単位の override (例: `H4 のみ inconclusive 時に 300 対戦追加`)
-- **`## 仮説リスト (priority 順)`** — チェックボックス + priority ラベル + (任意) `depends on H{m}`:
+  - `### 評価` (Evaluation) — e.g. `do not run local self-play 300 matches (adopt/reject on loss curve only)`, `do not quote Kaggle publicScore`, `decide adoption on 100 matches only`
+  - `### 分析` (Analysis) — e.g. `do not run replay analysis`, `do not draw conclusions from n<300 results`
+  - `### 実行` (Execution) — e.g. `skip smoke test (1-episode self-play)` ⚠️, `skip dev/test-backend` ⚠️, `do not use RunPod GPU (local CPU only)`, `do not use the auto-recover loop`
+  - `### 例外条件` (Exception conditions) — per-hypothesis overrides (e.g. `add 300 matches for H4 only when inconclusive`)
+- **`## 仮説リスト (priority 順)`** (Hypothesis list, in priority order) — checkbox + priority label + (optional) `depends on H{m}`:
   ```markdown
-  - [ ] (P1) H1: dropout 0.2→0.3 — 過学習抑制で win-rate +3pp 期待
+  - [ ] (P1) H1: dropout 0.2→0.3 — expect win-rate +3pp from overfitting suppression
   - [x] (P2) H3: focal α 0.25→0.75 — adopted (iter9)
-  - [ ] (P2, depends on H1) H4: dropout=0.3 + features in-flight 比追加
-  - [ ] (deferred) H5: optimizer Adam→Lion — 工数大
+  - [ ] (P2, depends on H1) H4: dropout=0.3 + add in-flight ratio to features
+  - [ ] (deferred) H5: optimizer Adam→Lion — high effort
   ```
-- **`## Iteration log`** — table (iter / 開始 / 仮説# / plan path / run_id / 主要メトリクス / 採否 / result path / analysis path)。`experiment-execution` Phase 8 が行追加、`experiment-analysis` Phase 4.5 がチェックボックス + 採否注記を更新。
+- **`## Iteration log`** — table (iter / start / hypothesis# / plan path / run_id / primary metrics / adopt-reject / result path / analysis path). `experiment-execution` Phase 8 appends a row; `experiment-analysis` Phase 4.5 updates the checkbox + adoption note.
 
 Project-default skip-list entries (always include unless the user explicitly removes them):
 
@@ -72,8 +72,10 @@ Project-default skip-list entries (always include unless the user explicitly rem
 Lifecycle:
 
 - Created **once** per case directory by `experiment-hypothesize`.
-- Updated by `experiment-execution` (Iteration log row append) and `experiment-analysis` (checkbox + 採否注記 + 状態遷移 flag).
-- Read by `experiment-plan` (skip list → plan の `## 検証方法` を自動短縮) and `experiment` (loop driver — pick next `- [ ]` 仮説).
+- Updated by `experiment-execution` (Iteration log row append) and `experiment-analysis` (checkbox + adoption note + state-transition flag).
+- Read by `experiment-plan` (skip list → auto-shortens the plan's `## 検証方法` section) and `experiment` (loop driver — picks the next `- [ ]` hypothesis).
+
+> **Note:** The Japanese strings quoted in backticks above (`## 実施しない検証 / 評価`, `## 仮説リスト`, `### 評価` / `### 分析` / `### 実行` / `### 例外条件`, `## 検証方法`, and the default skip-list entries `Kaggle publicScore は引用しない` / `n<300 結果で結論を出さない`) are **literal contract strings** that the `experiment-*` skills emit and pattern-match against. They are part of the `hypotheses.md` schema, not prose — do not translate them, or the skill cross-references will break.
 - Not iter-prefixed. One per case directory.
 
 ### Anti-patterns
