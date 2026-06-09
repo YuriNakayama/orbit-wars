@@ -137,17 +137,37 @@ opponent に使う場合、ping-pong 抑制の差は出る (case9 の核心 feat
       ★ハマり: world_features に builder が 2 つ (build_world_features=obs / build_world_features_from_state=JAX state)。
       両方に burst-hold を適用しないと parity probe (from_state 使用) で効かない。
       残: STAY_BURST_MAX_HOLD_TURNS cap (cross-turn) は host 側 (3連続 hold 上限)。
-- [ ] case2/3/7: 個別構造移植 (高工数、各 parity 検証必須)
-- [ ] case1: archive (別 planner 構造、strict port 対象外)
+- [x] case1: strict port (case8 grid+allocator + **case1 幾何 aim**) + jax_v1 (90%) + commit (640d75d2)
+- [x] case2: case8 strategy + case1 幾何 aim + half-step + harass + jax_v2 (90%)
+- [x] case3: case2 base + jax_v3 (87%、rollout 未 port = defer)
+- [ ] case7: STAY+ACCUMULATE multi-turn state machine (高工数、最難)
+
+### 幾何 aim lineage (case1/2/3) の移植知見 (2026-06-09)
+
+case1/2/3 は **幾何 aim** (estimate_arrival lead-aim 反復)、case4/6/7/8/9 は **エンジン再生 aim**
+(衝突シミュ) の2系統。physics.py 行数で判別 (幾何 242-279 / エンジン再生 465-484)。
+
+- **case1**: planner 構造だが plan_moves は case8 と同一スケルトン → case8 allocator 流用 +
+  幾何 aim 書換で 90%。SAFE_INTERCEPT_HALF_STEP=False (整数 step)。
+- **case2**: case8 strategy (missions+plan_moves) + case1 幾何 aim の hybrid。
+  SAFE_INTERCEPT_HALF_STEP=True (half step) + HARASS on。幾何 sweep を `_CANDIDATE_TURNS`
+  (flag-aware grid) + `ceil(cand)` で half-step 対応化。90%。
+- **case3**: case2 + rollout (true2p の mission 再順序付け)。physics/strategy_helpers は case2 と
+  完全一致 → case2 strict を複製。rollout_reorder は stateful lookahead で未 port (defer)。87%。
+- 全 3 case とも残差は鏡像 planet の score tie (角度/配分、ゲーム価値同一) = case8 の 90% と同種。
 
 ## strict port 進捗サマリ (2026-06-09)
 
-| case | strict port | parity | registry | 戦略の個性 |
+| case | strict port | parity | registry | 戦略の個性 / aim lineage |
 |------|:--:|:--:|:--|:--|
-| case4 | ✅ | 12/12 (100%) | jax_v4 | case8 と同一 (cache のみ差) |
-| case8 | ✅ (既存) | 27/30 (90%) | jax_v8 | base 戦略 |
+| case1 | ✅ | 27/30 (90%) | jax_v1 | **幾何 aim** (planner→allocator 流用) |
+| case2 | ✅ | 27/30 (90%) | jax_v2 | **幾何 aim + half-step + harass** |
+| case3 | ✅ base | 26/30 (87%) | jax_v3 | case2 + rollout (未 port) |
+| case4 | ✅ | 12/12 (100%) | jax_v4 | エンジン再生 (case8 と同一) |
+| case8 | ✅ (既存) | 27/30 (90%) | jax_v8 | エンジン再生 base 戦略 |
 | case9 | ✅ base | 単発 12/12 | jax_v9 | +ANTI_PING_PONG (未配線) |
-| case6 | ✅ | 12/12 (100%) | jax_v6 | **+STAY burst-hold (配線済)** ← 初の別戦略 |
-| case2/3/7 | ❌ | — | — | 高工数 (physics/rollout/ACCUMULATE) |
+| case6 | ✅ | 12/12 (100%) | jax_v6 | **+STAY burst-hold (配線済)** |
+| case7 | ❌ | — | — | エンジン再生 + STAY+ACCUMULATE (最難) |
 
-→ GPU opponent pool に **戦略バリエーション** (case6 の STAY) が初めて追加された。
+→ GPU opponent pool に **8 つの JAX rule opponent** (jax_v1/2/3/4/6/8/9 + 戦略バリエーション)。
+残るは case7 (ACCUMULATE state machine) のみ。
