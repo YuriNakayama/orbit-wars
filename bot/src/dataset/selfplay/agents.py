@@ -23,6 +23,11 @@ AGENT_REGISTRY: dict[str, str] = {
     "baseline_v7": "pipeline.rulebase.case7.baseline.agent:agent",
     "baseline_v8": "pipeline.rulebase.case8.baseline.agent:agent",
     "baseline_v9": "pipeline.rulebase.case9.baseline.agent:agent",
+    # jax_v1 = case1 strict port (case8 grid+allocator architecture with case1's
+    # GEOMETRIC aim solver, NOT case8's engine-replay). 30-state action parity vs
+    # baseline_v1: 90% full-exact, 100% source-match, 0 ship miscount; the residual
+    # is mirror-planet score ties (equal-value targets, angle/ship-allocation tie).
+    "jax_v1": "pipeline.rulebase.case1.baseline_jax.strict.agent_jax:agent",
     "jax_v4": "pipeline.rulebase.case4.baseline_jax.agent_jax:agent",
     # jax_v6 = case8 strict base + STAY burst-hold (stay_jax). Single-turn parity
     # 12/12; consecutive_holds cap (STAY_BURST_MAX_HOLD_TURNS) is host-side, so

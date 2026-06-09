@@ -60,7 +60,60 @@ JAX module 内に bake されているため、config 一致なら定数差し�
 ### case2 (高工数): physics.py が case8 版に未到達 (~200行欠落)。physics 差し替え + strategy 再検証。
 ### case3 (高工数): rollout decomposition。case8 baseline parity 後に rollout 別 feature。
 ### case7 (高工数): STAY+ACCUMULATE multi-turn state machine。config +67 定数。最難。
-### case1 (archive): 3/7 mission + 別 planner 構造。strict port 対象外。
+### case1 (再評価 2026-06-09): planner 構造だが case8 allocator が直接流用可
+
+旧記載「archive / 対象外」は誤り。case1 `plan_moves` は case8 `strategy.plan_moves` と
+**同一スケルトン** (mission 収集 → `sort(-score)` → `planned_commitments` + `spent_total`
+ledger greedy loop → followup/evac/rear emitter → inventory cap)。case8 の
+`allocator_jax.run_mission_and_followup` (commit ledger + spent ledger) がそのまま該当する。
+
+方針 (ユーザー確定): **core_jax は破棄** (残差が ship miscount/under-launch の構造欠陥で 32.6% 頭打ち)。
+case8 top-level 11 module を `case1/baseline_jax/strict/` に複製し、config を case1 値へ:
+- import を `..baseline` → `...baseline` (strict/ は 1 階層深い)
+- config だけ `strict/_config_compat.py` 経由 (case1 config を star-import + case8-only 定数を
+  **中立値で shim**: `HARASS_ENABLED=False` / `FULL_COMMIT_THRESHOLD_SHIPS=1e6` /
+  `FINISHING_TIE_GUARD=False` / `SAFE_INTERCEPT_HALF_STEP=False`)。
+  → case8 JAX コードが case1 挙動に reduce。case1 submission config は無改変 (cross-case 独立)。
+
+case1 と case8 の真の差分 (port 必須):
+- `SAFE_INTERCEPT_HALF_STEP`: case1=False (整数 turn step)、case8=True (half step)。aim_jax は両分岐実装済。
+- `preferred_send`: case1 は `min(src, send+margin)` のみ。case8 の TIE_GUARD/FULL_COMMIT 分岐は
+  shim で無効化すれば一致。
+- **swarm**: case1 は pair/trio 多ソース (swarm_builder + process_multi_source_mission)。
+  case8 allocator は single-source のみ wired → 多ソース resolver branch を追加実装 (Step 3、最難)。
+- emitter: case1 は followup + **evacuation + rear_guard**。case8 は followup のみ → evac/rear 追加。
+
+Step: 1=複製+config shim+capture parity 計測 / 2=featurizer 接続 / 3=swarm 多ソース /
+4=snipe / 5=reinforce+crash+evac+rear / 6=jax_v1 登録。
+
+#### Step1 実測 (2026-06-09): 83% exact / source 100% / ship miscount 0
+
+複製+config shim 直後で full-exact 25/30 (83%)、source-match 30/30、fire-rate 27=27。
+core_jax の 32.6% (構造欠陥) を大幅更新。残差 5 件を精査し **真因を特定** (当初の float-tie
+診断は誤り。x64 は既知の通り無意味):
+
+★**真因 = case1 と case8 で aim solver が別物** (当初の float-tie 診断は誤り。x64 は既知の通り無意味)。
+- **case1** `aim_with_prediction` (physics.py 242行): **幾何** (`estimate_arrival` の lead-aim 反復、
+  `|pos delta|<0.3 & |turns delta|<=1` で収束)。`search_safe_intercept` も `estimate_arrival` 二重確認。
+- **case8** (physics.py 484行): **エンジン再生** (`_hit_turn_for_target_position` + `_first_engine_hit_turn`
+  の swept 衝突シミュ)。
+
+JAX `aim_jax.py` は case8 のエンジン再生 aim を忠実移植 → case1 と**別の intercept turn**を算出。
+s7 src3→planet13: JAX(case8 aim)=turns13 が `intercept_holds_within_tolerance` gate を通過、
+case1 幾何 aim=turns11 は gate を**落とす** (`plan_shot=None`)。この余分な候補 (score 77.11, rank3) が
+greedy commit に割り込み配分を split/merge に発散。scoring/intercept_holds 自体は Py と JAX で一致、
+**bug は aim 受理のみ**。
+
+**fix: `aim_with_prediction_jax` + `_search_safe_intercept_jax` を case1 の幾何アルゴリズムに書換**
+(既存の `estimate_arrival_jax` / `_predict_target_position_jax` を流用、5-iter 幾何 refine + 幾何二重確認 sweep)。
+検証: s7 planet13 が JAX `valid=True turns13` → `valid=False turns11` (Python と一致)。
+副次 fix: `send_cap = min(src_available, preferred_send(...))` (case1 option_collector に一致)。
+
+結果: **full-exact 83% → 90% (27/30)**、source 100%、launches 56=56 (phantom 1 件消滅)。
+残 3 件は鏡像 planet の angle ~90°/1° 選択 tie でゲーム価値同一 → 対処不要 (ユーザー指示)。
+
+⚠️ **case2/3/7 の aim 系も要確認**: case2/3/7 が case1 系 (幾何 aim) なら同じ書換が必要、
+case8 系 (エンジン再生 aim) ならそのまま。各 case の physics.py 行数/aim 関数で判定すること。
 
 ### case9 base の重要な実測 (2026-06-09)
 
