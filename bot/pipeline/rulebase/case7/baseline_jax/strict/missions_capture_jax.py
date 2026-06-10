@@ -368,14 +368,7 @@ def _capture_cell(
     needed = _base_need(tgt_owner_at, tgt_ships_at, turns, player)
     opening_reject = opening_filter_jax(t, turns, needed, src_available, features)
 
-    # case1 option_collector: send_cap = min(src_available, preferred_send(needed,
-    # turns, src_available)). case8 used raw src_available; case1 caps it by the
-    # margin-aware preferred_send, which changes eligibility (send_cap_reject /
-    # is_single) and the commit upper bound — a real ship-count divergence.
-    send_cap = jnp.minimum(
-        src_available,
-        preferred_send_jax(t, needed, turns, src_available, features, modes),
-    )
+    send_cap = src_available
     send_cap_reject = (send_cap < 1) | (
         (send_cap < needed) & (send_cap < PARTIAL_SOURCE_MIN_SHIPS)
     )
@@ -418,20 +411,9 @@ def _capture_cell(
     )
 
 
-def build_capture_grid(
-    features: WorldFeatures,
-    modes: ModesArrays,
-    base_timelines: tuple[jax.Array, jax.Array] | None = None,
-) -> CaptureGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid.
-
-    `base_timelines` (per-planet owner_at/ships_at) may be passed in so the caller
-    computes it ONCE and shares it across the capture/snipe grids instead of each
-    builder recomputing the 48-planet HORIZON timeline. Same values either way.
-    """
-    owner_at, ships_at = (
-        _base_timelines(features) if base_timelines is None else base_timelines
-    )
+def build_capture_grid(features: WorldFeatures, modes: ModesArrays) -> CaptureGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` capture-mission candidate grid."""
+    owner_at, ships_at = _base_timelines(features)
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> CaptureGrid:
@@ -480,16 +462,12 @@ def _snipe_cell(
     ships_at: jax.Array,
     src_idx: jax.Array,
     tgt_idx: jax.Array,
-    etas: jax.Array,
-    eta_valid: jax.Array,
 ) -> SnipeGrid:
     """Mirror `build_snipe_mission` for one (src, target) cell.
 
     Probes the target with `probe = min(src_available, max(PARTIAL_SOURCE_MIN_SHIPS,
     ships+8))`, then walks `enemy_etas[:3]` and returns the FIRST eta that passes
-    every gate (Python `return`s on the first match). `(etas, eta_valid)` are the
-    TARGET's enemy ETAs, precomputed once per target by the caller (doc#3 hoist —
-    they depend only on `t`, not `s`, so recomputing per source was 48x waste).
+    every gate (Python `return`s on the first match).
     """
     s = src_idx
     t = tgt_idx
@@ -507,6 +485,7 @@ def _snipe_cell(
     tgt_owner_at = owner_at[t]
     tgt_ships_at = ships_at[t]
 
+    etas, eta_valid = _snipe_enemy_etas(features, t)
     any_eta = jnp.any(eta_valid)
 
     probe = jnp.minimum(
@@ -605,37 +584,14 @@ def _snipe_cell(
     )
 
 
-def build_snipe_grid(
-    features: WorldFeatures,
-    modes: ModesArrays,
-    base_timelines: tuple[jax.Array, jax.Array] | None = None,
-) -> SnipeGrid:
-    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid.
-
-    `base_timelines` shared from the caller (see build_capture_grid) avoids a
-    redundant 48-planet timeline recompute. Same values either way.
-    """
-    owner_at, ships_at = (
-        _base_timelines(features) if base_timelines is None else base_timelines
-    )
+def build_snipe_grid(features: WorldFeatures, modes: ModesArrays) -> SnipeGrid:
+    """Build the `(MAX_PLANETS, MAX_PLANETS)` snipe-mission candidate grid."""
+    owner_at, ships_at = _base_timelines(features)
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
-
-    # doc#3 hoist: enemy ETAs depend only on the target, so compute them ONCE per
-    # target (48 calls) instead of once per (src, target) cell (2304 calls).
-    etas_grid, eta_valid_grid = jax.vmap(lambda t: _snipe_enemy_etas(features, t))(idx)
 
     def per_src(s: jax.Array) -> SnipeGrid:
         def per_tgt(t: jax.Array) -> SnipeGrid:
-            return _snipe_cell(
-                features,
-                modes,
-                owner_at,
-                ships_at,
-                s,
-                t,
-                etas_grid[t],
-                eta_valid_grid[t],
-            )
+            return _snipe_cell(features, modes, owner_at, ships_at, s, t)
 
         return jax.vmap(per_tgt)(idx)
 
@@ -743,11 +699,7 @@ def _harass_cell(
     )
 
 
-def build_harass_grid(
-    features: WorldFeatures,
-    modes: ModesArrays,
-    base_timelines: tuple[jax.Array, jax.Array] | None = None,
-) -> HarassGrid:
+def build_harass_grid(features: WorldFeatures, modes: ModesArrays) -> HarassGrid:
     """Build the `(MAX_PLANETS, MAX_PLANETS)` harass-mission candidate grid.
 
     `modes` is unused (harass scores from raw production, no mode multiplier) but
@@ -760,9 +712,7 @@ def build_harass_grid(
     sees exactly one KIND_HARASS candidate per target, matching Python.
     """
     _ = modes
-    owner_at, ships_at = (
-        _base_timelines(features) if base_timelines is None else base_timelines
-    )
+    owner_at, ships_at = _base_timelines(features)
     idx = jnp.arange(MAX_PLANETS, dtype=jnp.int32)
 
     def per_src(s: jax.Array) -> HarassGrid:

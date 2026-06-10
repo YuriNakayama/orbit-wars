@@ -46,7 +46,6 @@ import jax.numpy as jnp
 
 from ._config_compat import (
     HORIZON,
-    INTERCEPT_TOLERANCE,
     SAFE_INTERCEPT_HALF_STEP,
 )
 from .geometry_jax import safe_angle_and_distance_jax
@@ -301,37 +300,25 @@ def _search_safe_intercept_jax(
     path_len: jax.Array,
     max_turns: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Mirror case1 `search_safe_intercept` (GEOMETRIC, not engine-replay).
+    """Mirror `search_safe_intercept`. Returns `(angle, hit_turn, ix, iy, valid)`.
 
-    case1's aim chain is geometric (`estimate_arrival` + `predict_target_position`),
-    NOT case8's `_first_engine_hit_turn` collision replay. For each integer
-    candidate turn `c` in `[1, max_turns]`:
-
-      pos = predict_target_position(target, c)
-      est_turns = estimate_arrival(src -> pos)            # geometric ceil(d/speed)
-      if |est_turns - c| > tol: skip
-      actual = max(est_turns, c)
-      actual_pos = predict_target_position(target, actual)
-      confirm = estimate_arrival(src -> actual_pos)
-      if |confirm_turns - actual| > tol: skip
-      score = (|confirm_turns - actual|, confirm_turns, c)  # lexicographic min
-
-    Returns `(angle, hit_turn, ix, iy, valid)` for the best-scoring candidate,
-    where `angle`/`hit_turn`/`(ix, iy)` come from the confirm pass.
+    Sweeps the fixed candidate grid, predicts the (fractional) lead position,
+    tests an engine hit, keeps the lexicographically-best
+    `(hit_turn, |hit_turn - candidate|)` score.
     """
-    tol = jnp.float32(INTERCEPT_TOLERANCE)
 
-    def per_candidate(
+    def body(
+        carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
         cand: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-        """Evaluate one candidate turn. Each candidate is INDEPENDENT of the
-        others, so they are computed in parallel via vmap (was a sequential
-        lax.scan — a search, not a reduction; GPU can't parallelize scans). The
-        lexicographic-min selection is done after, identically.
-        """
-        in_range = cand <= max_turns
-        px, py, pos_ok = _predict_target_position_jax(
-            cand.astype(jnp.float32),
+    ) -> tuple[
+        tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], None
+    ]:
+        best_h, best_d, best_angle, best_turn, best_ix, best_iy = carry
+        in_range = cand <= max_turns.astype(jnp.float32)
+
+        # predict_target_position_fractional(target, cand)
+        lo_x, lo_y, lo_ok = _predict_target_position_jax(
+            jnp.floor(cand),
             tcx,
             tcy,
             init_x,
@@ -342,14 +329,9 @@ def _search_safe_intercept_jax(
             path_index,
             path_len,
         )
-        _ea_angle, est_turns, est_ok = estimate_arrival_jax(
-            sx, sy, sr, px, py, tr, ships
-        )
-        gate1 = jnp.abs(est_turns.astype(jnp.float32) - cand.astype(jnp.float32)) <= tol
-
-        actual = jnp.maximum(est_turns, cand)
-        ax, ay, apos_ok = _predict_target_position_jax(
-            actual.astype(jnp.float32),
+        frac = cand - jnp.floor(cand)
+        hi_x, hi_y, hi_ok = _predict_target_position_jax(
+            jnp.floor(cand) + 1.0,
             tcx,
             tcy,
             init_x,
@@ -360,33 +342,70 @@ def _search_safe_intercept_jax(
             path_index,
             path_len,
         )
-        c_angle, c_turns, c_ok = estimate_arrival_jax(sx, sy, sr, ax, ay, tr, ships)
-        valid = in_range & pos_ok & est_ok & gate1 & apos_ok & c_ok & (
-            jnp.abs(c_turns.astype(jnp.float32) - actual.astype(jnp.float32)) <= tol
+        use_interp = (frac > 1e-9) & hi_ok
+        lead_x = jnp.where(use_interp, lo_x + (hi_x - lo_x) * frac, lo_x)
+        lead_y = jnp.where(use_interp, lo_y + (hi_y - lo_y) * frac, lo_y)
+
+        angle, hit_turn, hit_ok = _hit_turn_for_target_position_jax(
+            sx,
+            sy,
+            sr,
+            lead_x,
+            lead_y,
+            ships,
+            init_x,
+            init_y,
+            init_r,
+            tcx,
+            tcy,
+            tr,
+            ang_vel,
+            path,
+            path_index,
+            path_len,
+            max_turns,
         )
-        d_abs = jnp.abs(c_turns - actual)
-        return valid, d_abs, c_turns, c_angle, ax, ay
+        ax, ay, actual_ok = _predict_target_position_jax(
+            hit_turn.astype(jnp.float32),
+            tcx,
+            tcy,
+            init_x,
+            init_y,
+            init_r,
+            ang_vel,
+            path,
+            path_index,
+            path_len,
+        )
 
-    cand_grid = jnp.arange(1, HORIZON + 1, dtype=jnp.int32)
-    valid_a, d_a, ct_a, ang_a, ix_a, iy_a = jax.vmap(per_candidate)(cand_grid)
+        valid = in_range & lo_ok & hit_ok & actual_ok
+        score_h = jnp.where(valid, hit_turn, jnp.int32(2**30))
+        score_d = jnp.where(valid, jnp.abs(hit_turn.astype(jnp.float32) - cand), _BIG)
+        better = (score_h < best_h) | ((score_h == best_h) & (score_d < best_d))
+        take = valid & better
 
-    # Lexicographic min over (|delta|, confirm_turns, candidate). The scan kept the
-    # earliest-seen best on equal (d, confirm_turns), i.e. the smallest candidate.
-    # Build one strictly-ordered float key (float32 has 24-bit mantissa; the
-    # values here — d<=1, ct<=110, cand<=110 — fit exactly). argmin then matches
-    # the scan's selection bit-for-bit. Invalid rows get +inf.
-    big = jnp.float32(1e18)
-    span = float(HORIZON + 1)
-    key = jnp.where(
-        valid_a,
-        d_a.astype(jnp.float32) * (span * span)
-        + ct_a.astype(jnp.float32) * span
-        + cand_grid.astype(jnp.float32),
-        big,
+        return (
+            jnp.where(take, score_h, best_h),
+            jnp.where(take, score_d, best_d),
+            jnp.where(take, angle, best_angle),
+            jnp.where(take, hit_turn, best_turn),
+            jnp.where(take, ax, best_ix),
+            jnp.where(take, ay, best_iy),
+        ), None
+
+    init = (
+        jnp.int32(2**30),
+        jnp.float32(_BIG),
+        jnp.float32(0.0),
+        jnp.int32(0),
+        jnp.float32(0.0),
+        jnp.float32(0.0),
     )
-    best = jnp.argmin(key)
-    valid = (max_turns > 0) & jnp.any(valid_a)
-    return ang_a[best], ct_a[best], ix_a[best], iy_a[best], valid
+    (best_h, _bd, best_angle, best_turn, best_ix, best_iy), _ = jax.lax.scan(
+        body, init, _CANDIDATE_TURNS
+    )
+    valid = (best_h < 2**30) & (max_turns > 0)
+    return best_angle, best_turn, best_ix, best_iy, valid
 
 
 def aim_with_prediction_jax(
@@ -406,67 +425,69 @@ def aim_with_prediction_jax(
     path_index: jax.Array,
     path_len: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Mirror case1 `aim_with_prediction` (GEOMETRIC lead-aim refine).
+    """Mirror case8 `aim_with_prediction`. Returns `(angle, turns, ix, iy, valid)`.
 
-    case1 (NOT case8 engine-replay):
-
-        est = estimate_arrival(src -> target.now)
-        if est is None: return search_safe_intercept(...)
-        tx, ty = target.x, target.y
-        for _ in range(5):
-            turns = est.turns
-            pos = predict_target_position(target, turns)
-            if pos is None: return None
-            next_est = estimate_arrival(src -> pos)
-            if next_est is None: return search_safe_intercept(...)
-            if |pos - (tx,ty)| < 0.3 (both axes) and |next.turns - turns| <= tol:
-                return next.angle, next.turns, pos            # converged
-            tx, ty = pos; est = next_est
-        final = estimate_arrival(src -> tx, ty)
-        if final is None: return search_safe_intercept(...)
-        return final.angle, final.turns, tx, ty
-
-    `(init_x, init_y, init_r)` is the target orbital initial; `(path, path_index,
-    path_len)` the comet path (`path_len == 0` for non-comets).
+    `(init_x, init_y, init_r)` is the target's orbital `initial` (or its current
+    pose when unknown), `(path, path_index, path_len)` the host-resolved comet
+    path (`path_len == 0` for non-comets), `max_turns` the per-call sweep cap.
     """
     max_turns = jnp.maximum(jnp.int32(0), max_turns)
     horizon_ok = max_turns > 0
-    tol = jnp.float32(INTERCEPT_TOLERANCE)
 
-    # est = estimate_arrival(src -> target current pose)
-    _e_angle, est_turns0, est_ok0 = estimate_arrival_jax(
+    # --- direct aim: aim at the target's current position (tcx, tcy) ---
+    d_angle, d_turn, d_ok = _hit_turn_for_target_position_jax(
+        sx,
+        sy,
+        sr,
+        tcx,
+        tcy,
+        ships,
+        init_x,
+        init_y,
+        init_r,
+        tcx,
+        tcy,
+        tr,
+        ang_vel,
+        path,
+        path_index,
+        path_len,
+        max_turns,
+    )
+    da_x, da_y, da_actual_ok = _predict_target_position_jax(
+        d_turn.astype(jnp.float32),
+        tcx,
+        tcy,
+        init_x,
+        init_y,
+        init_r,
+        ang_vel,
+        path,
+        path_index,
+        path_len,
+    )
+    direct_hit = d_ok & da_actual_ok
+
+    # --- lead-aim refinement: 5-iter scan, freeze once done ---
+    _est_angle, est_turn0, est_valid0 = estimate_arrival_jax(
         sx, sy, sr, tcx, tcy, tr, ships
     )
 
-    # 5-iter geometric refine. carry: (done, hit, fail, turns, tx, ty, angle, rt)
     def refine_body(
         carry: tuple[
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
+            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
         ],
         _i: jax.Array,
     ) -> tuple[
         tuple[
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
+            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
         ],
         None,
     ]:
-        done, hit, fail, turns, tx, ty, r_angle, r_turn = carry
-        px, py, pos_ok = _predict_target_position_jax(
-            turns.astype(jnp.float32),
+        done, hit, turns_guess, r_angle, r_turn, r_ix, r_iy = carry
+
+        pos_x, pos_y, pos_ok = _predict_target_position_jax(
+            turns_guess.astype(jnp.float32),
             tcx,
             tcy,
             init_x,
@@ -477,62 +498,72 @@ def aim_with_prediction_jax(
             path_index,
             path_len,
         )
-        # pos is None -> Python `return None` (hard fail).
-        new_fail = fail | ((~done) & (~pos_ok))
-        n_angle, n_turns, n_ok = estimate_arrival_jax(sx, sy, sr, px, py, tr, ships)
-        # next_est is None -> fall through to sweep (treat as not-hit, stop refine).
-        sweep_here = (~done) & pos_ok & (~n_ok)
-        converged = (
-            (~done)
-            & pos_ok
-            & n_ok
-            & (jnp.abs(px - tx) < 0.3)
-            & (jnp.abs(py - ty) < 0.3)
-            & (jnp.abs(n_turns.astype(jnp.float32) - turns.astype(jnp.float32)) <= tol)
+        a_angle, a_turn, a_ok = _hit_turn_for_target_position_jax(
+            sx,
+            sy,
+            sr,
+            pos_x,
+            pos_y,
+            ships,
+            init_x,
+            init_y,
+            init_r,
+            tcx,
+            tcy,
+            tr,
+            ang_vel,
+            path,
+            path_index,
+            path_len,
+            max_turns,
         )
-        new_hit = hit | converged
-        new_done = done | new_fail | sweep_here | converged
-        # on convergence freeze (angle=next, turns=next, tx/ty=pos); else advance.
-        out_angle = jnp.where(converged, n_angle, r_angle)
-        out_turn = jnp.where(converged, n_turns, r_turn)
-        advance = (~done) & pos_ok & n_ok & (~converged)
-        out_tx = jnp.where(converged | advance, px, tx)
-        out_ty = jnp.where(converged | advance, py, ty)
-        out_turns = jnp.where(advance, n_turns, turns)
-        return (
-            new_done,
-            new_hit,
-            new_fail,
-            out_turns,
-            out_tx,
-            out_ty,
-            out_angle,
-            out_turn,
-        ), None
+        act_x, act_y, act_ok = _predict_target_position_jax(
+            a_turn.astype(jnp.float32),
+            tcx,
+            tcy,
+            init_x,
+            init_y,
+            init_r,
+            ang_vel,
+            path,
+            path_index,
+            path_len,
+        )
+        success = (~done) & pos_ok & a_ok & act_ok
+        new_hit = hit | success
+        new_angle = jnp.where(success, a_angle, r_angle)
+        new_turn = jnp.where(success, a_turn, r_turn)
+        new_ix = jnp.where(success, act_x, r_ix)
+        new_iy = jnp.where(success, act_y, r_iy)
 
+        # next_est = estimate_arrival(src, pos)
+        _na, next_turn, next_ok = estimate_arrival_jax(
+            sx, sy, sr, pos_x, pos_y, tr, ships
+        )
+        # Python breaks when: pos None, success, next None, or new==guess.
+        pos_break = (~done) & (~pos_ok)
+        converged = (~next_ok) | (next_turn == turns_guess)
+        new_done = done | success | pos_break | converged
+        advance = (~done) & pos_ok & (~success) & next_ok & (~converged)
+        new_guess = jnp.where(advance, next_turn, turns_guess)
+
+        return (new_done, new_hit, new_guess, new_angle, new_turn, new_ix, new_iy), None
+
+    # estimate_arrival None -> Python skips the loop entirely (straight to sweep).
     refine_init = (
-        ~est_ok0,  # done if est is None (skip straight to sweep)
-        jnp.bool_(False),  # hit (converged)
-        jnp.bool_(False),  # fail (pos None)
-        est_turns0,  # turns
-        tcx,  # tx = target.x
-        tcy,  # ty = target.y
-        jnp.float32(0.0),  # converged angle
-        jnp.int32(0),  # converged turns
+        ~est_valid0,  # done
+        jnp.bool_(False),  # hit
+        est_turn0,  # turns_guess
+        jnp.float32(0.0),
+        jnp.int32(0),
+        jnp.float32(0.0),
+        jnp.float32(0.0),
     )
-    (r_done, r_hit, r_fail, _rt, r_tx, r_ty, r_angle, r_turn), _ = jax.lax.scan(
+    (_rd, refine_hit, _g, r_angle, r_turn, r_ix, r_iy), _ = jax.lax.scan(
         refine_body, refine_init, jnp.arange(REFINE_ITERS)
     )
 
-    # After 5 iters without convergence (and no fail / no early sweep): final_est
-    # at (r_tx, r_ty). Python's loop-exit path.
-    f_angle, f_turns, f_ok = estimate_arrival_jax(sx, sy, sr, r_tx, r_ty, tr, ships)
-    # final used only when refine neither converged nor hard-failed nor needs sweep
-    # purely from est-None; if est was valid and we fell out of the loop, use final.
-    loop_exhausted = est_ok0 & (~r_hit) & (~r_fail)
-    use_final = loop_exhausted & f_ok
-
-    # fallback sweep (search_safe_intercept) — geometric.
+    # --- fallback sweep (search_safe_intercept) ---
     s_angle, s_turn, s_ix, s_iy, s_valid = _search_safe_intercept_jax(
         sx,
         sy,
@@ -551,28 +582,15 @@ def aim_with_prediction_jax(
         max_turns,
     )
 
-    # Priority: hard-fail -> invalid; converged refine -> refine; loop-exhausted &
-    # final ok -> final; else sweep. (Python returns None only on the pos-None
-    # hard fail inside the loop.)
-    use_refine = r_hit
-    use_sweep = (~r_hit) & (~use_final) & (~r_fail)
+    # --- combine in Python priority order: direct -> refine -> sweep ---
+    use_refine = (~direct_hit) & refine_hit
+    use_sweep = (~direct_hit) & (~refine_hit)
+    angle = jnp.where(direct_hit, d_angle, jnp.where(use_refine, r_angle, s_angle))
+    turns = jnp.where(direct_hit, d_turn, jnp.where(use_refine, r_turn, s_turn))
+    ix = jnp.where(direct_hit, da_x, jnp.where(use_refine, r_ix, s_ix))
+    iy = jnp.where(direct_hit, da_y, jnp.where(use_refine, r_iy, s_iy))
+    valid = horizon_ok & (direct_hit | refine_hit | (use_sweep & s_valid))
 
-    # confirm position for the refine/final branches (predict_target_position at
-    # the chosen turns); Python returns (tx, ty) directly, so reuse r_tx/r_ty.
-    angle = jnp.where(
-        use_refine,
-        r_angle,
-        jnp.where(use_final, f_angle, s_angle),
-    )
-    turns = jnp.where(
-        use_refine,
-        r_turn,
-        jnp.where(use_final, f_turns, s_turn),
-    )
-    ix = jnp.where(use_refine | use_final, r_tx, s_ix)
-    iy = jnp.where(use_refine | use_final, r_ty, s_iy)
-
-    valid = horizon_ok & (~r_fail) & (use_refine | use_final | (use_sweep & s_valid))
     return angle, turns, ix, iy, valid
 
 

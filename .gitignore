@@ -106,6 +106,7 @@ simulator/rust/target/
 bot/pipeline/imitation/case1/policy/weights.pt
 bot/pipeline/imitation/case5/policy/weights.pt
 bot/pipeline/reinforce/case1/policy/weights.pt
+bot/pipeline/reinforce/case7/policy/weights.pt
 
 # Local eval artifacts (selfplay runner writes match index here when invoked
 # with default data_root). Real outputs go to data/mart/.
