@@ -661,6 +661,29 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 3: V-MPO eps_alpha sweep。vmpo_frozen (eps_alpha=0.01)
+    # と eps_alpha のみ差分。Phase 2 で trust-region KL 0.0003 ≪ ε_α=0.01 (α 過拘束)
+    # だったので ε_α を緩めて学習加速するか検証。条件は凍結、V-MPO HP のみ変更の A/B。
+    "reinforce_case8_phase3_eps_alpha_005": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase3_eps_alpha_005",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase3_eps_alpha_005.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase3_eps_alpha_01": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase3_eps_alpha_01",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase3_eps_alpha_01.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
