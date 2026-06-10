@@ -321,24 +321,17 @@ def _search_safe_intercept_jax(
     """
     tol = jnp.float32(INTERCEPT_TOLERANCE)
 
-    def body(
-        carry: tuple[
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
-        ],
+    def per_candidate(
         cand: jax.Array,
-    ) -> tuple[
-        tuple[
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
-        ],
-        None,
-    ]:
-        best_d, best_t, best_c, best_angle, best_turn, best_ix, best_iy = carry
-        # cand is a (possibly fractional) candidate turn from `_CANDIDATE_TURNS`
-        # (half-step grid when SAFE_INTERCEPT_HALF_STEP, else integers).
-        in_range = cand <= max_turns.astype(jnp.float32)
-
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        """Evaluate one candidate turn. Each candidate is INDEPENDENT of the
+        others, so they are computed in parallel via vmap (was a sequential
+        lax.scan — a search, not a reduction; GPU can't parallelize scans). The
+        lexicographic-min selection is done after, identically.
+        """
+        in_range = cand <= max_turns
         px, py, pos_ok = _predict_target_position_jax(
-            cand,
+            cand.astype(jnp.float32),
             tcx,
             tcy,
             init_x,
@@ -352,11 +345,9 @@ def _search_safe_intercept_jax(
         _ea_angle, est_turns, est_ok = estimate_arrival_jax(
             sx, sy, sr, px, py, tr, ships
         )
-        gate1 = jnp.abs(est_turns.astype(jnp.float32) - cand) <= tol
+        gate1 = jnp.abs(est_turns.astype(jnp.float32) - cand.astype(jnp.float32)) <= tol
 
-        # Python: actual_turns = max(turns, int(ceil(candidate_turns))).
-        cand_ceil = jnp.ceil(cand).astype(jnp.int32)
-        actual = jnp.maximum(est_turns, cand_ceil)
+        actual = jnp.maximum(est_turns, cand)
         ax, ay, apos_ok = _predict_target_position_jax(
             actual.astype(jnp.float32),
             tcx,
@@ -370,44 +361,32 @@ def _search_safe_intercept_jax(
             path_len,
         )
         c_angle, c_turns, c_ok = estimate_arrival_jax(sx, sy, sr, ax, ay, tr, ships)
-        delta = jnp.abs(c_turns.astype(jnp.float32) - actual.astype(jnp.float32))
-        gate2 = delta <= tol
-
-        valid = in_range & pos_ok & est_ok & gate1 & apos_ok & c_ok & gate2
-        # lexicographic score (delta, confirm_turns, candidate_turns) minimization.
-        d_i = jnp.where(valid, c_turns - actual, jnp.int32(2**30))  # == +delta or 0
-        d_abs = jnp.abs(d_i)
-        better = (
-            (d_abs < best_d)
-            | ((d_abs == best_d) & (c_turns < best_t))
-            | ((d_abs == best_d) & (c_turns == best_t) & (cand < best_c))
+        valid = in_range & pos_ok & est_ok & gate1 & apos_ok & c_ok & (
+            jnp.abs(c_turns.astype(jnp.float32) - actual.astype(jnp.float32)) <= tol
         )
-        take = valid & better
-        return (
-            jnp.where(take, d_abs, best_d),
-            jnp.where(take, c_turns, best_t),
-            jnp.where(take, cand, best_c),
-            jnp.where(take, c_angle, best_angle),
-            jnp.where(take, c_turns, best_turn),
-            jnp.where(take, ax, best_ix),
-            jnp.where(take, ay, best_iy),
-        ), None
+        d_abs = jnp.abs(c_turns - actual)
+        return valid, d_abs, c_turns, c_angle, ax, ay
 
-    init = (
-        jnp.int32(2**30),  # best |delta|
-        jnp.int32(2**30),  # best confirm_turns
-        jnp.float32(1e18),  # best candidate (float — half-step grid)
-        jnp.float32(0.0),
-        jnp.int32(0),
-        jnp.float32(0.0),
-        jnp.float32(0.0),
+    cand_grid = jnp.arange(1, HORIZON + 1, dtype=jnp.int32)
+    valid_a, d_a, ct_a, ang_a, ix_a, iy_a = jax.vmap(per_candidate)(cand_grid)
+
+    # Lexicographic min over (|delta|, confirm_turns, candidate). The scan kept the
+    # earliest-seen best on equal (d, confirm_turns), i.e. the smallest candidate.
+    # Build one strictly-ordered float key (float32 has 24-bit mantissa; the
+    # values here — d<=1, ct<=110, cand<=110 — fit exactly). argmin then matches
+    # the scan's selection bit-for-bit. Invalid rows get +inf.
+    big = jnp.float32(1e18)
+    span = float(HORIZON + 1)
+    key = jnp.where(
+        valid_a,
+        d_a.astype(jnp.float32) * (span * span)
+        + ct_a.astype(jnp.float32) * span
+        + cand_grid.astype(jnp.float32),
+        big,
     )
-    cand_grid = _CANDIDATE_TURNS
-    (best_d, _bt, _bc, best_angle, best_turn, best_ix, best_iy), _ = jax.lax.scan(
-        body, init, cand_grid
-    )
-    valid = (best_d < 2**30) & (max_turns > 0)
-    return best_angle, best_turn, best_ix, best_iy, valid
+    best = jnp.argmin(key)
+    valid = (max_turns > 0) & jnp.any(valid_a)
+    return ang_a[best], ct_a[best], ix_a[best], iy_a[best], valid
 
 
 def aim_with_prediction_jax(
