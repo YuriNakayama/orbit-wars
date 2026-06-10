@@ -42,6 +42,7 @@ import jax.numpy as jnp
 import numpy as np
 import typer
 import yaml
+from orbit_wars_jax.state import EnvState
 
 from pipeline.reinforce.case7.policy.featurizer_jax import (
     GLOBAL_FEAT_DIM,
@@ -60,6 +61,8 @@ from pipeline.reinforce.case7.training.ppo_jax import (
 )
 from pipeline.reinforce.case7.training.rollout_jax import (
     JaxRolloutBatch,
+    _baseline_strict_jax_actions,
+    _self_snapshot_opponent_actions,
     collect_rollout_jax,
 )
 from utils.repo_root import absolute_under_repo
@@ -522,6 +525,38 @@ def _heldout_eval(
     return float(np.mean(outcomes > 0))
 
 
+def _heldout_eval_host_strict(
+    model: ActorCriticJax, *, episodes: int, horizon: int, eval_seed: int
+) -> float:
+    """Held-out win-rate vs the case1 STRICT JAX rulebase via a HOST-driven loop.
+
+    strict's `compute_actions` is a 2304-cell × HORIZON grid (~18.5s/turn on a
+    saturated GPU); fusing it into the rollout's vmap+scan (the default
+    `_heldout_eval` path) compiles a graph so large it hangs. `run_host_batch`
+    compiles only the PER-TURN transition and drives the loop on the host, which
+    is the only feasible way to run strict (tournament: 459ms/turn at batch 64).
+
+    Seat 0 = the RL agent (deterministic argmax via `_self_snapshot_opponent_actions`,
+    same path the snapshot opponent uses); seat 1 = strict. Win-rate = fraction of
+    games seat 0 wins. Fixed `eval_seed` set → comparable across iters.
+    """
+    from pipeline.rulebase._bench.tournament.selfplay_host import (  # noqa: PLC0415
+        OUTCOME_SEAT0_WIN,
+        run_host_batch,
+    )
+
+    def _agent_fn(state: EnvState) -> jax.Array:
+        return _self_snapshot_opponent_actions(model, state, 0)
+
+    def _strict_fn(state: EnvState) -> jax.Array:
+        return _baseline_strict_jax_actions(state, 1)
+
+    seeds = [eval_seed + i for i in range(episodes)]
+    out = run_host_batch(seeds, _agent_fn, _strict_fn, horizon=horizon)
+    outcome = np.asarray(out["outcome"])
+    return float(np.mean(outcome == OUTCOME_SEAT0_WIN))
+
+
 class _OpponentPool:
     """H2 (PFSP): a host-side FIFO pool of frozen self snapshots.
 
@@ -939,14 +974,24 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             it % heldout_eval_every == 0 or it == iterations - 1
         ):
             key, k_eval = jax.random.split(key)
-            heldout_win = _heldout_eval(
-                model,
-                k_eval,
-                episodes=heldout_eval_episodes,
-                horizon=horizon,
-                opponent=heldout_eval_opponent,
-                eval_seed=heldout_eval_seed,
-            )
+            if heldout_eval_opponent == "baseline_strict_jax":
+                # strict can't be fused into the rollout's vmap+scan (it hangs);
+                # drive it via the per-turn host loop instead (the feasible path).
+                heldout_win = _heldout_eval_host_strict(
+                    model,
+                    episodes=heldout_eval_episodes,
+                    horizon=horizon,
+                    eval_seed=heldout_eval_seed,
+                )
+            else:
+                heldout_win = _heldout_eval(
+                    model,
+                    k_eval,
+                    episodes=heldout_eval_episodes,
+                    horizon=horizon,
+                    opponent=heldout_eval_opponent,
+                    eval_seed=heldout_eval_seed,
+                )
             agent_elo = _elo_update(agent_elo, elo_ref, heldout_win, elo_k)
             row["heldout_win"] = heldout_win
             row["heldout_opponent"] = heldout_eval_opponent

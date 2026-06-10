@@ -1,0 +1,64 @@
+# case7: PPO with a FAST training opponent + STRICT held-out verification.
+#
+# strict (case1 STRICT JAX, highest parity) is too slow to fuse into the rollout
+# (18.5s/turn → the rollout's vmap+scan hangs). So:
+#   - TRAIN against baseline_core_jax (~80% parity, fast ~18s/iter) for gradient.
+#   - VERIFY every 10 iters via a HOST-driven loop vs strict (per-turn compile
+#     only — the feasible path; tournament: 459ms/turn at batch 64). This is the
+#     faithful (from_planet/target/ship-consistent) progress signal the user
+#     wants, measured at a frequency strict can afford.
+#
+# Keeps episodes/horizon modest for the strict held-out so each eval is cheap.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 150
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  # Fast, high-parity training opponent (gradient source).
+  opponent: baseline_core_jax
+  # STRICT held-out verification via the host loop (100%-faithful progress).
+  heldout_eval:
+    every: 10                   # strict is costly → verify less often
+    opponent: baseline_strict_jax
+    episodes: 16                # smaller batch for the strict host loop
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
