@@ -1,8 +1,8 @@
 # Hypotheses — reinforce/case8 pfsp_vmpo_vs_ppo
 
 > 作成日: 2026-06-09
-> 最終更新: 2026-06-09
-> 状態: in_progress
+> 最終更新: 2026-06-10
+> 状態: completed (Phase 1-3 全完了。V-MPO vs PPO 比較の核心結論を取得)
 > 最大 iteration: リスト消化まで
 > 主要メトリクス: ① pool 内 per-iter 勝率(目標 ~0.5)② 固定相手 held-out 勝率(0 から滑らかに増加)③ 速度(20 iter ≤ 30分 on GPU)
 > 既定 episode 数: in-JAX eval は paired 32戦、最終候補のみ本物 case8 と offline paired 300戦
@@ -86,10 +86,11 @@ reinforce/case8 で **PPO と V-MPO のどちら(の振る舞い)が良いか**�
 
 ### Phase 3 — V-MPO のパラメータチューニング(条件は H1 で凍結、V-MPO 内部 HP のみ sweep)
 
-- [ ] (P3, depends on H2) H3: **V-MPO HP チューニング** — 概要: **H1 で確定した PPO と同一の実験条件**で、
-  V-MPO の内部 HP(ε_η / ε_α / top-k 割合(既定 0.5)/ η・α 初期値)を 1 つずつ sweep し最適値を選ぶ。
-  目的: V-MPO のパラメータチューニング。各 sweep 点も実験条件は固定し、V-MPO HP のみを変える A/B。
-  最良 V-MPO を H2 の PPO ベースラインと比較し、本物 case8 と offline paired 300戦で最終確認。
+- [x] (P3, depends on H2) H3: **V-MPO HP チューニング — adopted (2026-06-10)**。ε_α ∈ {0.01,0.05,0.10}
+  を sweep (凍結条件, ε_α のみ A/B)。結論: **ε_α=0.01 (論文デフォルト) が最良、緩めると held-out
+  劣化 (0.269→0.231→0.194) + 安定性悪化**。Phase2 仮説「α 過拘束」は外れ — trust-region KL は ε_α
+  を上げても ~0.0004 一定 (bound 非追従) = KL を抑えるのは α でなく lr/学習量。**V-MPO は無調整で
+  ロバスト (HP チューニング不要)**。→ phase3_result.md。残 sweep (ε_η/top-k) は改善余地薄く任意。
 
 ## Iteration log
 
@@ -101,6 +102,9 @@ reinforce/case8 で **PPO と V-MPO のどちら(の振る舞い)が良いか**�
 | 2-5 | 2026-06-09 | H1(R1) | phase1_exploration_plan.md | …p1/p2/p4 (3 run) | priority_p sweep: p=4.0 が pool勝率0.5 最近 / held-out横ばい | (探索) | — |
 | 6 | 2026-06-09 | H1(R5) | phase1_exploration_plan.md | 20260609-113649__…3a88070 | iter50: held-out 0.23→0.34 弱上昇 / runtime 108min(slow pod) | (探索) | — |
 | 7 | 2026-06-10 | H1(W7/W8) | phase1_exploration_plan.md | 20260610-022550__…aa36caf | rollout jit+reset on-device: ~7s/iter, GPU util 8%→95-99% | **adopted (凍結確定)** | phase1_result.md |
+| 8 | 2026-06-10 | H2 (PPO arm) | ppo_frozen.yaml | 20260610-025656__…a6f8cee | held-out last5=0.275 / entropy min 8.6 / pool std 0.196 | adopted (A/B baseline) | phase2_result.md |
+| 9 | 2026-06-10 | H2 (V-MPO arm) | vmpo_frozen.yaml | 20260610-025710__…a6f8cee | held-out last5=0.269 / entropy min 11.7 / pool std 0.188 / η-α 適応 | **adopted (V-MPO≈PPO, 安定性優位)** | phase2_result.md |
+| 10-11 | 2026-06-10 | H3 (ε_α sweep) | phase3_eps_alpha_{005,01}.yaml | 20260610-033732/033748__…a0d95c4 | ε_α 0.01最良, 0.05/0.10で劣化, KL bound非追従 | **adopted (default 最良)** | phase3_result.md |
 
 ## 参考 (References)
 
