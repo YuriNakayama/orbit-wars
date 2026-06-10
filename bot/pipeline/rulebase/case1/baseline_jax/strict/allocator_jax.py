@@ -67,7 +67,7 @@ MAX_MOVES: int = MAX_PLANETS
 # is the SEQUENTIAL kernel-launch chain (~18s/turn at any batch size), of which
 # this scan's 4608 steps are the bulk; cutting to 256 steps cuts the launch count
 # on the critical path ~18x. On CPU (no launch overhead) the change is neutral.
-MAX_ALLOC_CANDIDATES: int = 256
+MAX_ALLOC_CANDIDATES: int = 64
 
 # Max commitments tracked per target planet (distinct accepted missions hitting
 # one target). Generous: at most one per source.
