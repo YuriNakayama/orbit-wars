@@ -709,6 +709,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 蒸留クローン版: 実 baseline_v1 の BC 蒸留 (case9_rulebase)
+    # を bc_warmstart 教師 + 固定 NN 相手 (distilled) + held-out yardstick に使う。
+    # PoC (Kaggle棋譜BC, flat 0% vs rulebase) の対策。
+    "reinforce_case8_vmpo_distilled": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_distilled",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_distilled.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 strict-held-out 軽量版: vmpo_strict は pool+held-out 両方に
     # strict を入れ iter0 が >13分で打ち切り (strict 実行が重い)。対策として
     # pool は in-JAX baseline (full+lite+self) に戻し、strict_v1 を held-out
