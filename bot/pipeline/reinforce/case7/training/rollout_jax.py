@@ -39,6 +39,15 @@ from pipeline.rulebase.case1.baseline_jax import (
 from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
     compute_actions_jax as _baseline_core_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    _modes_from_features as _strict_modes_from_features,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    compute_actions as _strict_compute_actions,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.world_features import (
+    build_world_features_from_state as _strict_build_world_features,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
 )
@@ -67,6 +76,7 @@ OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
 OPPONENT_BASELINE_CORE_JAX: int = 7
 OPPONENT_BASELINE_CORE_JAX_WEAK: int = 8
+OPPONENT_BASELINE_STRICT_JAX: int = 9
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -90,6 +100,13 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     # handicapped core_jax (60% ship sends): a beatable version for the gradient
     # foothold before ramping to full core_jax (research 处方B handicapping).
     "baseline_core_jax_weak": OPPONENT_BASELINE_CORE_JAX_WEAK,
+    # strict: the case1 STRICT JAX port (case8-style grid + allocator) — the
+    # HIGHEST-parity in-JAX baseline_v1 available (identity test floor ≥70%,
+    # source-faithful: same from_planet / target / ships decisions). NO host hop
+    # so it vmaps fast. The faithful fixed opponent for "train on JAX rule →
+    # transfer to the real Python rulebase" (closes the baseline_jax_full 10%-
+    # approx gap that left H4 at 0/30 vs the real baseline_v1).
+    "baseline_strict_jax": OPPONENT_BASELINE_STRICT_JAX,
 }
 
 
@@ -416,6 +433,20 @@ def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
     return jnp.stack([a[:, 0], a[:, 1], ships], axis=-1)
 
 
+def _baseline_strict_jax_actions(state: EnvState, seat: int) -> jax.Array:
+    """case1 STRICT JAX opponent → (MAX_LAUNCHES_PER_AGENT, 3) for `seat`.
+
+    The highest-parity in-JAX baseline_v1: build the strict WorldFeatures from
+    the EnvState (pure-JAX, no host hop), derive modes, and run the strict
+    `compute_actions`. Same from_planet/target/ship decisions as the real
+    Python baseline_v1 (identity-test floor ≥70%), so training progress against
+    it transfers to the real rulebase far better than baseline_jax_full (~10%).
+    """
+    feats = _strict_build_world_features(state, seat)
+    modes = _strict_modes_from_features(feats)
+    return _strict_compute_actions(feats, modes).astype(jnp.float32)
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -537,9 +568,9 @@ def _rollout_one_env(
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
         # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax,
-        # 8 → core_jax_weak (handicapped).
+        # 8 → core_jax_weak (handicapped), 9 → strict (highest-parity case1).
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 8),
+            jnp.clip(opponent_mode, 0, 9),
             [
                 lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
                 lambda: _baseline_jax_actions(state, 1 - seat),
@@ -552,6 +583,7 @@ def _rollout_one_env(
                 lambda: _baseline_core_jax_weak_actions(state, 1 - seat).astype(
                     jnp.float32
                 ),
+                lambda: _baseline_strict_jax_actions(state, 1 - seat),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
