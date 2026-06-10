@@ -275,14 +275,22 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   # YAML 内に hardcode されているので、配布されている .dvc を一括 pull する
   # 方式 (recursive) で `data/output/models/imitation/case9_per_planet/` 配下
   # の全 runs を取得する。
-  BC_RUNS_PARENT="data/output/models/imitation/case9_per_planet/runs"
-  echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
-  ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
-  # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
-  # train.yaml は単一 run の best.pt を参照するので、find で全 .dvc を渡す。
-  mapfile -t BC_DVCS < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
+  # 蒸留クローン (case9_rulebase) も distilled_weights / bc_warmstart から
+  # 参照されるため、per_planet と並べて両親ディレクトリを pull する。
+  # 片方に .dvc が無いのは許容 (両方ゼロなら fail)。
+  BC_DVCS=()
+  for BC_RUNS_PARENT in \
+    "data/output/models/imitation/case9_per_planet/runs" \
+    "data/output/models/imitation/case9_rulebase/runs"; do
+    echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
+    ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
+    # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
+    while IFS= read -r dvc_f; do
+      BC_DVCS+=("${dvc_f}")
+    done < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
+  done
   if [ ${#BC_DVCS[@]} -eq 0 ]; then
-    echo "[onstart] reinforce BC pull: no .dvc files under ${BC_RUNS_PARENT}" >&2
+    echo "[onstart] reinforce BC pull: no .dvc files under either runs parent" >&2
     mark "45_dvc_pull_reinforce_bc_missing"
     exit 1
   fi
@@ -293,7 +301,7 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
     exit 1
   fi
   echo "[onstart] reinforce BC pull complete; verifying best.pt..."
-  find "${BC_RUNS_PARENT}" -name "best.pt" -maxdepth 3 2>&1 | head -5
+  find data/output/models/imitation -name "best.pt" -maxdepth 4 2>&1 | head -8
 else
   # mart-only path: preprocess を pod 側で走らせない設計の case (mart は
   # 事前 push 済) では kaggle_episodes (60GB+, 62k hive parquet files) の
