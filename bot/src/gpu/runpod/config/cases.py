@@ -701,6 +701,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
     # strict を入れ iter0 が >13分で打ち切り (strict 実行が重い)。対策として
     # pool は in-JAX baseline (full+lite+self) に戻し、strict_v1 を held-out
     # 進捗 yardstick のみ (every:5, episodes:16) で実行する。
+    # reinforce/case8 PoC: BC warm-start × V-MPO。vmpo_frozen から bc_warmstart
+    # のみ有効化 (case9_per_planet BC 重みで初期化)。rulebase への勝率軌跡が
+    # 学習で向上するかを held-out 曲線 + 学習後の実 baseline_v1 offline 対戦で検証。
+    "reinforce_case8_vmpo_poc_bc": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_poc_bc",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_poc_bc.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     "reinforce_case8_vmpo_strict_heldout": {
         "family": "reinforce",
         "stage": "train_reinforce_case8_vmpo_strict_heldout",
