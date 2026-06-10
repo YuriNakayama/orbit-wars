@@ -102,6 +102,53 @@ def test_strict_source_match_and_exact_floor() -> None:
     )
 
 
+def _actions_with_k(state: Any, seat: int, k: int) -> jnp.ndarray:
+    """compute_actions with MAX_LIVE_SRC temporarily set to ``k`` (restored after)."""
+    import pipeline.rulebase.case1.baseline_jax.strict.missions_capture_jax as mc
+
+    orig = mc.MAX_LIVE_SRC
+    mc.MAX_LIVE_SRC = k
+    try:
+        feats = build_world_features_from_state(state, seat)
+        return compute_actions(feats, _modes_from_features(feats))
+    finally:
+        mc.MAX_LIVE_SRC = orig
+
+
+@pytest.mark.slow
+def test_gather_live_sources_preserves_actions() -> None:
+    """The gather-live-sources grid speedup must not change emitted actions.
+
+    `_gather_scatter_grid` vmaps the per-source HORIZON scan over only the live
+    (owned, ship-bearing) source planets instead of all 48, scattering rows back.
+    Dead sources score -inf and are never selected, so the action set must be
+    byte-identical to the full 48-wide build. We compare the hybrid path (K=16),
+    a forced-fallback path (K=2, exercising the full-grid lax.cond branch), and a
+    forced-gather path (K=999 == full reference) across sampled states — source
+    id and ship count EXACT, angle within 1e-3 (benign float reordering only).
+    """
+    noop = jnp.full((NUM_AGENTS_MAX, MAX_LAUNCHES_PER_AGENT, 3), -1.0)
+    for s in range(20):
+        state = reset(seed=s, num_agents=2)
+        for _ in range((s % 12) * 4):
+            state, _, term = step(state, noop)
+            if bool(term):
+                break
+        for seat in (0, 1):
+            ref = np.asarray(_actions_with_k(state, seat, 999))  # full reference
+            for k in (16, 2):
+                got = np.asarray(_actions_with_k(state, seat, k))
+                assert np.array_equal(got[:, 0], ref[:, 0]), (
+                    f"source id changed at K={k}, seed={s}, seat={seat}"
+                )
+                assert np.array_equal(got[:, 2], ref[:, 2]), (
+                    f"ship count changed at K={k}, seed={s}, seat={seat}"
+                )
+                assert np.allclose(got[:, 1], ref[:, 1], atol=1e-3), (
+                    f"angle drifted >1e-3 at K={k}, seed={s}, seat={seat}"
+                )
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", [0, 1])
 def test_strict_runs_clean(seed: int) -> None:
