@@ -1,0 +1,67 @@
+# case7: PPO vs a FIXED case1 STRICT JAX rulebase.
+#
+# Train PPO against baseline_strict_jax — the highest-parity in-JAX baseline_v1
+# (case8-style grid+allocator strict port; identity-test floor ≥70%, same
+# from_planet/target/ship decisions as the real Python baseline_v1, NO host hop).
+# Fixed opponent every iter (opponent != "curriculum" → _opponent_for_iter
+# returns it directly), so this is a clean "learn to beat the real rulebase"
+# setup — unlike baseline_jax_full (~10% parity) where H4 won in-training but
+# went 0/30 vs the real baseline_v1.
+#
+# Progress is measured by held-out win-rate vs the SAME fixed strict opponent
+# every 5 iters (fixed seed). The final ckpt is then evaluated vs the REAL
+# Python baseline_v1 externally — the strict opponent's high parity is the bet
+# that in-training progress transfers.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 8
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  # FIXED opponent: the high-parity case1 strict JAX rulebase, every iter.
+  opponent: baseline_strict_jax
+  # Matchmaking-free progress vs the same fixed opponent.
+  heldout_eval:
+    every: 5
+    opponent: baseline_strict_jax
+    episodes: 32
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
