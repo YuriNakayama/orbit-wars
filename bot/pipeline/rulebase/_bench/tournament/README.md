@@ -67,7 +67,21 @@ warm-single = 16.3 s/turn（doc）なので **1 ゲーム（avg 309 turn）≈ 8
 | hoist2 | `_base_timelines` を 1 回計算し grid 間で共有（従来 3 回）| XLA CSE 次第 | `677fbd38` |
 | hoist3 | snipe enemy-ETA を per-target に集約（従来 per-cell 48x）| snipe の ETA 部分 | `bf9816aa` |
 
+| vec | `_search_safe_intercept_jax` の 110-cand 逐次 lax.scan を vmap+argmin に置換（web-search 由来）| **悪化 ~18→24.6 s/turn** | `0fc3cb28` |
+
 いずれも `compute_actions(hoist) == compute_actions(original)` を 12 state で bit 一致確認済。
+
+### web-search 由来の最適化（vec）の検証結果（2026-06-10 / RTX 4090）
+
+web search で「独立候補に対する逐次 lax.scan は vmap+argmin に vectorize すべき（GPU 5-20x）」
+（jax-ml/jax discussion #10233, VanderPlas）という指針を得て、`_search_safe_intercept_jax` の
+110 候補の逐次 scan を `jax.vmap(per_candidate)(cand_grid)` + float32 合成キー argmin に書き換え、
+**12/12 bit 一致**を確認。しかし GPU 実測（batch8×30turn）は **24.6 s/turn と逆に悪化**
+（vec 前 ~18.5 s/turn）。原因: ① per-turn は 2304-cell の nested vmap が支配的で、その内側 1 scan の
+寄与は小さく、② 110 候補を一括 materialize する vmap が compile/dispatch コストを増やし runtime 利得を
+相殺。**「逐次 scan を消せば速くなる」は本ワークロードでは成立せず**、律速は inner scan ではなく
+grid 全体の compute 量だと実測で確定した。
+
 ただし合計でも per-turn を ~300x 下げるには遠く、**ランキングを 20 分で出すには別アプローチが必要**:
 
 - **agent-level の構造改修**: snipe の `_plan_shot_cell`（aim, per-(s,t) で 40% 級）を per-target 近似に
