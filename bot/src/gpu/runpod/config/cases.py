@@ -876,6 +876,61 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # tournament_rulebase_jax_smoke: ~10-min observability pre-validation for the
+    # round-robin JAX tournament. 3 agents, few seeds, short horizon — confirms
+    # incremental tournament.json/leaderboard.md flush + S3 upload + nvidia-smi /
+    # system_monitor sampling + SSH all work BEFORE the full run (the mandatory
+    # dry-run from pipeline.md "Dry-run before the real run"). Same family/onstart
+    # shape as bench_*_gpu so the artifacts uploader + `dev/runpod pull` work.
+    "tournament_rulebase_jax_smoke": {
+        "family": "reinforce",
+        "stage": "tournament_rulebase_jax_smoke",
+        "train_module": "pipeline.rulebase._bench.tournament.run_tournament",
+        "config_arg": (
+            "--config pipeline/rulebase/_bench/tournament/configs/smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # tournament_rulebase_jax: full round-robin over the 7 in-JAX rule agents
+    # (jax_v1/2/3/4/6/8/9), 300 seeds/half × both seat assignments, horizon 500.
+    # Win-rate + Wilson CI leaderboard. Run ONLY after the smoke case validates
+    # observability. Same onstart shape as bench_*_gpu.
+    "tournament_rulebase_jax": {
+        "family": "reinforce",
+        "stage": "tournament_rulebase_jax",
+        "train_module": "pipeline.rulebase._bench.tournament.run_tournament",
+        "config_arg": "--config pipeline/rulebase/_bench/tournament/configs/full.yaml",
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # ranking_rulebase_jax_smoke: ~10-min pre-validation for the RANKING driver
+    # (ranking.py). 3 agents, few seeds, short horizon — confirms incremental
+    # ranking.json/ranking.md flush + S3 + samplers + SSH before the full run.
+    "ranking_rulebase_jax_smoke": {
+        "family": "reinforce",
+        "stage": "ranking_rulebase_jax_smoke",
+        "train_module": "pipeline.rulebase._bench.tournament.ranking",
+        "config_arg": (
+            "--config pipeline/rulebase/_bench/tournament/configs/ranking_smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # ranking_rulebase_jax: minimal-cost total-order ranking via adjacent-pair
+    # verification of the case-number prior [v8,v6,v4,v3,v2,v1]. 5 adjacent
+    # comparisons (+repair on inversion), 100*2=200 games each, horizon 300.
+    # Tie-merge for near-equal agents. Run ONLY after the smoke case validates.
+    "ranking_rulebase_jax": {
+        "family": "reinforce",
+        "stage": "ranking_rulebase_jax",
+        "train_module": "pipeline.rulebase._bench.tournament.ranking",
+        "config_arg": (
+            "--config pipeline/rulebase/_bench/tournament/configs/ranking.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 

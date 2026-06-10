@@ -36,6 +36,9 @@ from orbit_wars_jax.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
+    compute_actions_jax as _baseline_core_jax_actions,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
 )
@@ -62,6 +65,8 @@ OPPONENT_SELF_SNAPSHOT: int = 3
 OPPONENT_PYTHON_V1: int = 4
 OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
+OPPONENT_BASELINE_CORE_JAX: int = 7
+OPPONENT_BASELINE_CORE_JAX_WEAK: int = 8
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -77,6 +82,14 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "python_v1": OPPONENT_PYTHON_V1,
     "python_v4": OPPONENT_PYTHON_V4,
     "python_v8": OPPONENT_PYTHON_V8,
+    # core_jax: in-JAX faithful-ish port of baseline_v1 (action-parity ~80% x64 /
+    # ~63% float32, source 100%). Unlike case8 in-JAX (24s/call, infeasible) it
+    # vmaps fast (~83ms/game). A v1-like opponent with NO host hop — the practical
+    # high-parity training opponent vs the 10%-approx baseline_jax_full.
+    "baseline_core_jax": OPPONENT_BASELINE_CORE_JAX,
+    # handicapped core_jax (60% ship sends): a beatable version for the gradient
+    # foothold before ramping to full core_jax (research 处方B handicapping).
+    "baseline_core_jax_weak": OPPONENT_BASELINE_CORE_JAX_WEAK,
 }
 
 
@@ -382,6 +395,27 @@ def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
+_CORE_JAX_HANDICAP_SHIP_MULT: float = 0.25  # weakened core_jax sends 25% of ships
+# 0.6 left the opponent unbeatable from scratch (win 0); 0.25 cripples its
+# captures so the agent CAN win some games — the gradient foothold to ramp from.
+
+
+def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
+    """Handicapped core_jax: same target/angle decisions but scaled-down ship
+    sends (60%), so it captures less and the learner CAN win — creating the
+    gradient foothold that full core_jax (unbeatable from scratch) denies.
+    Research 处方B (handicapping); ramp to full core_jax via curriculum.
+    Only the ship column (index 2) of fired (from_pid>=0) rows is scaled.
+    """
+    a = _baseline_core_jax_actions(state, seat)
+    fired = a[:, 0] >= 0
+    scaled = jnp.maximum(1.0, jnp.floor(a[:, 2] * _CORE_JAX_HANDICAP_SHIP_MULT))
+    ships = jnp.where(fired, scaled, a[:, 2])
+    # Rebuild via column stack (avoid `.at[].set()` scatter, which deterministically
+    # hung the vmapped+scanned rollout at the first weak-opponent iter).
+    return jnp.stack([a[:, 0], a[:, 1], ships], axis=-1)
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -502,9 +536,10 @@ def _rollout_one_env(
         # Wrapping every branch in a lambda so only the chosen one executes keeps
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
-        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax,
+        # 8 → core_jax_weak (handicapped).
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 6),
+            jnp.clip(opponent_mode, 0, 8),
             [
                 lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
                 lambda: _baseline_jax_actions(state, 1 - seat),
@@ -513,6 +548,10 @@ def _rollout_one_env(
                 lambda: _python_v1_opponent_actions(state, 1 - seat),
                 lambda: _python_v4_opponent_actions(state, 1 - seat),
                 lambda: _python_v8_opponent_actions(state, 1 - seat),
+                lambda: _baseline_core_jax_actions(state, 1 - seat).astype(jnp.float32),
+                lambda: _baseline_core_jax_weak_actions(state, 1 - seat).astype(
+                    jnp.float32
+                ),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
@@ -711,6 +750,7 @@ def collect_rollout_jax(
     dense_coef_planet: float = 0.0,
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
+    agent_advantage: float = 1.0,
     opp_model: ActorCriticJax | None = None,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
@@ -752,6 +792,22 @@ def collect_rollout_jax(
     # parameters across the episode axis. This keeps the jit cache to
     # ONE compilation regardless of episode count.
     init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
+    if agent_advantage != 1.0:
+        # Reverse-curriculum head-start: scale the AGENT seat's planet ships so it
+        # starts ahead, making the game winnable → the agent gets terminal-win
+        # reward and learns HOW to convert a lead (the strategic skill that
+        # handicapping the opponent's resources could not teach). Ramp advantage
+        # → 1.0 (even start) as it learns. Host-side, pre-vmap, hang-free.
+        def _boost(st: EnvState) -> EnvState:
+            is_agent = st.planet_valid & (st.planet_owner == seat)
+            new_ships = jnp.where(
+                is_agent,
+                jnp.round(st.planet_ships.astype(jnp.float32) * agent_advantage),
+                st.planet_ships.astype(jnp.float32),
+            ).astype(st.planet_ships.dtype)
+            return st._replace(planet_ships=new_ships)
+
+        init_states = [_boost(st) for st in init_states]
     batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
 
     # vmap over (key, init_state); model + scalar args + opp_model broadcast.

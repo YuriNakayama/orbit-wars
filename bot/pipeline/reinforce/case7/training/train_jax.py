@@ -413,6 +413,7 @@ def _run_iter(
     dense_coef_planet: float = 0.0,
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
+    agent_advantage: float = 1.0,
     opp_model: ActorCriticJax | None = None,
 ) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
@@ -435,6 +436,7 @@ def _run_iter(
         dense_coef_planet=dense_coef_planet,
         time_bonus_coef=time_bonus_coef,
         time_penalty_coef=time_penalty_coef,
+        agent_advantage=agent_advantage,
         opp_model=opp_model,
     )
     rollout.planet_feats.block_until_ready()
@@ -586,12 +588,18 @@ class _PrioritizedOpponentSelector:
     """
 
     def __init__(
-        self, p: float, ema: float, init_win: float = 0.5, mode: str = "f_hard"
+        self,
+        p: float,
+        ema: float,
+        init_win: float = 0.5,
+        mode: str = "f_hard",
+        full_opponent: str = "baseline_jax_full",
     ) -> None:
         self._p = p
         self._ema = ema
         self._init_win = init_win
-        self._mode = mode
+        self._mode = mode  # f_hard / f_var priority shape
+        self._full_opponent = full_opponent  # configurable full rule opponent name
         self._entries: list[_OpponentEntry] = []
 
     def set_entries(
@@ -600,7 +608,7 @@ class _PrioritizedOpponentSelector:
         include_full: bool,
         include_lite: bool = False,
     ) -> None:
-        """Rebuild entries from the current pool (+ fixed rule opponents).
+        """Rebuild entries from the current pool (+ the configurable full opponent).
 
         Preserves the win_ema / count of carried-over entries (rule opponents by
         name, snapshots by FIFO index from the tail), and seeds new entries at
@@ -622,7 +630,9 @@ class _PrioritizedOpponentSelector:
         if include_lite:
             new_entries.append(_carry_rule("baseline_jax_lite"))
         if include_full:
-            new_entries.append(_carry_rule("baseline_jax_full"))
+            # configurable full opponent (source) carried via _carry_rule so the
+            # win_ema AND count are preserved (HEAD's count-based ema).
+            new_entries.append(_carry_rule(self._full_opponent))
         # Align pool models to the tail of prev snapshot EMAs (FIFO order).
         carried = prev_snaps[-len(pool_models) :] if pool_models else []
         pad = len(pool_models) - len(carried)
@@ -739,14 +749,31 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_snapshot_every = int(pool_cfg.get("snapshot_every", 10))
     pool_cap = int(pool_cfg.get("cap", 5))
     pool_late_full_prob = float(pool_cfg.get("late_full_prob", 0.5))
-    # include_lite: add baseline_jax_lite as a weaker fixed selector entry so
-    # f_var has a ~even opponent to fall back on as the agent outgrows full.
+    # include_lite (HEAD): add baseline_jax_lite as a weaker fixed selector entry
+    # so f_var has a ~even opponent to fall back on as the agent outgrows full.
     pool_include_lite = bool(pool_cfg.get("include_lite", False))
+    # full_opponent (source): the "full" rulebase opponent mixed into the pool.
+    # Default baseline_jax_full (10% v1-approx); set to baseline_core_jax for a
+    # faithful ~80% v1 opponent so pool progress transfers to the real rulebase.
+    pool_full_opponent = str(pool_cfg.get("full_opponent", "baseline_jax_full"))
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
-    # PFSP: priority="f_hard" weights (1-x)^p (hard opponents); priority="f_var"
-    # weights (x(1-x))^p (~even opponents, keeps the match near current skill —
-    # win-rate stays ~0.5 by design, so progress is read from held-out eval +
-    # Elo, not from this win-rate). priority="uniform" reproduces the flat mix.
+
+    # Reverse curriculum (source, research 处方A): the agent starts each episode
+    # with a ship advantage (agent_advantage_start×) so the game is winnable →
+    # earns terminal-win reward and learns HOW to win, then ramps to 1.0 (even
+    # start) over advantage_ramp_iters. start=1.0 → disabled.
+    adv_start = float(t_cfg.get("agent_advantage_start", 1.0))
+    adv_ramp_iters = int(t_cfg.get("agent_advantage_ramp_iters", max(1, iterations)))
+
+    def _iter_advantage(it: int) -> float:
+        if adv_start <= 1.0:
+            return 1.0
+        frac = min(1.0, it / max(1, adv_ramp_iters))
+        return float(adv_start + (1.0 - adv_start) * frac)  # adv_start → 1.0
+
+    # PFSP (HEAD): priority="f_hard" weights (1-x)^p (hard opponents); "f_var"
+    # weights (x(1-x))^p (~even opponents, win-rate ~0.5 by design → progress read
+    # from held-out + Elo); "uniform" reproduces the flat pool/full mix (H2).
     pool_priority = str(pool_cfg.get("priority", "uniform"))
     pool_priority_p = float(pool_cfg.get("priority_p", 2.0))
     pool_priority_ema = float(pool_cfg.get("priority_ema", 0.7))
@@ -815,7 +842,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     pool_rng = np.random.default_rng(seed)
     # H4: prioritized selector over [baseline_jax_full] + pool snapshots.
     selector = _PrioritizedOpponentSelector(
-        pool_priority_p, pool_priority_ema, mode=pool_priority
+        pool_priority_p,
+        pool_priority_ema,
+        mode=pool_priority,
+        full_opponent=pool_full_opponent,
     )
     if use_priority:
         selector.set_entries(
@@ -844,7 +874,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 )
             elif pool_rng.random() < pool_late_full_prob:
                 # H2: uniform full/pool mix.
-                iter_opponent = "baseline_jax_full"
+                iter_opponent = pool_full_opponent
             else:
                 iter_opponent = "self_snapshot"
                 iter_opp_model = pool.sample(pool_rng)
@@ -872,6 +902,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             dense_coef_planet=dense_coef_planet,
             time_bonus_coef=time_bonus_coef,
             time_penalty_coef=time_penalty_coef,
+            agent_advantage=_iter_advantage(it),
             opp_model=iter_opp_model,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.

@@ -1,0 +1,25 @@
+# Minimal-cost strength ranking of the JAX rule agents (adjacent verification).
+#
+# Strategy (ranking.py): strength is a strict TOTAL ORDER and case number is a
+# strong prior, so we VERIFY the prior's n-1 adjacent pairs instead of a 21-pair
+# round-robin. Near-equal pairs merge into a tie bucket; an inversion triggers a
+# localized insertion-sort repair. Each comparison is a fixed 100*2=200-game
+# binary verdict (no SPRT early-stop) classified by the Wilson 95% CI vs 0.5.
+#
+# Prior, strongest -> weakest (older case = stronger). Excluded:
+#   jax_v9 — dormant (ANTI_PING_PONG inert; ~= v8).
+#   jax_v7 — strict port incomplete (STAY/ACCUMULATE pending; base ~= v8).
+#
+# horizon=300 (not 500): ranking needs only the win SIGN, not terminal-reward
+# parity. Validate once with the --calibrate path (h300 vs h500 winner agreement)
+# before trusting the short horizon for the whole run.
+cuda_jax: true
+horizon: 300
+seeds: 100  # per seat half -> 200 games/comparison
+prior:
+  - jax_v8
+  - jax_v6
+  - jax_v4
+  - jax_v3
+  - jax_v2
+  - jax_v1

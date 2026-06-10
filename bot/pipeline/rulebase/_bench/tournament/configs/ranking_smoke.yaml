@@ -1,0 +1,12 @@
+# Observability + correctness pre-validation for the ranking driver (~10 min GPU).
+# 3 agents, few seeds, short horizon — confirms incremental ranking.json/ranking.md
+# flush + S3 upload + nvidia-smi/system_monitor samplers + SSH all work BEFORE the
+# full run (pipeline.md "Dry-run before the real run"). Verdicts here are NOT
+# trustworthy (n too small); this only exercises the pipeline end to end.
+cuda_jax: true
+horizon: 120
+seeds: 8  # per seat half -> 16 games/comparison
+prior:
+  - jax_v8
+  - jax_v4
+  - jax_v1

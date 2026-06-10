@@ -38,6 +38,11 @@ _REINFORCE_SAFETY_MARGIN = 2
 _REINFORCE_VALUE_MULT = 1.35
 _ATTACK_COST_TURN_WEIGHT = 0.55
 _FOLLOWUP_MIN_SHIPS = 8
+# v1's main capture resolver has NO per-source launch cap (a rich source can
+# capture many targets, bounded only by source_attack_left budget). The 2-cap
+# under-fired (parity: src fired 2 vs v1's 4-5). Raise to the slot limit; the
+# followup_ok budget gate (>= FOLLOWUP_MIN_SHIPS for the 2nd+) still bounds it.
+_MAX_LAUNCHES_PER_SOURCE = MAX_LAUNCHES_PER_AGENT
 # build_modes thresholds/bonuses (strategy_helpers.build_modes)
 _AHEAD_DOMINATION = 0.18
 _BEHIND_DOMINATION = -0.2
@@ -456,7 +461,7 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             & (send >= need_now)
             & (send >= 1)
             & ~already
-            & (count < 2)
+            & (count < _MAX_LAUNCHES_PER_SOURCE)
             & followup_ok
             & ~(is_followup & f_reinf[oi])  # followup is capture-only
         )
@@ -470,9 +475,14 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
             jnp.where(fire, send, 0),
         )
 
+    # Bind carry float dtype to `ships` (== jnp.float_ at the active x64 config)
+    # so the scan carry init and body agree under both float32 and x64. A bare
+    # `jnp.float_` here was baked to float32 at import while the body computes in
+    # float64 under x64, tripping lax.scan's carry-dtype equality check.
+    _f = ships.dtype
     init = (
-        jnp.zeros(MAX_PLANETS, jnp.float_),  # spent[src]
-        jnp.zeros(MAX_PLANETS, jnp.float_),  # committed[tgt]
+        jnp.zeros(MAX_PLANETS, _f),  # spent[src]
+        jnp.zeros(MAX_PLANETS, _f),  # committed[tgt]
         jnp.zeros(MAX_PLANETS, jnp.int32),  # out[src] = launch count
     )
     (_spent, _committed, _out), (emit_src, emit_angle, emit_send) = jax.lax.scan(
@@ -481,9 +491,9 @@ def compute_actions_jax(state: EnvState, seat: int) -> jax.Array:
 
     # Pack all fired emissions (a source may fire twice: main + followup) into
     # the first free action slots, in score order.
-    out_pid = jnp.full(MAX_LAUNCHES_PER_AGENT, -1.0)
-    out_ang = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
-    out_snd = jnp.zeros(MAX_LAUNCHES_PER_AGENT, jnp.float_)
+    out_pid = jnp.full(MAX_LAUNCHES_PER_AGENT, -1.0, dtype=_f)
+    out_ang = jnp.zeros(MAX_LAUNCHES_PER_AGENT, _f)
+    out_snd = jnp.zeros(MAX_LAUNCHES_PER_AGENT, _f)
 
     def pack(
         carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array], k: jax.Array
