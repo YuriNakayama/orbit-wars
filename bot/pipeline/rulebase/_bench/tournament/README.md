@@ -40,9 +40,25 @@ round-robin（21 ペア×300 戦＝数百時間）は時間制約下で不可能
 
 - 除外: `jax_v9`（dormant ≈v8）, `jax_v7`（strict port 未完: STAY/ACCUMULATE pending ≈v8）。
 - horizon=300（500 でなく）: ranking は勝敗の**符号**のみ必要。較正（h300 vs h500 で勝者一致）で検証。
-- コスト: 較正1 + 隣接5 ≈ **1,200 戦 / ~19-20h / ~$13-14**（round-robin の ~107h から ~5x 削減）。
 - ロジックは `tests/unit/pipeline/rulebase/_bench/test_ranking.py` で検証済（prior 一致 / 同点マージ /
   反転修復 / bubble-to-top / 全同点 / 暴走 abort の 7 ケース）。
+
+### GPU 実測結果（2026-06-10 / RTX 4090 / smoke `ranking_rulebase_jax_smoke`）
+
+ranking driver を pod で dry-run（3 agent `[v8,v4,v1]` / 8 seed/half / **h120** / 16 戦/比較）した結果:
+
+- ✅ **観測性は機能**: 起動直後に `ranking.json`/`ranking.md` を flush（crash-safe 逐次書き込み確認）。
+  SSH `--via direct` + `--exec` でのリアルタイム観測も動作。
+- ❌ **しかし第1比較（v8 vs v4, 16 戦, h120）が ~23 分経っても未完了**（GPU 98% で compute-bound、
+  hang ではない）。ranking は比較*回数*を 21→5 に削減するが、各比較は依然 per-turn ~18.5s の
+  2304-cell grid コストを払う。h120 の最小比較ですら ~23 分超 → **本番 h300（turn 2.5x）× 100 seed ×
+  6 比較は数十時間規模**で、当初見積 ~20h すら楽観的だった。
+
+**結論**: 比較ソート化（アルゴリズム改善）は正しく機能するが、**律速は per-turn の grid compute
+であり比較回数ではない**ため、ranking 法でも「各 300 対戦を 20 分以内」は達成不可能。loop 指令
+「長時間化したら中断」に従い smoke を中断・pod 停止（課金 ~$0.3）。20 分制約を満たすには ranking 法
+ではなく、agent 側の **grid nested-vmap 自体の削減**（action 一致性に影響、別タスク）が必須。
+→ 既存の [[project_jax_strict_tournament_perturn_bound]] の結論を再確認。
 
 ## 実行時間の調査結果（2026-06-09 / RTX 4090 実測 + 解析）
 
