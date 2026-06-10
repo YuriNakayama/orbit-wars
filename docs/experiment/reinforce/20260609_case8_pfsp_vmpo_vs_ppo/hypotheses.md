@@ -66,12 +66,15 @@ reinforce/case8 で **PPO と V-MPO のどちら(の振る舞い)が良いか**�
 
 ### Phase 1 — PPO 実験条件の確定(土台。ここで凍結した条件を Phase 2/3 がそのまま使う)
 
-- [ ] (P1) H1: **PPO 実験条件探索** — 概要: PPO で固定相手・pool 構成・iteration 数・LR 等の
-  パラメータを変えて実験し、**適切な実験設定を確定**する。目的: ① pool 内 per-iter 勝率が ~0.5、
-  ② 固定相手(in-JAX held-out)との勝率が **0 付近から滑らかに増加**、③ 全 JAX・GPU で
-  **20 iter を ~30分で完了**、の 3 条件を同時に満たす設定を見つける。変更候補(1 つずつ A/B):
-  pool 構成(lite/full/self の有無)、curriculum switch_iter、f_var の priority_p/ema、LR、
-  entropy_coef、episodes_per_iter、iteration 数。**この H1 の出力(凍結 config)が Phase 2/3 の固定条件**。
+- [x] (P1) H1: **PPO 実験条件探索 — 確定 (2026-06-10)**。凍結 config = `configs/ppo_frozen.yaml`
+  (algo=ppo, 50 iter, f_var priority_p=4.0, pool=full+lite+self, held-out=baseline_jax_full,
+  lr 3e-5→3e-6, entropy 0.02, switch_iter=4)。Phase 2/3 はこれを algo (+V-MPO HP) 以外不変で流用。
+  - ① pool 勝率 ~0.5: priority_p {1,2,4} sweep で p=4.0 が最も 0.5 近傍 (self区間 mean ~0.4-0.46)。
+  - ② held-out: baseline_jax_full で 0 付近から弱く上昇 (p=4.0 iter50 で ~0.25→0.34)。本物 case8 は offline。
+  - ③ 速度: rollout jit (W7) + reset on-device vmap(reset_jax) (W8) で ~7s/iter。50 iter ≈ 6分
+    (pod 性能非依存で ≤30分 達成)。GPU util 8%→95-99%。<br>
+    注: ② は「0 から滑らかに 0.5 へ」の理想形には未達 (弱い上昇で頭打ち) — これは PPO の限界で
+    あり Phase 2 の V-MPO 比較ポイント。①③ は達成、② は両 algo 共通の土台として凍結。
 
 ### Phase 2 — V-MPO 実装と無調整比較(条件は H1 で凍結、algo のみ変更)
 
@@ -96,6 +99,9 @@ reinforce/case8 で **PPO と V-MPO のどちら(の振る舞い)が良いか**�
 | iter | 開始 | 仮説# | plan path | run_id | 主要メトリクス | 採否 | result path |
 |---|---|---|---|---|---|---|---|
 | 1 | 2026-06-09 | H0 | iter1_plan.md | 20260609-062331__feature-poc-v-mpo__0c08b8a__seed0 | scaffold動作: algo flag/PFSP/held-out(baseline_jax_full)/Elo GPU確認, held-out iter0=0.25 iter4=0.375 | adopted | iter1_result.md |
+| 2-5 | 2026-06-09 | H1(R1) | phase1_exploration_plan.md | …p1/p2/p4 (3 run) | priority_p sweep: p=4.0 が pool勝率0.5 最近 / held-out横ばい | (探索) | — |
+| 6 | 2026-06-09 | H1(R5) | phase1_exploration_plan.md | 20260609-113649__…3a88070 | iter50: held-out 0.23→0.34 弱上昇 / runtime 108min(slow pod) | (探索) | — |
+| 7 | 2026-06-10 | H1(W7/W8) | phase1_exploration_plan.md | 20260610-022550__…aa36caf | rollout jit+reset on-device: ~7s/iter, GPU util 8%→95-99% | **adopted (凍結確定)** | phase1_result.md |
 
 ## 参考 (References)
 

@@ -639,6 +639,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 1 FROZEN: PPO baseline の確定実験条件 (algo=ppo,
+    # 50 iter, f_var p=4.0, pool=full+lite+self, held-out=baseline_jax_full)。
+    # Phase 2/3 (V-MPO) はこの config を algo (+V-MPO HP) 以外不変で流用する。
+    "reinforce_case8_ppo_frozen": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_ppo_frozen",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/ppo_frozen.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
