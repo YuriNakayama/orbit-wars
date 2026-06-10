@@ -85,6 +85,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "bot/pipeline/imitation/case9/policy/weights_three_head.pt"
         ),
     },
+    # case9_rulebase: 実 rulebase baseline_v1 の蒸留 (selfplay ミラー棋譜から BC)。
+    # mart は local preprocess + dvc push 済みを pull する (preprocess_cmd なし)。
+    # 蒸留クローンは reinforce/case8 の distilled opponent / bc_warmstart 教師に使う。
+    "case9_rulebase": {
+        "stage": "train_imitation_case9_rulebase",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_rulebase.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     "case9_candidate": {
         "stage": "train_imitation_case9_candidate",
         "train_module": "pipeline.imitation.case9.training.train",

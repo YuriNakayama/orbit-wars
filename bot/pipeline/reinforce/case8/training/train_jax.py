@@ -545,6 +545,7 @@ def _heldout_eval(
     horizon: int,
     opponent: str,
     eval_seed: int,
+    opp_model: ActorCriticJax | None = None,
 ) -> float:
     """Fixed held-out win-rate vs a fixed opponent (no PPO update).
 
@@ -564,7 +565,7 @@ def _heldout_eval(
         seed=eval_seed,
         opponent=opponent,
         shaping_mode="ratio",
-        opp_model=None,
+        opp_model=opp_model,
     )
     outcomes = np.asarray(rollout.episode_outcomes)
     return float(np.mean(outcomes > 0))
@@ -651,6 +652,7 @@ class _PrioritizedOpponentSelector:
         include_lite: bool = False,
         include_v8: bool = False,
         include_strict: list[str] | None = None,
+        distilled_models: list[ActorCriticJax] | None = None,
     ) -> None:
         """Rebuild entries from the current pool (+ fixed rule opponents).
 
@@ -685,6 +687,19 @@ class _PrioritizedOpponentSelector:
             new_entries.append(_carry_rule("python_v8"))
         for strict_name in include_strict or []:
             new_entries.append(_carry_rule(strict_name))
+        # Distilled rulebase clones: fixed NN opponents (opp_model swap, mode =
+        # self_snapshot dispatch). Carried positionally — they never rotate.
+        prev_distilled = [e for e in self._entries if e.opponent == "distilled"]
+        for i, dm in enumerate(distilled_models or []):
+            prev = prev_distilled[i] if i < len(prev_distilled) else None
+            new_entries.append(
+                _OpponentEntry(
+                    "distilled",
+                    dm,
+                    prev.win_ema if prev else self._init_win,
+                    prev.count if prev else 0,
+                )
+            )
         # Align pool models to the tail of prev snapshot EMAs (FIFO order).
         carried = prev_snaps[-len(pool_models) :] if pool_models else []
         pad = len(pool_models) - len(carried)
@@ -813,6 +828,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # include_strict: list of strict JAX rulebase ports (strict_v1/v2/v3) added as
     # fixed pool entries (in-JAX, on-device — safe under f_var).
     pool_include_strict = list(pool_cfg.get("include_strict", []) or [])
+    # distilled_weights: BC clones of real rulebases loaded as fixed NN pool
+    # opponents (opp_model swap — ms forward, no host callback / strict-graph
+    # cost). heldout_eval.opponent="distilled" reuses the first clone.
+    pool_distilled_paths = [str(p) for p in pool_cfg.get("distilled_weights", []) or []]
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
     # PFSP: priority="f_hard" weights (1-x)^p (hard opponents); priority="f_var"
     # weights (x(1-x))^p (~even opponents, keeps the match near current skill —
@@ -854,6 +873,29 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         logger.info("BC reference frozen for KL anchor (kl_beta=%s)", ppo_cfg.kl_beta)
     # Resume (continue training from a saved best.pt) overrides the live weights.
     model = _maybe_resume(model, cfg_dict)
+
+    # Distilled rulebase clones: fixed NN opponents loaded onto a fresh template
+    # so they stay independent of the learner's warm-start / resume state.
+    distilled_models: list[ActorCriticJax] = []
+    for dp in pool_distilled_paths:
+        dpath = absolute_under_repo(dp, start=Path(__file__))
+        dm, d_loaded, d_missing = load_bc_weights_jax(
+            _build_model(cfg_dict), str(dpath)
+        )
+        logger.info(
+            "distilled opponent loaded from %s (loaded=%d missing=%d)",
+            dp,
+            d_loaded,
+            d_missing,
+        )
+        distilled_models.append(dm)
+    if heldout_eval_opponent == "distilled" and not distilled_models:
+        raise ValueError(
+            "heldout_eval.opponent='distilled' requires opponent_pool.distilled_weights"
+        )
+    heldout_opp_model = (
+        distilled_models[0] if heldout_eval_opponent == "distilled" else None
+    )
 
     # Build optimizer + opt_state. For V-MPO the optimizer also covers the
     # learnable Lagrange scalars (vp = η/α), so opt_state is over (model, vp).
@@ -913,6 +955,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             include_lite=pool_include_lite,
             include_v8=pool_include_v8,
             include_strict=pool_include_strict,
+            distilled_models=distilled_models,
         )
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
@@ -984,6 +1027,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                     include_lite=pool_include_lite,
                     include_v8=pool_include_v8,
                     include_strict=pool_include_strict,
+                    distilled_models=distilled_models,
                 )
         row["opponent"] = iter_opponent
         row["algo"] = algo
@@ -1016,6 +1060,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 horizon=horizon,
                 opponent=heldout_eval_opponent,
                 eval_seed=heldout_eval_seed,
+                opp_model=heldout_opp_model,
             )
             agent_elo = _elo_update(agent_elo, elo_ref, heldout_win, elo_k)
             row["heldout_win"] = heldout_win

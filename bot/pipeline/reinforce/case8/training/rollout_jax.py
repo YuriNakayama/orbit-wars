@@ -108,6 +108,11 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "baseline_jax_lite": OPPONENT_BASELINE_JAX_LITE,
     "baseline_jax_full": OPPONENT_BASELINE_JAX_FULL,
     "self_snapshot": OPPONENT_SELF_SNAPSHOT,
+    # Distilled rulebase clone (BC of a real rulebase) supplied via `opp_model`:
+    # same dispatch as self_snapshot (frozen NN forward, ms-order, vmap-safe) but
+    # named separately so configs / PFSP logs distinguish the fixed clone from
+    # FIFO self snapshots.
+    "distilled": OPPONENT_SELF_SNAPSHOT,
     # Real Python baseline_v{1,4,8} via pure_callback host roundtrip. Closes the
     # train/eval gap (memory: case6 PFSP was 0/30 vs live v1 because the in-JAX
     # baseline_jax_lite/full approximate but don't match the real rule). Cost:
@@ -806,8 +811,8 @@ def collect_rollout_jax(
             f"unknown shaping_mode={shaping_mode!r}; "
             f"supported: {sorted(SHAPING_MODE_NAME_TO_INT)}"
         )
-    if opponent == "self_snapshot" and opp_model is None:
-        raise ValueError("opponent='self_snapshot' requires opp_model to be supplied")
+    if opponent in ("self_snapshot", "distilled") and opp_model is None:
+        raise ValueError(f"opponent={opponent!r} requires opp_model to be supplied")
     opponent_mode = jnp.int32(OPPONENT_NAME_TO_MODE[opponent])
     shaping_mode_int = jnp.int32(SHAPING_MODE_NAME_TO_INT[shaping_mode])
     # Unused for non-snapshot opponents, but threaded so the vmap pytree
