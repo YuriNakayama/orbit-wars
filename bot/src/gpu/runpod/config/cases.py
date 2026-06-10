@@ -650,6 +650,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 Phase 2: V-MPO arm。vmpo_frozen.yaml は ppo_frozen.yaml と
+    # algo (ppo→vmpo) 以外完全同一。PPO arm と同一 PFSP/held-out/rollout harness で
+    # 無調整 (論文デフォルト HP) A/B。安定性・収束性を比較する。
+    "reinforce_case8_vmpo_frozen": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_frozen",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_frozen.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head

@@ -1,0 +1,70 @@
+# V-MPO smoke: h0_smoke base + algo=vmpo。V-MPO update が走り completes することの確認。
+# case8 copy + algo flag + held-out=python_v8 + f_var 3-opp pool (case1+case8+
+# self) all import and run a couple of PPO updates locally. NOT a strength run.
+# algo=vmpo is intentionally NOT exercised here (raises NotImplementedError until
+# H1). Keep iterations/episodes tiny so this finishes on CPU in a few minutes.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  algo: vmpo
+  seed: 0
+  iterations: 2
+  episodes_per_iter: 4
+  horizon: 500
+  lr: 3.0e-5
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 1
+    # in-JAX held-out (on-device). python_v8 host-callback stalls GPU (see
+    # h0_ppo_short.yaml note); real case8 comparison is an offline paired check.
+    opponent: baseline_jax_full
+    episodes: 4
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 1
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 1
+    cap: 4
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 2.0
+    priority_ema: 0.7
+    include_lite: true        # case1 lite (in-JAX, fast)
+    include_v8: false         # python_v8 host-callback => GPU stall; held-out only
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

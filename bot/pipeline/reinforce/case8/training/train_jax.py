@@ -62,6 +62,13 @@ from pipeline.reinforce.case8.training.rollout_jax import (
     JaxRolloutBatch,
     collect_rollout_jax,
 )
+from pipeline.reinforce.case8.training.vmpo_jax import (
+    VMPOConfigJax,
+    VMPOParams,
+    init_vmpo_params,
+    make_optimizer_vmpo,
+    vmpo_update_jax,
+)
 from utils.repo_root import absolute_under_repo
 
 # W6-a: wrap the entire epoch×minibatch loop in a single jit so the
@@ -69,6 +76,32 @@ from utils.repo_root import absolute_under_repo
 # tuple. Each subsequent call reuses the compiled XLA executable —
 # critical for keeping PPO updates on-device on RunPod GPUs.
 _ppo_update_jit = eqx.filter_jit(ppo_update_jax)
+_vmpo_update_jit = eqx.filter_jit(vmpo_update_jax)
+
+
+def _build_vmpo_cfg(cfg_dict: dict[str, Any]) -> VMPOConfigJax:
+    """V-MPO config. Shares lr/epochs/minibatch with the PPO config (so the A/B
+    differs only in algo + V-MPO-specific HP); V-MPO HP read from a `vmpo:`
+    subsection of `training` (paper defaults when absent)."""
+    t = cfg_dict.get("training", {})
+    v = t.get("vmpo", {}) or {}
+    return VMPOConfigJax(
+        eps_eta=float(v.get("eps_eta", 0.1)),
+        eps_alpha=float(v.get("eps_alpha", 0.01)),
+        topk_frac=float(v.get("topk_frac", 0.5)),
+        value_coef=float(t.get("value_coef", 0.5)),
+        init_eta=float(v.get("init_eta", 1.0)),
+        init_alpha=float(v.get("init_alpha", 5.0)),
+        epochs=int(t.get("ppo_epochs", 2)),
+        minibatch_size=int(t.get("minibatch_size", 128)),
+        max_grad_norm=float(t.get("max_grad_norm", 0.5)),
+        normalize_advantage=True,
+        lr=float(t.get("lr", 3.0e-5)),
+        weight_decay=float(t.get("weight_decay", 1.0e-5)),
+        lr_end=float(t.get("lr_end", 0.0)),
+        lr_schedule_steps=int(t.get("lr_schedule_steps", 0)),
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -415,7 +448,9 @@ def _run_iter(
     time_penalty_coef: float = 0.0,
     opp_model: ActorCriticJax | None = None,
     algo: str = "ppo",
-) -> tuple[ActorCriticJax, Any, dict[str, Any]]:
+    vp: VMPOParams | None = None,
+    vmpo_cfg: VMPOConfigJax | None = None,
+) -> tuple[ActorCriticJax, Any, VMPOParams | None, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
     t0 = time.perf_counter()
@@ -445,41 +480,49 @@ def _run_iter(
 
     t0 = time.perf_counter()
     if algo == "vmpo":
-        # V-MPO loss is implemented in H1 (iter2). H0 only wires the flag so the
-        # PPO/V-MPO A/B share one harness; selecting it before H1 is a hard error.
-        raise NotImplementedError(
-            "algo='vmpo' is implemented in H1 (iter2); H0 wires the flag only"
+        # V-MPO update (Phase 2). Optimizes (model, vp=η/α) jointly; the A/B with
+        # PPO shares the exact same rollout/flat/PFSP/held-out harness, differing
+        # ONLY here in the loss. opt_state covers (model, vp) for this branch.
+        if vp is None or vmpo_cfg is None:
+            raise ValueError("algo='vmpo' requires vp and vmpo_cfg")
+        model, vp, opt_state, stats = _vmpo_update_jit(
+            model, vp, optimizer, opt_state, flat, vmpo_cfg, update_key
         )
-    model, opt_state, stats = _ppo_update_jit(
-        model, bc_reference, optimizer, opt_state, flat, cfg, update_key
-    )
+    else:
+        model, opt_state, stats = _ppo_update_jit(
+            model, bc_reference, optimizer, opt_state, flat, cfg, update_key
+        )
     # Block on a small leaf to ensure compute is materialized.
     _ = float(stats.policy_loss)
     update_secs = time.perf_counter() - t0
 
     outcomes = np.asarray(rollout.episode_outcomes)
     win_rate = float(np.mean(outcomes > 0))
-    return (
-        model,
-        opt_state,
-        {
-            "iter": iter_idx,
-            "rollout_secs": rollout_secs,
-            "update_secs": update_secs,
-            "win_rate": win_rate,
-            "mean_reward": float(np.mean(outcomes)),
-            "reward_std": float(np.std(outcomes)),
-            "reward_min": float(np.min(outcomes)),
-            "reward_max": float(np.max(outcomes)),
-            "policy_loss": float(stats.policy_loss),
-            "value_loss": float(stats.value_loss),
-            "entropy": float(stats.entropy),
-            "approx_kl": float(stats.approx_kl),
-            "bc_kl": float(stats.bc_kl),
-            "clip_fraction": float(stats.clip_fraction),
-            "epochs_run": float(stats.epochs_run),
-        },
-    )
+    row: dict[str, Any] = {
+        "iter": iter_idx,
+        "rollout_secs": rollout_secs,
+        "update_secs": update_secs,
+        "win_rate": win_rate,
+        "mean_reward": float(np.mean(outcomes)),
+        "reward_std": float(np.std(outcomes)),
+        "reward_min": float(np.min(outcomes)),
+        "reward_max": float(np.max(outcomes)),
+        "policy_loss": float(stats.policy_loss),
+        "value_loss": float(stats.value_loss),
+        "entropy": float(stats.entropy),
+        "approx_kl": float(stats.approx_kl),
+        "bc_kl": float(stats.bc_kl),
+        "clip_fraction": float(stats.clip_fraction),
+        "epochs_run": float(stats.epochs_run),
+    }
+    if algo == "vmpo" and vp is not None:
+        # V-MPO diagnostics for the A/B (stability/convergence): the learned
+        # Lagrange temperature η and trust-region multiplier α, and the
+        # rollout→current policy KL (stashed in bc_kl by vmpo_update_jax).
+        row["vmpo_eta"] = float(vp.eta)
+        row["vmpo_alpha"] = float(vp.alpha)
+        row["vmpo_kl"] = float(stats.bc_kl)
+    return (model, opt_state, vp, row)
 
 
 def _elo_update(agent_elo: float, ref_elo: float, score: float, k: float) -> float:
@@ -803,7 +846,25 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # Resume (continue training from a saved best.pt) overrides the live weights.
     model = _maybe_resume(model, cfg_dict)
 
-    optimizer, opt_state = _build_optimizer_state(model, ppo_cfg)
+    # Build optimizer + opt_state. For V-MPO the optimizer also covers the
+    # learnable Lagrange scalars (vp = η/α), so opt_state is over (model, vp).
+    vmpo_cfg: VMPOConfigJax | None = None
+    vp: VMPOParams | None = None
+    if algo == "vmpo":
+        vmpo_cfg = _build_vmpo_cfg(cfg_dict)
+        vp = init_vmpo_params(vmpo_cfg)
+        optimizer = make_optimizer_vmpo(vmpo_cfg)
+        opt_state = optimizer.init(eqx.filter((model, vp), eqx.is_inexact_array))
+        logger.info(
+            "V-MPO: eps_eta=%s eps_alpha=%s init_eta=%s init_alpha=%s topk=%s",
+            vmpo_cfg.eps_eta,
+            vmpo_cfg.eps_alpha,
+            vmpo_cfg.init_eta,
+            vmpo_cfg.init_alpha,
+            vmpo_cfg.topk_frac,
+        )
+    else:
+        optimizer, opt_state = _build_optimizer_state(model, ppo_cfg)
 
     if opponent == "curriculum":
         logger.info(
@@ -871,7 +932,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 iter_opponent = "self_snapshot"
                 iter_opp_model = pool.sample(pool_rng)
         key, k_iter = jax.random.split(key)
-        model, opt_state, row = _run_iter(
+        model, opt_state, vp, row = _run_iter(
             model,
             bc_reference,
             optimizer,
@@ -896,6 +957,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             time_penalty_coef=time_penalty_coef,
             opp_model=iter_opp_model,
             algo=algo,
+            vp=vp,
+            vmpo_cfg=vmpo_cfg,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.
         if use_priority and sel_idx >= 0:
