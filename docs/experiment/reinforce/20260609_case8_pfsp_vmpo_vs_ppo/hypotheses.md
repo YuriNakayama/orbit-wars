@@ -78,12 +78,11 @@ reinforce/case8 で **PPO と V-MPO のどちら(の振る舞い)が良いか**�
 
 ### Phase 2 — V-MPO 実装と無調整比較(条件は H1 で凍結、algo のみ変更)
 
-- [ ] (P2, depends on H1) H2: **V-MPO 実装 + 無調整 A/B** — 概要: V-MPO loss(top-half adv target ψ +
-  温度 η dual + trust-region α、importance weight/entropy reg なし)を新規実装し、**H1 で確定した
-  PPO と同一の実験条件**(固定相手・pool・iteration 数・LR 等すべて同じ)で `algo=vmpo` だけ変えて学習。
-  目的: V-MPO を **チューニングなし(論文デフォルト HP)** で実行した場合、PPO に比べてどう振る舞うか
-  検証(pool 勝率収束 / held-out 勝率曲線 / entropy 推移 / 速度 を PPO と並置)。
-  **条件は一切変えない — 変えると PPO と比較不能**。
+- [x] (P2, depends on H1) H2: **V-MPO 実装 + 無調整 A/B — adopted (2026-06-10)**。vmpo_jax.py 実装、
+  vmpo_frozen.yaml (ppo_frozen と algo のみ差分) で A/B。結論: **無調整 V-MPO は PPO と同等の収束性
+  + 明確に高い entropy collapse 耐性 (min entropy 21 vs PPO 8.6) + わずかに高い安定性 (pool std
+  0.188 vs 0.196)**。held-out 到達点は両者 ~0.27/max 0.375 で互角 (env 天井, algo 差でない)。
+  V-MPO 内部健全 (η 1.0→1.24, α 5.0→3.94, trust-region KL 0.0003 ≪ ε_α=0.01)。→ phase2_result.md。
 
 ### Phase 3 — V-MPO のパラメータチューニング(条件は H1 で凍結、V-MPO 内部 HP のみ sweep)
 
