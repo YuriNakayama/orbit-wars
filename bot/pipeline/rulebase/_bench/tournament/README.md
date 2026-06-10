@@ -60,6 +60,42 @@ ranking driver を pod で dry-run（3 agent `[v8,v4,v1]` / 8 seed/half / **h120
 ではなく、agent 側の **grid nested-vmap 自体の削減**（action 一致性に影響、別タスク）が必須。
 → 既存の [[project_jax_strict_tournament_perturn_bound]] の結論を再確認。
 
+## ★ allocator truncation の GPU 実測（2026-06-11 / RTX 4090）— 幾何系で 15-18x 達成
+
+「flops 不変=デバイス非依存で無効」とした先行判断は**誤り**だった。GPU の per-turn コストは
+flops ではなく**逐次カーネル起動チェーン**（scan step 数 × 起動レイテンシ）であり、allocator の
+N=4608 scan を top-K に truncate（恒等保存: tail は `-inf` no-op、回帰テスト 2/2 + 40/40 state で
+action byte 一致）すると **GPU で激減**する:
+
+| K | batch | per-turn | speedup |
+|---|--:|--:|--:|
+| 4608（原本）| 8 | 11.12 s | 1.0x |
+| 256 | 8 | 1.06 s | 10.5x |
+| **64** | 8 | **0.61 s** | **18.3x** |
+| 256 | 64 | 1.20 s | 9.3x |
+| **64** | 64 | **0.72 s** | **15.5x** |
+
+`MAX_ALLOC_CANDIDATES=64`（valid 候補実測 max=10 の 6x マージン）を**全8 case** の allocator に
+適用済（commit `fe658c65` 系列）。CPU では 1 step ≈ μs（起動 overhead 無）のため効果が見えず
+1.00x — **CPU 計測で GPU 効果を否定してはならない**（本件の最重要教訓）。
+
+### ランキング本番（h500 / 100seed×2席 / 隣接5比較）→ エンジン再生系で中断
+
+- 幾何系 (case1) は 0.61-0.72 s/turn を確認しゲート（≤3s）通過。
+- しかし本番 cmp1 = **jax_v8 vs jax_v6（エンジン再生 aim 系×2）が ~3.7h でも未完**（GPU 85-89% で
+  健全計算中、per-turn **>13 s**）。truncation 後もエンジン再生系には allocator 以外の長い逐次
+  チェーン（engine-sweep aim / harass grid / STAY 等）が残存し、**aim 系統間で per-turn が ~18x 乖離**:
+
+| aim 系統 | per-turn (K=64) |
+|---|--:|
+| 幾何（case1/2/3）| 0.61-0.72 s |
+| エンジン再生（case4/6/8/9）| **>13 s** |
+
+- projection >14h のため loop 指令に従い**中断・pod 停止**（課金 ~4h ≈ $2.8）。
+- **次の一手**: case8 系 compute_actions の HLO を解析し（while-loop 数 / 逐次 step 内訳）、
+  エンジン再生 aim の逐次チェーンに同じ「起動回数削減」を適用 → ランキング再実行。
+  幾何系 3 agent（v1/v2/v3）のみの部分ランキングなら現状でも ~1h で実行可能。
+
 ## 実行時間の調査結果（2026-06-09 / RTX 4090 実測 + 解析）
 
 **結論: 現状の agent では「各 300 対戦を 20 分以内」は物理的に不可能。**
