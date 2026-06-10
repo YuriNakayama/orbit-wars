@@ -650,6 +650,7 @@ class _PrioritizedOpponentSelector:
         include_full: bool,
         include_lite: bool = False,
         include_v8: bool = False,
+        include_strict: list[str] | None = None,
     ) -> None:
         """Rebuild entries from the current pool (+ fixed rule opponents).
 
@@ -660,6 +661,9 @@ class _PrioritizedOpponentSelector:
         `include_v8` adds the real rulebase case8 (python_v8) as a fixed pool
         entry — the user's case1+case8 pool design (case8 H0). python_v8 runs via
         host callback, so keep its selection rate modest under f_var.
+        `include_strict` adds strict JAX rulebase ports (strict_v1/v2/v3) as fixed
+        pool entries — they are in-JAX (on-device) so safe to select freely under
+        f_var (no host-callback penalty).
         """
         prev_snaps = [e for e in self._entries if e.opponent == "self_snapshot"]
         new_entries: list[_OpponentEntry] = []
@@ -679,6 +683,8 @@ class _PrioritizedOpponentSelector:
             new_entries.append(_carry_rule("baseline_jax_full"))
         if include_v8:
             new_entries.append(_carry_rule("python_v8"))
+        for strict_name in include_strict or []:
+            new_entries.append(_carry_rule(strict_name))
         # Align pool models to the tail of prev snapshot EMAs (FIFO order).
         carried = prev_snaps[-len(pool_models) :] if pool_models else []
         pad = len(pool_models) - len(carried)
@@ -804,6 +810,9 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # include_v8: add the real rulebase case8 (python_v8) as a fixed pool entry
     # — the user's case1+case8 pool design (case8 H0).
     pool_include_v8 = bool(pool_cfg.get("include_v8", False))
+    # include_strict: list of strict JAX rulebase ports (strict_v1/v2/v3) added as
+    # fixed pool entries (in-JAX, on-device — safe under f_var).
+    pool_include_strict = list(pool_cfg.get("include_strict", []) or [])
     use_pool = opponent == "curriculum" and curriculum_late == "pool"
     # PFSP: priority="f_hard" weights (1-x)^p (hard opponents); priority="f_var"
     # weights (x(1-x))^p (~even opponents, keeps the match near current skill —
@@ -903,6 +912,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             include_full=True,
             include_lite=pool_include_lite,
             include_v8=pool_include_v8,
+            include_strict=pool_include_strict,
         )
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
@@ -973,6 +983,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                     include_full=True,
                     include_lite=pool_include_lite,
                     include_v8=pool_include_v8,
+                    include_strict=pool_include_strict,
                 )
         row["opponent"] = iter_opponent
         row["algo"] = algo

@@ -39,8 +39,41 @@ from orbit_wars_jax.step import step as jax_env_step
 from pipeline.rulebase.case1.baseline_jax import (
     compute_actions_jax as _baseline_jax_actions,
 )
+
+# Strict JAX rulebase ports (geometric-aim, ~90% action-parity vs Python). These
+# are PURE-JAX (build_world_features_from_state → _modes_from_features →
+# compute_actions, all jit/vmap-able, output (MAX_LAUNCHES_PER_AGENT, 3) matching
+# baseline_jax_full), so unlike the python_v* host-callback opponents they run
+# ON-DEVICE inside the rollout — usable as held-out + pool opponents.
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    _modes_from_features as _strict_v1_modes,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    compute_actions as _strict_v1_compute,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.world_features import (
+    build_world_features_from_state as _strict_v1_features,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
+)
+from pipeline.rulebase.case2.baseline_jax.strict.agent_jax import (
+    _modes_from_features as _strict_v2_modes,
+)
+from pipeline.rulebase.case2.baseline_jax.strict.agent_jax import (
+    compute_actions as _strict_v2_compute,
+)
+from pipeline.rulebase.case2.baseline_jax.strict.world_features import (
+    build_world_features_from_state as _strict_v2_features,
+)
+from pipeline.rulebase.case3.baseline_jax.strict.agent_jax import (
+    _modes_from_features as _strict_v3_modes,
+)
+from pipeline.rulebase.case3.baseline_jax.strict.agent_jax import (
+    compute_actions as _strict_v3_compute,
+)
+from pipeline.rulebase.case3.baseline_jax.strict.world_features import (
+    build_world_features_from_state as _strict_v3_features,
 )
 
 from ..policy.featurizer_jax import (
@@ -65,6 +98,10 @@ OPPONENT_SELF_SNAPSHOT: int = 3
 OPPONENT_PYTHON_V1: int = 4
 OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
+# Strict JAX rulebase ports (in-JAX, on-device — see import block).
+OPPONENT_STRICT_V1: int = 7
+OPPONENT_STRICT_V2: int = 8
+OPPONENT_STRICT_V3: int = 9
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -80,7 +117,27 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "python_v1": OPPONENT_PYTHON_V1,
     "python_v4": OPPONENT_PYTHON_V4,
     "python_v8": OPPONENT_PYTHON_V8,
+    # Strict JAX ports of the real rulebase (geometric-aim, ~90% parity), on-device
+    # so usable as rollout opponents (held-out + pool). v1=case1, v2=case2, v3=case3.
+    "strict_v1": OPPONENT_STRICT_V1,
+    "strict_v2": OPPONENT_STRICT_V2,
+    "strict_v3": OPPONENT_STRICT_V3,
 }
+
+
+def _strict_v1_actions(state: EnvState, seat: int) -> jax.Array:
+    f = _strict_v1_features(state, seat)
+    return jnp.asarray(_strict_v1_compute(f, _strict_v1_modes(f)))
+
+
+def _strict_v2_actions(state: EnvState, seat: int) -> jax.Array:
+    f = _strict_v2_features(state, seat)
+    return jnp.asarray(_strict_v2_compute(f, _strict_v2_modes(f)))
+
+
+def _strict_v3_actions(state: EnvState, seat: int) -> jax.Array:
+    f = _strict_v3_features(state, seat)
+    return jnp.asarray(_strict_v3_compute(f, _strict_v3_modes(f)))
 
 
 class JaxRolloutBatch(NamedTuple):
@@ -505,9 +562,14 @@ def _rollout_one_env(
         # Wrapping every branch in a lambda so only the chosen one executes keeps
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
-        # 4 → python_v1, 5 → python_v4, 6 → python_v8.
+        # 4 → python_v1, 5 → python_v4, 6 → python_v8,
+        # 7 → strict_v1, 8 → strict_v2, 9 → strict_v3.
+        # NOTE: strict branches are in-JAX (on-device) but their compute_actions
+        # graph is large, so the lax.switch trace inflates iter0 compile (~tens of
+        # seconds each). Runtime once compiled is fast. Only the selected branch
+        # executes per step (lambda-wrapped).
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 6),
+            jnp.clip(opponent_mode, 0, 9),
             [
                 lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
                 lambda: _baseline_jax_actions(state, 1 - seat),
@@ -516,6 +578,9 @@ def _rollout_one_env(
                 lambda: _python_v1_opponent_actions(state, 1 - seat),
                 lambda: _python_v4_opponent_actions(state, 1 - seat),
                 lambda: _python_v8_opponent_actions(state, 1 - seat),
+                lambda: _strict_v1_actions(state, 1 - seat),
+                lambda: _strict_v2_actions(state, 1 - seat),
+                lambda: _strict_v3_actions(state, 1 - seat),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.

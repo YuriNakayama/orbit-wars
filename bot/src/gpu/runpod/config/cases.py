@@ -684,6 +684,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 strict-opponent V-MPO: held-out + pool に strict JAX rulebase
+    # (jax_v1/v2/v3 = case1/2/3 baseline_jax.strict、本物 parity port を in-JAX 化した
+    # vmappable agent) を使う。rollout_jax の lax.switch に mode 7/8/9 を追加し、
+    # python_v* host-callback を使わず GPU rollout 内で strict 相手と対戦する。
+    # held-out=strict_v1 固定、pool=strict_v1/v2/v3 + self、f_var p=4.0、30 iter。
+    "reinforce_case8_vmpo_strict": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_strict",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_strict.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
