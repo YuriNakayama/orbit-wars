@@ -11,15 +11,38 @@ Wilson CI でランキングを作る基盤。観測性（逐次ログ・S3・�
 | `agents_jax.py` | 各 `jax_vN` を vmappable `ActionFn(state)->action` に統一する adapter |
 | `selfplay_host.py` | host-driven batch self-play。per-turn graph のみ compile しループは host 側 |
 | `run_tournament.py` | round-robin + 逐次 `tournament.json`/`leaderboard.md` flush + S3 + crash-safe + phase timing |
-| `configs/{smoke,full}.yaml` | smoke（3 agent/8 seed）/ full（7 agent/300 seed）|
+| `compare.py` | **二値比較 primitive**「A>B か?」。両座席 100 戦ずつ→Wilson 95% CI で `a_wins`/`b_wins`/`tie` 判定 |
+| `ranking.py` | **最小コスト ranking driver**。事前順位の隣接ペアを検証 + 同点マージ + 反転時 insertion-sort 修復。逐次 `ranking.json`/`ranking.md` flush + S3 + crash-safe |
+| `configs/{smoke,full}.yaml` | round-robin: smoke（3 agent/8 seed）/ full（7 agent/300 seed）|
+| `configs/ranking{,_smoke}.yaml` | ranking: full（prior 6 agent/100 seed/h300）/ smoke（3 agent/8 seed/h120）|
 
-RunPod case: `tournament_rulebase_jax_smoke`（事前検証）/ `tournament_rulebase_jax`（本番）。
+RunPod case: round-robin は `tournament_rulebase_jax{,_smoke}`、ranking は `ranking_rulebase_jax{,_smoke}`。
 
 ```bash
 git push origin <branch>
-dev/runpod dev <commit> --case tournament_rulebase_jax_smoke   # interactive (SSH 用)
-# ready 後 SSH (--via direct) で run_tournament を起動、tail/logs で観測
+dev/runpod dev <commit> --case ranking_rulebase_jax_smoke   # interactive (SSH 用)
+# ready 後 SSH (--via direct) で ranking を起動、tail/logs で観測 → 本番は ranking_rulebase_jax
 ```
+
+## ranking 方式（最小コスト・2026-06-10）
+
+round-robin（21 ペア×300 戦＝数百時間）は時間制約下で不可能（下記実測）。代わりに
+ユーザー確定の 3 前提を使い、**比較ソート**に置き換える:
+
+1. **相性なし=全順序（推移的）** → ranking は SORTING。検証済み順序は n-1 隣接比較で足りる。
+2. **番号大=強（強い事前順位）** → 順序を*発見*せず**検証**。prior `[v8,v6,v4,v3,v2,v1]` の
+   隣接 5 ペアを確認、全一致なら推移律で全順位確定。
+3. **ほぼ同強が存在** → 分離に games を浪費せず**同点バケットにマージ**。
+
+`ranking.py` は prior に対する insertion-sort: 各 agent を直前の確定 bucket と比較し、
+`A_WINS`→下位に新 bucket / `TIE`→同 bucket マージ / `B_WINS`（反転）→上位へ bubble して
+局所修復。比較は `compare_pair` の固定 200 戦二値判定（SPRT 早期停止なし）。
+
+- 除外: `jax_v9`（dormant ≈v8）, `jax_v7`（strict port 未完: STAY/ACCUMULATE pending ≈v8）。
+- horizon=300（500 でなく）: ranking は勝敗の**符号**のみ必要。較正（h300 vs h500 で勝者一致）で検証。
+- コスト: 較正1 + 隣接5 ≈ **1,200 戦 / ~19-20h / ~$13-14**（round-robin の ~107h から ~5x 削減）。
+- ロジックは `tests/unit/pipeline/rulebase/_bench/test_ranking.py` で検証済（prior 一致 / 同点マージ /
+  反転修復 / bubble-to-top / 全同点 / 暴走 abort の 7 ケース）。
 
 ## 実行時間の調査結果（2026-06-09 / RTX 4090 実測 + 解析）
 

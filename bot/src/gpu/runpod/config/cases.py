@@ -770,6 +770,33 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # ranking_rulebase_jax_smoke: ~10-min pre-validation for the RANKING driver
+    # (ranking.py). 3 agents, few seeds, short horizon — confirms incremental
+    # ranking.json/ranking.md flush + S3 + samplers + SSH before the full run.
+    "ranking_rulebase_jax_smoke": {
+        "family": "reinforce",
+        "stage": "ranking_rulebase_jax_smoke",
+        "train_module": "pipeline.rulebase._bench.tournament.ranking",
+        "config_arg": (
+            "--config pipeline/rulebase/_bench/tournament/configs/ranking_smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # ranking_rulebase_jax: minimal-cost total-order ranking via adjacent-pair
+    # verification of the case-number prior [v8,v6,v4,v3,v2,v1]. 5 adjacent
+    # comparisons (+repair on inversion), 100*2=200 games each, horizon 300.
+    # Tie-merge for near-equal agents. Run ONLY after the smoke case validates.
+    "ranking_rulebase_jax": {
+        "family": "reinforce",
+        "stage": "ranking_rulebase_jax",
+        "train_module": "pipeline.rulebase._bench.tournament.ranking",
+        "config_arg": (
+            "--config pipeline/rulebase/_bench/tournament/configs/ranking.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
 }
 
 
