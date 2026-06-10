@@ -117,9 +117,26 @@ truncation 済み幾何系 3 agent のランキングが **28 分で完走**（2
   turn 数は不変のため wall-clock ほぼ同じ）。
 - 総コスト: pod ~45 分 ≈ $0.5。
 
-### 残課題
-- エンジン再生系（v4/v6/v8）の逐次チェーン削減 → 全 6 agent ランキング（prior 残り 3 隣接:
-  v8-v6, v6-v4, v4-v3）。現状はエンジン系 1 比較 ≈ 3.5h+ で実用外。
+### 残課題: エンジン再生系の逐次チェーン削減（帰属解析済・実装待ち）
+
+`engine_scan_attribution.py` による case8 のコンポーネント別逐次 step 帰属:
+
+| component | 逐次 steps | 内訳 |
+|---|--:|---|
+| build_{capture,snipe,harass}_grid | 1,684×3 | 各 **219×2 + 110×11**（cell 内 plan_shot×2 起因）|
+| run_followup_pass | 1,602 | followup も plan_shot を実行（219×2 + 110×10）|
+| 1 plan_shot | 667 | **219×1（half-step engine sweep）+ 110×4（aim + 安全ゲート3種が別 scan）** |
+| _run_mission_scan | 174 | ✅ K=64 truncate 済 |
+
+識別性保存の削減設計（推定合計 ~70% 減 → per-turn ~13s → ~3s 圏）:
+1. **ゲート fused-scan 統合**（−2,640 steps）: aim / sun-safe / intercept / comet-cross の 110-scan
+   4 本は同じ turn 軸を独立に走るため、tuple carry の 1 scan に統合しても同値。
+2. **219 half-step sweep の共有**（−~1,500）: sweep が ships 非依存（target 軌道のみ依存）なら
+   per-target に hoist して 3 grid × 2 call で共有可（要依存性確認）。
+3. **base_timelines hoist**（−700）: case1 で実証済みの doc#1 hoist を case8 系へ。
+
+実装順: case8 で 1→3→2 を適用 → 恒等テスト（hybrid vs full の action 比較）→ GPU smoke で
+per-turn 確認 → case4/6/9 へ横展開 → 残り 3 隣接比較（v8-v6, v6-v4, v4-v3）で全 6 agent 完成。
 
 ## 実行時間の調査結果（2026-06-09 / RTX 4090 実測 + 解析）
 
