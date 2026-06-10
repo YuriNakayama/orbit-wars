@@ -697,6 +697,20 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 strict-held-out 軽量版: vmpo_strict は pool+held-out 両方に
+    # strict を入れ iter0 が >13分で打ち切り (strict 実行が重い)。対策として
+    # pool は in-JAX baseline (full+lite+self) に戻し、strict_v1 を held-out
+    # 進捗 yardstick のみ (every:5, episodes:16) で実行する。
+    "reinforce_case8_vmpo_strict_heldout": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_strict_heldout",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_strict_heldout.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case4: case3 の 2-head 分解 (per_planet (P+1) categorical で
     # target+NO_OP を一括 P(Y) + ship regression P(X|Y)) を、3-head 分解
     # (launch head の 2値 P(Z) / target head の P-class P(Y|Z) / ship head
