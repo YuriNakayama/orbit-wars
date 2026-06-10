@@ -31,7 +31,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as _np
-from orbit_wars_jax.reset import reset
+from orbit_wars_jax.reset_jax import reset_jax
 from orbit_wars_jax.state import EnvState
 from orbit_wars_jax.step import MAX_LAUNCHES_PER_AGENT
 from orbit_wars_jax.step import step as jax_env_step
@@ -750,12 +750,15 @@ def collect_rollout_jax(
     effective_opp_model = model if opp_model is None else opp_model
 
     keys = jax.random.split(key, episodes_per_iter)
-    # Build all N initial states on host (reset is Python-side), then
-    # stack into a single batched EnvState so vmap can broadcast model
-    # parameters across the episode axis. This keeps the jit cache to
-    # ONE compilation regardless of episode count.
-    init_states = [reset(seed=seed + i, num_agents=2) for i in range(episodes_per_iter)]
-    batched_state = jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *init_states)
+    # W8: build all N initial states ON DEVICE via vmap(reset_jax). The old path
+    # called the host `reset(seed+i)` (numpy + Python rejection loops) per episode
+    # every iter, which kept the GPU idle (W7 jit'd the rollout but reset stayed on
+    # host → GPU util ~8%, slow-CPU pods stalled). reset_jax is jit/vmap-friendly
+    # so reset + rollout now compile into one XLA graph. Per-episode reset keys are
+    # derived from the integer `seed` (PRNGKey(seed) split N ways) to keep reset
+    # deterministic per seed, mirroring the old `seed + i` scheme.
+    reset_keys = jax.random.split(jax.random.PRNGKey(seed), episodes_per_iter)
+    batched_state = jax.vmap(lambda rk: reset_jax(rk, num_agents=2))(reset_keys)
 
     # W7: jit the vmapped rollout. Without jit the vmap(lax.scan over `horizon`
     # steps) runs eager — every per-step op dispatches from Python and syncs back
