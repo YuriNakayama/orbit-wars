@@ -465,6 +465,7 @@ def _rollout_one_env(
     time_penalty_coef: float,
     opp_model: ActorCriticJax,
     opp_weaken: jax.Array,
+    opp_start_turn: jax.Array,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -495,7 +496,7 @@ def _rollout_one_env(
             jax.Array,
             jax.Array,
         ],
-        _t: jax.Array,
+        t: jax.Array,
     ) -> tuple[
         tuple[
             EnvState,
@@ -574,34 +575,42 @@ def _rollout_one_env(
         # graph is large, so the lax.switch trace inflates iter0 compile (~tens of
         # seconds each). Runtime once compiled is fast. Only the selected branch
         # executes per step (lambda-wrapped).
-        opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 9),
-            [
-                lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
-                lambda: _baseline_jax_actions(state, 1 - seat),
-                lambda: _baseline_jax_full_actions(state, 1 - seat),
-                lambda: _self_snapshot_opponent_actions(opp_model, state, 1 - seat),
-                lambda: _python_v1_opponent_actions(state, 1 - seat),
-                lambda: _python_v4_opponent_actions(state, 1 - seat),
-                lambda: _python_v8_opponent_actions(state, 1 - seat),
-                lambda: _strict_v1_actions(state, 1 - seat),
-                lambda: _strict_v2_actions(state, 1 - seat),
-                lambda: _strict_v3_actions(state, 1 - seat),
-            ],
+        def _opp_actions_switch() -> jax.Array:
+            out: jax.Array = jax.lax.switch(
+                jnp.clip(opponent_mode, 0, 9),
+                [
+                    lambda: jnp.full(
+                        (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
+                    ),
+                    lambda: _baseline_jax_actions(state, 1 - seat),
+                    lambda: _baseline_jax_full_actions(state, 1 - seat),
+                    lambda: _self_snapshot_opponent_actions(opp_model, state, 1 - seat),
+                    lambda: _python_v1_opponent_actions(state, 1 - seat),
+                    lambda: _python_v4_opponent_actions(state, 1 - seat),
+                    lambda: _python_v8_opponent_actions(state, 1 - seat),
+                    lambda: _strict_v1_actions(state, 1 - seat),
+                    lambda: _strict_v2_actions(state, 1 - seat),
+                    lambda: _strict_v3_actions(state, 1 - seat),
+                ],
+            )
+            return out
+        # Weakening curriculum — two knobs, both forcing a noop turn:
+        #  - eps (opp_weaken): per-turn Bernoulli dropout (phaseB v2; kept for
+        #    compat — uniform dropout hit a wall at eps=0.85 because the
+        #    opponent's decisive EARLY moves still get through).
+        #  - time window (opp_start_turn): fully inactive for the first T0
+        #    turns, then full strength. T0=horizon ≈ noop (beatable);
+        #    T0=0 = the real opponent. Ladder-pool rungs differ only in T0.
+        # The cond SKIPS the opponent compute entirely on gated turns (lax.cond
+        # executes one branch at runtime), so high-T0 rung matches cost only
+        # the active tail — a T0=400 rung runs strict for ~100 of 500 turns.
+        drop = jax.random.bernoulli(k_weaken, opp_weaken) | (
+            t.astype(jnp.float32) < opp_start_turn
         )
-        # ε-weakening curriculum: with prob `opp_weaken` this TURN, replace the
-        # opponent's actions with the empty row (a forced noop turn). ε=1.0
-        # degrades any opponent to noop (learner already beats noop ~0.8 —
-        # guaranteed gradient at the ladder top); ε=0.0 is the exact identity.
-        # Traced scalar → annealing ε never recompiles. Material handicap
-        # (initial-ships) was refuted for from-scratch policies (phaseB: h=3.0
-        # still 0/64 — a passive policy cannot leverage material), so the
-        # curriculum dimension is opponent competence instead.
-        drop = jax.random.bernoulli(k_weaken, opp_weaken)
-        opp_actions = jnp.where(
+        opp_actions = jax.lax.cond(
             drop,
-            jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
-            opp_actions,
+            lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
+            _opp_actions_switch,
         )
         # Splice into env_actions row for opponent seat only when not noop.
         env_actions = jax.lax.cond(
@@ -671,7 +680,7 @@ def _rollout_one_env(
         time_bonus = (
             time_bonus_coef
             * win_mask
-            * (1.0 - _t.astype(jnp.float32) / jnp.float32(horizon))
+            * (1.0 - t.astype(jnp.float32) / jnp.float32(horizon))
         )
         terminal_reward = jnp.where(term, terminal_sign + time_bonus, jnp.float32(0.0))
         step_reward = jnp.where(
@@ -802,6 +811,7 @@ def collect_rollout_jax(
     opp_model: ActorCriticJax | None = None,
     handicap: float = 1.0,
     opp_weaken: float = 0.0,
+    opp_start_turn: float = 0.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -887,6 +897,7 @@ def collect_rollout_jax(
         time_penalty_coef,
         effective_opp_model,
         jnp.float32(opp_weaken),
+        jnp.float32(opp_start_turn),
     )
 
 
@@ -921,6 +932,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
         time_penalty_coef: float,
         opp_model: ActorCriticJax,
         opp_weaken: jax.Array,
+        opp_start_turn: jax.Array,
     ) -> JaxRolloutBatch:
         return _rollout_one_env(
             model,
@@ -940,6 +952,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             time_penalty_coef,
             opp_model,
             opp_weaken,
+            opp_start_turn,
         )
 
     vmapped = jax.vmap(
@@ -960,6 +973,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             None,  # time_penalty_coef
             None,  # opp_model
             None,  # opp_weaken (traced scalar, shared)
+            None,  # opp_start_turn (traced scalar, shared)
         ),
     )
     return eqx.filter_jit(vmapped)

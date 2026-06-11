@@ -1,0 +1,90 @@
+# ============================================================================
+# Ladder-pool 構成 (pool 設計のみで strict 撃破を狙う / 模倣なし / 継続学習)。
+#
+# Web 調査 (AlphaStar main-exploiter): ターゲットに勝率 <20% なら「過去
+# チェックポイント」への PFSP f_var で登る。strict には過去版がないため
+# 時間窓弱体化 (最初の T0 手だけ noop) を擬似チェックポイントとして
+# **複数段を独立 pool エントリで常駐**させ、f_var に段選択を任せる:
+#   - 各段が独自の win_ema → 勝率 ~0.5 の段に選択が自動集中
+#   - 楽勝段 (0.9+) も全敗段 (0.0) も自動回避 = データ汚染が構造的に消える
+#   - 選択分布の重心移動そのものがカリキュラム (コントローラ不要)
+# 混合比 (AlphaStar 流): 50% strict ラダー / 35% self / 15% 最古 snapshot。
+# lax.cond でゲート中は strict 計算をスキップ (高 T0 段ほど安い)。
+# 継続学習: phaseB v2 (eps-weaken 49it, vs noop'd strict 0.92) の best.pt から。
+# 判定: 選択重心が低 T0 へ移動するか + dual held-out (strict_v1 / full)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_handicap/runs/20260611-075834__feature-poc-v-mpo__3d75a17__seed0/best.pt
+  iterations: 50
+  episodes_per_iter: 64
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/49 の6点 (warm ~3分/eval)
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false           # ladder-pool では不使用 (段選択 = f_var が担う)
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false      # exploiter 構成: pool は strict ラダー + self のみ
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0    # 不要: 中間段が常に選択可能 (EMA 鮮度問題が消滅)
+    strict_ladder: [500, 400, 300, 200, 100, 50, 0]  # T0 (序盤 noop 手数) の7段
+    mix_strict: 0.5          # 50% strict ラダー (内部 f_var)
+    mix_self: 0.35           # 35% self snapshots / 残り 15% 最古 snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

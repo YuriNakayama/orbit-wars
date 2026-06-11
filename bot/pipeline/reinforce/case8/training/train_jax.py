@@ -452,6 +452,7 @@ def _run_iter(
     vmpo_cfg: VMPOConfigJax | None = None,
     handicap: float = 1.0,
     opp_weaken: float = 0.0,
+    opp_start_turn: float = 0.0,
 ) -> tuple[ActorCriticJax, Any, VMPOParams | None, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -476,6 +477,7 @@ def _run_iter(
         opp_model=opp_model,
         handicap=handicap,
         opp_weaken=opp_weaken,
+        opp_start_turn=opp_start_turn,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -611,6 +613,11 @@ class _OpponentEntry:
     model: ActorCriticJax | None  # None for rule opponents
     win_ema: float  # current agent's win-rate EMA vs this entry (x in f_var/f_hard)
     count: int = 0  # number of times this entry has been played (for fast warmup)
+    # Time-window weakening rung: the opponent is noop'd for the first
+    # weaken_t0 turns (0 = full strength). Ladder-pool entries share one
+    # opponent graph but differ in this knob — AlphaStar's "PFSP over the
+    # target's past checkpoints" with manufactured checkpoints.
+    weaken_t0: float = 0.0
 
 
 def _pfsp_weight(x: float, p: float, mode: str) -> float:
@@ -657,6 +664,7 @@ class _PrioritizedOpponentSelector:
         include_v8: bool = False,
         include_strict: list[str] | None = None,
         distilled_models: list[ActorCriticJax] | None = None,
+        strict_ladder: list[float] | None = None,
     ) -> None:
         """Rebuild entries from the current pool (+ fixed rule opponents).
 
@@ -689,8 +697,31 @@ class _PrioritizedOpponentSelector:
             new_entries.append(_carry_rule("baseline_jax_full"))
         if include_v8:
             new_entries.append(_carry_rule("python_v8"))
-        for strict_name in include_strict or []:
-            new_entries.append(_carry_rule(strict_name))
+        if strict_ladder:
+            # One entry per time-window rung (T0 turns of forced opponent noop),
+            # carried positionally. f_var concentrates on the ~0.5 rung — the
+            # selection distribution IS the curriculum (no controller needed).
+            prev_rungs = [
+                e
+                for e in self._entries
+                if e.weaken_t0 > 0.0
+                or (e.opponent in (include_strict or []) and e.model is None)
+            ]
+            sname = (include_strict or ["strict_v1"])[0]
+            for j, t0 in enumerate(strict_ladder):
+                prev = prev_rungs[j] if j < len(prev_rungs) else None
+                new_entries.append(
+                    _OpponentEntry(
+                        sname,
+                        None,
+                        prev.win_ema if prev else self._init_win,
+                        prev.count if prev else 0,
+                        weaken_t0=float(t0),
+                    )
+                )
+        else:
+            for strict_name in include_strict or []:
+                new_entries.append(_carry_rule(strict_name))
         # Distilled rulebase clones: fixed NN opponents (opp_model swap, mode =
         # self_snapshot dispatch). Carried positionally — they never rotate.
         prev_distilled = [e for e in self._entries if e.opponent == "distilled"]
@@ -737,6 +768,22 @@ class _PrioritizedOpponentSelector:
         # until the rate floors at the steady-state EMA. Fast warmup, stable tail.
         lr = max(1.0 / e.count, 1.0 - self._ema)
         e.win_ema = (1.0 - lr) * e.win_ema + lr * win_rate
+
+    def sample_among(
+        self, rng: np.random.Generator, idxs: list[int]
+    ) -> tuple[int, _OpponentEntry]:
+        """f_var-weighted sample restricted to `idxs` (a pool category)."""
+        weights = np.array(
+            [_pfsp_weight(self._entries[i].win_ema, self._p, self._mode) for i in idxs]
+        )
+        if weights.sum() <= 0:
+            weights = np.ones(len(idxs))
+        probs = weights / weights.sum()
+        k = int(rng.choice(len(idxs), p=probs))
+        return idxs[k], self._entries[idxs[k]]
+
+    def entries(self) -> list[_OpponentEntry]:
+        return list(self._entries)
 
     def find(self, name: str) -> tuple[int, _OpponentEntry] | None:
         """First entry whose opponent name matches, for forced scheduling.
@@ -858,6 +905,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # PFSP をバイパスして先頭の include_strict エントリを強制選択し、EMA を
     # 更新し続ける (学習者が勝ち始めれば f_var 側でも自然に選択率が回復する)。
     pool_force_strict_every = int(pool_cfg.get("force_strict_every", 0))
+    # strict_ladder: time-window rungs (T0 turns of forced opponent noop) as
+    # SEPARATE pool entries. Mixing ratios (AlphaStar main-agent style):
+    # mix_strict of iters sample among rungs (f_var within), mix_self among
+    # self snapshots, remainder the oldest snapshot (forgetting guard).
+    pool_strict_ladder = [float(x) for x in pool_cfg.get("strict_ladder", []) or []]
+    pool_mix_strict = float(pool_cfg.get("mix_strict", 0.5))
+    pool_mix_self = float(pool_cfg.get("mix_self", 0.35))
+    pool_include_full = bool(pool_cfg.get("include_full", True))
     # Handicap curriculum (training.handicap): scale the learner's initial
     # ships by ladder[idx] on strict-opponent iters only. Win above promote_win
     # → next rung (toward 1.0); below demote_win → back up. h=1.0 everywhere
@@ -873,8 +928,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # gradient at the ladder top, smooth interpolation to the real thing.
     hcap_mode = str(hcap_cfg.get("mode", "weaken"))
     hcap_ladder = [
-        float(x)
-        for x in hcap_cfg.get("ladder", [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0])
+        float(x) for x in hcap_cfg.get("ladder", [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0])
     ]
     hcap_promote = float(hcap_cfg.get("promote_win", 0.6))
     hcap_demote = float(hcap_cfg.get("demote_win", 0.2))
@@ -999,11 +1053,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     if use_priority:
         selector.set_entries(
             pool.models(),
-            include_full=True,
+            include_full=pool_include_full,
             include_lite=pool_include_lite,
             include_v8=pool_include_v8,
             include_strict=pool_include_strict,
             distilled_models=distilled_models,
+            strict_ladder=pool_strict_ladder,
         )
     history: list[dict[str, Any]] = []
     started = time.perf_counter()
@@ -1027,7 +1082,32 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                     and (it - curriculum_switch_iter) % pool_force_strict_every == 0
                 ):
                     forced_hit = selector.find(pool_include_strict[0])
-                if forced_hit is not None:
+                if pool_strict_ladder:
+                    # Ladder-pool mixing (AlphaStar main-agent ratios): sample a
+                    # category first, then f_var within it. Rungs carry their own
+                    # win_ema, so f_var concentrates on the ~0.5 rung — the
+                    # selection distribution itself is the curriculum.
+                    ents = selector.entries()
+                    rung_idxs = [
+                        i
+                        for i, e in enumerate(ents)
+                        if e.weaken_t0 > 0.0
+                        or (e.opponent in pool_include_strict and e.model is None)
+                    ]
+                    snap_idxs = [
+                        i for i, e in enumerate(ents) if e.opponent == "self_snapshot"
+                    ]
+                    u = pool_rng.random()
+                    if rung_idxs and u < pool_mix_strict:
+                        sel_idx, entry = selector.sample_among(pool_rng, rung_idxs)
+                    elif snap_idxs and u < pool_mix_strict + pool_mix_self:
+                        sel_idx, entry = selector.sample_among(pool_rng, snap_idxs)
+                    elif snap_idxs:
+                        # Forgetting guard: the OLDEST snapshot (FIFO head).
+                        sel_idx, entry = snap_idxs[0], ents[snap_idxs[0]]
+                    else:
+                        sel_idx, entry = selector.sample(pool_rng)
+                elif forced_hit is not None:
                     # Forced periodic strict pick (bypasses f_var; see find()).
                     sel_idx, entry = forced_hit
                 else:
@@ -1045,7 +1125,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 iter_opp_model = pool.sample(pool_rng)
         iter_is_strict = iter_opponent in pool_include_strict
         iter_handicap, iter_weaken = 1.0, 0.0
-        if hcap_enabled and iter_is_strict:
+        iter_start_turn = 0.0
+        if pool_strict_ladder and sel_idx >= 0:
+            iter_start_turn = float(selector.entries()[sel_idx].weaken_t0)
+        elif hcap_enabled and iter_is_strict:
             if hcap_mode == "ships":
                 iter_handicap = hcap_ladder[hcap_idx]
             else:
@@ -1080,11 +1163,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             vmpo_cfg=vmpo_cfg,
             handicap=iter_handicap,
             opp_weaken=iter_weaken,
+            opp_start_turn=iter_start_turn,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.
         if use_priority and sel_idx >= 0:
             selector.update(sel_idx, row["win_rate"])
-        if hcap_enabled and iter_is_strict:
+        if pool_strict_ladder and iter_is_strict:
+            row["opp_start_turn"] = iter_start_turn
+        if hcap_enabled and iter_is_strict and not pool_strict_ladder:
             w = float(row["win_rate"])
             if w >= hcap_promote and hcap_idx < len(hcap_ladder) - 1:
                 hcap_idx += 1
@@ -1100,11 +1186,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             if use_priority:
                 selector.set_entries(
                     pool.models(),
-                    include_full=True,
+                    include_full=pool_include_full,
                     include_lite=pool_include_lite,
                     include_v8=pool_include_v8,
                     include_strict=pool_include_strict,
                     distilled_models=distilled_models,
+                    strict_ladder=pool_strict_ladder,
                 )
         row["opponent"] = iter_opponent
         row["algo"] = algo
@@ -1138,9 +1225,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                     horizon=horizon,
                     opponent=ho_name,
                     eval_seed=heldout_eval_seed,
-                    opp_model=(
-                        distilled_models[0] if ho_name == "distilled" else None
-                    ),
+                    opp_model=(distilled_models[0] if ho_name == "distilled" else None),
                 )
                 row[f"heldout_win_{ho_name}"] = ho_win
                 if ho_name == heldout_eval_opponent:

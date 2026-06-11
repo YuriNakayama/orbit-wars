@@ -733,6 +733,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool: 時間窓弱体化 strict の7段を独立 pool エントリ化
+    # (AlphaStar checkpoint-PFSP 流)。50/35/15 混合 + f_var 段選択 + v2 継続学習。
+    "reinforce_case8_vmpo_ladder": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ハンディキャップ・カリキュラム (蒸留不要): 本物 strict_v1
     # と強制対戦 (every:5)、seat0 初期 ships を ladder 3.0→1.0 で勝率連動降下。
     # held-out は h=1.0 の strict_v1 + baseline_jax_full 両観測。

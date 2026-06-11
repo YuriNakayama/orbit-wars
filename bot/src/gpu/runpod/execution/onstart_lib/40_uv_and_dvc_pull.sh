@@ -279,9 +279,11 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   # 参照されるため、per_planet と並べて両親ディレクトリを pull する。
   # 片方に .dvc が無いのは許容 (両方ゼロなら fail)。
   BC_DVCS=()
+  # case8_vmpo_handicap/runs: resume_from (継続学習) 用の前回 run best.pt。
   for BC_RUNS_PARENT in \
     "data/output/models/imitation/case9_per_planet/runs" \
-    "data/output/models/imitation/case9_rulebase/runs"; do
+    "data/output/models/imitation/case9_rulebase/runs" \
+    "data/output/models/reinforce/case8_vmpo_handicap/runs"; do
     echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
     ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
     # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
