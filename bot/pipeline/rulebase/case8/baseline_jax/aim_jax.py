@@ -190,10 +190,7 @@ def _first_engine_hit_turn_jax(
         tf = t.astype(jnp.float32)
         return start_x + cos_a * speed * tf, start_y + sin_a * speed * tf
 
-    def body(
-        carry: tuple[jax.Array, jax.Array], t: jax.Array
-    ) -> tuple[tuple[jax.Array, jax.Array], None]:
-        found, hit_turn = carry
+    def per_turn(t: jax.Array) -> jax.Array:
         active = (t >= start) & (t <= turn_hi)
 
         fx, fy = fleet_at(t)
@@ -216,13 +213,14 @@ def _first_engine_hit_turn_jax(
         hit = _swept_pair_hit_jax(
             fpx, fpy, fx, fy, px_prev, py_prev, px_now, py_now, tr
         )
-        is_hit = active & ok_now & ok_prev & hit
-        take = is_hit & (~found)
-        return (found | take, jnp.where(take, t, hit_turn)), None
+        return active & ok_now & ok_prev & hit
 
-    (found, hit_turn), _ = jax.lax.scan(
-        body, (jnp.bool_(False), jnp.int32(0)), _TURN_GRID
-    )
+    # Each turn's hit predicate is independent; the old scan carry only encoded
+    # "take the FIRST hit". vmap over the grid + argmax (first True index) is
+    # byte-identical and removes a 110-step sequential kernel chain (GPU win).
+    is_hit = jax.vmap(per_turn)(_TURN_GRID)  # (H,) bool
+    found = jnp.any(is_hit)
+    hit_turn = jnp.where(found, _TURN_GRID[jnp.argmax(is_hit)], jnp.int32(0))
     return hit_turn, found
 
 
@@ -307,13 +305,9 @@ def _search_safe_intercept_jax(
     `(hit_turn, |hit_turn - candidate|)` score.
     """
 
-    def body(
-        carry: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    def per_candidate(
         cand: jax.Array,
-    ) -> tuple[
-        tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], None
-    ]:
-        best_h, best_d, best_angle, best_turn, best_ix, best_iy = carry
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         in_range = cand <= max_turns.astype(jnp.float32)
 
         # predict_target_position_fractional(target, cand)
@@ -381,30 +375,31 @@ def _search_safe_intercept_jax(
         valid = in_range & lo_ok & hit_ok & actual_ok
         score_h = jnp.where(valid, hit_turn, jnp.int32(2**30))
         score_d = jnp.where(valid, jnp.abs(hit_turn.astype(jnp.float32) - cand), _BIG)
-        better = (score_h < best_h) | ((score_h == best_h) & (score_d < best_d))
-        take = valid & better
+        return score_h, score_d, angle, hit_turn, ax, ay
 
-        return (
-            jnp.where(take, score_h, best_h),
-            jnp.where(take, score_d, best_d),
-            jnp.where(take, angle, best_angle),
-            jnp.where(take, hit_turn, best_turn),
-            jnp.where(take, ax, best_ix),
-            jnp.where(take, ay, best_iy),
-        ), None
-
-    init = (
-        jnp.int32(2**30),
-        jnp.float32(_BIG),
-        jnp.float32(0.0),
-        jnp.int32(0),
-        jnp.float32(0.0),
-        jnp.float32(0.0),
+    # The old 219-step scan carried a lexicographic-best (score_h, score_d) with
+    # first-wins ties (strict `<`). Each candidate is independent — and the scan
+    # NESTED the 110-step engine-hit scan per candidate (219x110 sequential
+    # launches: the engine lineage's dominant GPU chain). vmap over candidates
+    # collapses the outer chain to wide kernels; the two-stage argmin below picks
+    # min score_h, then min score_d, then FIRST index — exactly the scan's order.
+    # lax.map(batch_size=...) = chunked vmap: same per-candidate values (hence
+    # identical argmin result) but caps the materialized intermediates — a full
+    # 219-wide vmap of the inner 110-turn hit test OOMs at game-batch scale.
+    score_h, score_d, angle_a, turn_a, ax_a, ay_a = jax.lax.map(
+        per_candidate, _CANDIDATE_TURNS, batch_size=32
     )
-    (best_h, _bd, best_angle, best_turn, best_ix, best_iy), _ = jax.lax.scan(
-        body, init, _CANDIDATE_TURNS
-    )
-    valid = (best_h < 2**30) & (max_turns > 0)
+    min_h = jnp.min(score_h)
+    d_masked = jnp.where(score_h == min_h, score_d, jnp.float32(jnp.inf))
+    best = jnp.argmin(d_masked)  # first occurrence == scan's first-wins tie-break
+    found = min_h < 2**30
+    valid = found & (max_turns > 0)
+    # Mask outputs to the scan's init values when nothing was taken (byte parity
+    # on the invalid path too).
+    best_angle = jnp.where(found, angle_a[best], jnp.float32(0.0))
+    best_turn = jnp.where(found, turn_a[best], jnp.int32(0))
+    best_ix = jnp.where(found, ax_a[best], jnp.float32(0.0))
+    best_iy = jnp.where(found, ay_a[best], jnp.float32(0.0))
     return best_angle, best_turn, best_ix, best_iy, valid
 
 

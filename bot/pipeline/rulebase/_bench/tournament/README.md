@@ -60,6 +60,121 @@ ranking driver を pod で dry-run（3 agent `[v8,v4,v1]` / 8 seed/half / **h120
 ではなく、agent 側の **grid nested-vmap 自体の削減**（action 一致性に影響、別タスク）が必須。
 → 既存の [[project_jax_strict_tournament_perturn_bound]] の結論を再確認。
 
+## ★ allocator truncation の GPU 実測（2026-06-11 / RTX 4090）— 幾何系で 15-18x 達成
+
+「flops 不変=デバイス非依存で無効」とした先行判断は**誤り**だった。GPU の per-turn コストは
+flops ではなく**逐次カーネル起動チェーン**（scan step 数 × 起動レイテンシ）であり、allocator の
+N=4608 scan を top-K に truncate（恒等保存: tail は `-inf` no-op、回帰テスト 2/2 + 40/40 state で
+action byte 一致）すると **GPU で激減**する:
+
+| K | batch | per-turn | speedup |
+|---|--:|--:|--:|
+| 4608（原本）| 8 | 11.12 s | 1.0x |
+| 256 | 8 | 1.06 s | 10.5x |
+| **64** | 8 | **0.61 s** | **18.3x** |
+| 256 | 64 | 1.20 s | 9.3x |
+| **64** | 64 | **0.72 s** | **15.5x** |
+
+`MAX_ALLOC_CANDIDATES=64`（valid 候補実測 max=10 の 6x マージン）を**全8 case** の allocator に
+適用済（commit `fe658c65` 系列）。CPU では 1 step ≈ μs（起動 overhead 無）のため効果が見えず
+1.00x — **CPU 計測で GPU 効果を否定してはならない**（本件の最重要教訓）。
+
+### ランキング本番（h500 / 100seed×2席 / 隣接5比較）→ エンジン再生系で中断
+
+- 幾何系 (case1) は 0.61-0.72 s/turn を確認しゲート（≤3s）通過。
+- しかし本番 cmp1 = **jax_v8 vs jax_v6（エンジン再生 aim 系×2）が ~3.7h でも未完**（GPU 85-89% で
+  健全計算中、per-turn **>13 s**）。truncation 後もエンジン再生系には allocator 以外の長い逐次
+  チェーン（engine-sweep aim / harass grid / STAY 等）が残存し、**aim 系統間で per-turn が ~18x 乖離**:
+
+| aim 系統 | per-turn (K=64) |
+|---|--:|
+| 幾何（case1/2/3）| 0.61-0.72 s |
+| エンジン再生（case4/6/8/9）| **>13 s** |
+
+- projection >14h のため loop 指令に従い**中断・pod 停止**（課金 ~4h ≈ $2.8）。
+- jaxpr 解析で乖離を定量化: **case8=6,831 逐次 scan step vs case1=1,978**（case8 は 110×44 本 +
+  **219×8 本の half-step sweep** が追加）。逐次 3.5x × per-step の重さ ≈ 観測 18x と整合。
+- **次の一手**: エンジン再生系の逐次チェーン削減（重複 110-scan の共有化など、識別性ゲート付き）
+  → 全 6 agent ランキング再実行。
+
+## ★ 幾何系部分ランキング結果（2026-06-11 / RTX 4090 / h500 / 100 seed×2席）
+
+truncation 済み幾何系 3 agent のランキングが **28 分で完走**（2 比較 × 200 戦 = 400 戦）:
+
+| rank | agents |
+|---|---|
+| 1 | **jax_v3, jax_v2, jax_v1（統計的同強・1 バケット）** |
+
+| # | A | B | A勝 | B勝 | win% | 95% CI | verdict |
+|---|---|---|--:|--:|--:|---|---|
+| 1 | jax_v3 | jax_v2 | 100 | 100 | 0.500 | [0.431, 0.569] | tie |
+| 2 | jax_v3 | jax_v1 | 99 | 101 | 0.495 | [0.426, 0.564] | tie |
+
+- v3-v2 が tie → 同バケット → 代表 v3 と v1 を比較 → tie → **3 agent 全てが 1 バケットに収束**。
+  「ほぼ同強の case が存在する」という事前知識と整合（case1/2/3 は同系統の漸進改良）。
+- 実測スループット: per-half 414-424s（100 戦, h500）= **0.83s/turn @batch100**。
+  **1 比較 ≈ 14 分 → 「各 300 対戦を 20 分以内」は幾何系で達成**（300 戦でも batch を埋めれば
+  turn 数は不変のため wall-clock ほぼ同じ）。
+- 総コスト: pod ~45 分 ≈ $0.5。
+
+## ★★ 最終ランキング結果（2026-06-11 / 全 6 JAX agent / h500 / 各 200 戦）
+
+エンジン再生系の **219×110 ネスト scan**（`_search_safe_intercept` 内の engine-hit scan、
+~24,000 逐次起動 = エンジン系 18x 遅の真因）を vmap+argmin に vectorize（恒等 32/32、
+OOM は `lax.map(batch_size=32)` で解消）した結果、エンジン系比較も ~20-25 分/比較で完走:
+
+| # | 比較 | 戦績 | win% CI | verdict | 所要 |
+|---|---|---|---|---|--:|
+| 1 | v3 vs v2 | 100-100 | [0.431, 0.569] | tie | 14 分 |
+| 2 | v3 vs v1 | 99-101 | [0.426, 0.564] | tie | 14 分 |
+| 3 | v8 vs v6 | 97-103 | [0.417, 0.554] | tie | 24.5 分 |
+| 4 | v8 vs v4 | 100-100 | [0.431, 0.569] | tie | 24.6 分 |
+| 5 | v8 vs v3 | 101-99 | [0.436, 0.574] | tie | 19.6 分 |
+
+### 最終順位表
+
+| rank | agents |
+|---|---|
+| 1 | **jax_v8, jax_v6, jax_v4, jax_v3, jax_v2, jax_v1（全 6 agent 統計的同強・単一バケット）** |
+
+- 隣接 4 比較 + 連結比較（v8-v3）の全てが tie。**「case 番号大 ≈ 強」の事前順位は n=200/比較の
+  解像度（CI 幅 ±7pp）では検出されない** — 過去の ablation が示した case 間差（±数 pp）は
+  この検出閾値未満であり、「ほぼ同強の case が存在する」という事前知識が全ペアに該当した。
+- より細かい順位付けには 1 比較あたり n を桁で増やす必要がある（±2pp 分解能 ≈ n=2,400/比較。
+  現速度なら 1 比較 ~4-5 時間で実行可能）。
+- 総実行時間: 幾何 2 比較 28 分 + エンジン 3 比較 69 分 ≈ **97 分 / 1,000 戦**（コスト ~$2）。
+  当初の「各 300 対戦を 20 分以内」は幾何系ペアで達成、エンジン系ペアは ~25 分/200 戦。
+
+### 適用した高速化の最終台帳（全て action 恒等・ゲート付き）
+
+| 施策 | 恒等性 | GPU 効果 |
+|---|---|---|
+| allocator scan top-K=64（全 8 case）| 2/2 pytest + 40/40 | 幾何系 **15-18x**（11.1s → 0.61-0.83s/turn）|
+| aim first-hit scan → vmap+argmax（4 case）| 32/32 | ネスト解消に寄与 |
+| 219 候補 intercept → lax.map+argmin（4 case）| 32/32 | エンジン系 **~9x**（>13s → ~1.5s/turn）|
+| grid live-source gather（case1）| 96/96 | 1.05x（小）|
+
+### 残課題: エンジン再生系の逐次チェーン削減（帰属解析済・実装待ち）
+
+`engine_scan_attribution.py` による case8 のコンポーネント別逐次 step 帰属:
+
+| component | 逐次 steps | 内訳 |
+|---|--:|---|
+| build_{capture,snipe,harass}_grid | 1,684×3 | 各 **219×2 + 110×11**（cell 内 plan_shot×2 起因）|
+| run_followup_pass | 1,602 | followup も plan_shot を実行（219×2 + 110×10）|
+| 1 plan_shot | 667 | **219×1（half-step engine sweep）+ 110×4（aim + 安全ゲート3種が別 scan）** |
+| _run_mission_scan | 174 | ✅ K=64 truncate 済 |
+
+識別性保存の削減設計（推定合計 ~70% 減 → per-turn ~13s → ~3s 圏）:
+1. **ゲート fused-scan 統合**（−2,640 steps）: aim / sun-safe / intercept / comet-cross の 110-scan
+   4 本は同じ turn 軸を独立に走るため、tuple carry の 1 scan に統合しても同値。
+2. **219 half-step sweep の共有**（−~1,500）: sweep が ships 非依存（target 軌道のみ依存）なら
+   per-target に hoist して 3 grid × 2 call で共有可（要依存性確認）。
+3. **base_timelines hoist**（−700）: case1 で実証済みの doc#1 hoist を case8 系へ。
+
+実装順: case8 で 1→3→2 を適用 → 恒等テスト（hybrid vs full の action 比較）→ GPU smoke で
+per-turn 確認 → case4/6/9 へ横展開 → 残り 3 隣接比較（v8-v6, v6-v4, v4-v3）で全 6 agent 完成。
+
 ## 実行時間の調査結果（2026-06-09 / RTX 4090 実測 + 解析）
 
 **結論: 現状の agent では「各 300 対戦を 20 分以内」は物理的に不可能。**
