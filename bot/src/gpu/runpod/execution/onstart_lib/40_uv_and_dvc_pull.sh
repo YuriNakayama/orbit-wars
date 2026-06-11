@@ -281,10 +281,12 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   BC_DVCS=()
   BC_SKIPPED=0
   # case8_vmpo_handicap/runs: resume_from (継続学習) 用の前回 run best.pt。
+  # reinforce/*/runs は resume_from (継続学習) 用 — glob で全 case を網羅
+  # (ladder/ladder2/... と iteration 毎に増えるため列挙しない)。
   for BC_RUNS_PARENT in \
     "data/output/models/imitation/case9_per_planet/runs" \
     "data/output/models/imitation/case9_rulebase/runs" \
-    "data/output/models/reinforce/case8_vmpo_handicap/runs"; do
+    data/output/models/reinforce/*/runs; do
     echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
     ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
     # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。

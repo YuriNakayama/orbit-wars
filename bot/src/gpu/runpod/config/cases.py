@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter3: mix_strict 0.6 (フロンティア対戦密度up)。
+    "reinforce_case8_vmpo_ladder3": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder3",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder3.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter2: フロンティア (300-200) 周辺を細分化した
     # 9段 ladder + iter1 best.pt からの resume。
     "reinforce_case8_vmpo_ladder2": {
