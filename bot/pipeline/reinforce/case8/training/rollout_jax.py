@@ -607,10 +607,15 @@ def _rollout_one_env(
         drop = jax.random.bernoulli(k_weaken, opp_weaken) | (
             t.astype(jnp.float32) < opp_start_turn
         )
-        opp_actions = jax.lax.cond(
+        # NOTE: a lax.cond wrapping the switch (lazy skip of the opponent
+        # compute on gated turns) made XLA compile pathological (>41min vs
+        # ~11min, run 20260611-133140 aborted). Post-hoc masking keeps the
+        # always-compute cost (~195s per strict rung iter regardless of T0)
+        # but compiles in the proven envelope.
+        opp_actions = jnp.where(
             drop,
-            lambda: jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
-            _opp_actions_switch,
+            jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
+            _opp_actions_switch(),
         )
         # Splice into env_actions row for opponent seat only when not noop.
         env_actions = jax.lax.cond(
