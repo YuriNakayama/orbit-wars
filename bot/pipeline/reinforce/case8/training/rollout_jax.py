@@ -464,6 +464,7 @@ def _rollout_one_env(
     time_bonus_coef: float,
     time_penalty_coef: float,
     opp_model: ActorCriticJax,
+    opp_weaken: jax.Array,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -532,7 +533,7 @@ def _rollout_one_env(
             key,
             ep_outcome,
         ) = carry
-        key, k_sample = jax.random.split(key)
+        key, k_sample, k_weaken = jax.random.split(key, 3)
         batch = featurize_jax_w1(state, player=seat, history=history)
         output = model(batch)
         action = sample_action_jax(output, batch.my_planet_mask, k_sample)
@@ -587,6 +588,20 @@ def _rollout_one_env(
                 lambda: _strict_v2_actions(state, 1 - seat),
                 lambda: _strict_v3_actions(state, 1 - seat),
             ],
+        )
+        # ε-weakening curriculum: with prob `opp_weaken` this TURN, replace the
+        # opponent's actions with the empty row (a forced noop turn). ε=1.0
+        # degrades any opponent to noop (learner already beats noop ~0.8 —
+        # guaranteed gradient at the ladder top); ε=0.0 is the exact identity.
+        # Traced scalar → annealing ε never recompiles. Material handicap
+        # (initial-ships) was refuted for from-scratch policies (phaseB: h=3.0
+        # still 0/64 — a passive policy cannot leverage material), so the
+        # curriculum dimension is opponent competence instead.
+        drop = jax.random.bernoulli(k_weaken, opp_weaken)
+        opp_actions = jnp.where(
+            drop,
+            jnp.full((MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32),
+            opp_actions,
         )
         # Splice into env_actions row for opponent seat only when not noop.
         env_actions = jax.lax.cond(
@@ -786,6 +801,7 @@ def collect_rollout_jax(
     time_penalty_coef: float = 0.0,
     opp_model: ActorCriticJax | None = None,
     handicap: float = 1.0,
+    opp_weaken: float = 0.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -870,6 +886,7 @@ def collect_rollout_jax(
         time_bonus_coef,
         time_penalty_coef,
         effective_opp_model,
+        jnp.float32(opp_weaken),
     )
 
 
@@ -903,6 +920,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
         time_bonus_coef: float,
         time_penalty_coef: float,
         opp_model: ActorCriticJax,
+        opp_weaken: jax.Array,
     ) -> JaxRolloutBatch:
         return _rollout_one_env(
             model,
@@ -921,6 +939,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             time_bonus_coef,
             time_penalty_coef,
             opp_model,
+            opp_weaken,
         )
 
     vmapped = jax.vmap(
@@ -940,6 +959,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             None,  # time_bonus_coef
             None,  # time_penalty_coef
             None,  # opp_model
+            None,  # opp_weaken (traced scalar, shared)
         ),
     )
     return eqx.filter_jit(vmapped)

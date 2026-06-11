@@ -451,6 +451,7 @@ def _run_iter(
     vp: VMPOParams | None = None,
     vmpo_cfg: VMPOConfigJax | None = None,
     handicap: float = 1.0,
+    opp_weaken: float = 0.0,
 ) -> tuple[ActorCriticJax, Any, VMPOParams | None, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -474,6 +475,7 @@ def _run_iter(
         time_penalty_coef=time_penalty_coef,
         opp_model=opp_model,
         handicap=handicap,
+        opp_weaken=opp_weaken,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -864,6 +866,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # naturally selectable instead of zeroing out on all-loss matches.
     hcap_cfg = t_cfg.get("handicap", {}) or {}
     hcap_enabled = bool(hcap_cfg.get("enabled", False))
+    # mode="ships": scale learner's initial ships by ladder[idx] (REFUTED for
+    # from-scratch policies — phaseB h=3.0 still 0/64; a passive policy cannot
+    # leverage material). mode="weaken": opponent action-dropout prob ladder
+    # (1.0 = noop ≈ already-beatable, 0.0 = the real opponent) — guaranteed
+    # gradient at the ladder top, smooth interpolation to the real thing.
+    hcap_mode = str(hcap_cfg.get("mode", "weaken"))
     hcap_ladder = [
         float(x)
         for x in hcap_cfg.get("ladder", [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0])
@@ -1036,9 +1044,12 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 iter_opponent = "self_snapshot"
                 iter_opp_model = pool.sample(pool_rng)
         iter_is_strict = iter_opponent in pool_include_strict
-        iter_handicap = (
-            hcap_ladder[hcap_idx] if (hcap_enabled and iter_is_strict) else 1.0
-        )
+        iter_handicap, iter_weaken = 1.0, 0.0
+        if hcap_enabled and iter_is_strict:
+            if hcap_mode == "ships":
+                iter_handicap = hcap_ladder[hcap_idx]
+            else:
+                iter_weaken = hcap_ladder[hcap_idx]
         key, k_iter = jax.random.split(key)
         model, opt_state, vp, row = _run_iter(
             model,
@@ -1068,6 +1079,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             vp=vp,
             vmpo_cfg=vmpo_cfg,
             handicap=iter_handicap,
+            opp_weaken=iter_weaken,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.
         if use_priority and sel_idx >= 0:
@@ -1079,6 +1091,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             elif w <= hcap_demote and hcap_idx > 0:
                 hcap_idx -= 1
             row["handicap"] = iter_handicap
+            row["opp_weaken"] = iter_weaken
             row["handicap_idx"] = hcap_idx
         # H2/H4: refresh the pool with the just-updated model every K iters so
         # the opponent distribution tracks the learner instead of staying frozen.
