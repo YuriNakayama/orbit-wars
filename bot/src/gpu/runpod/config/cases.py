@@ -733,6 +733,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter2: フロンティア (300-200) 周辺を細分化した
+    # 9段 ladder + iter1 best.pt からの resume。
+    "reinforce_case8_vmpo_ladder2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder2",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder2.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool: 時間窓弱体化 strict の7段を独立 pool エントリ化
     # (AlphaStar checkpoint-PFSP 流)。50/35/15 混合 + f_var 段選択 + v2 継続学習。
     "reinforce_case8_vmpo_ladder": {
