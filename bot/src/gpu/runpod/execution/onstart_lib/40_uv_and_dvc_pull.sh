@@ -279,6 +279,7 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   # 参照されるため、per_planet と並べて両親ディレクトリを pull する。
   # 片方に .dvc が無いのは許容 (両方ゼロなら fail)。
   BC_DVCS=()
+  BC_SKIPPED=0
   # case8_vmpo_handicap/runs: resume_from (継続学習) 用の前回 run best.pt。
   for BC_RUNS_PARENT in \
     "data/output/models/imitation/case9_per_planet/runs" \
@@ -288,16 +289,27 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
     ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
     # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
     while IFS= read -r dvc_f; do
+      # /persist は pod 間で再利用されるため、その volume 上で学習した run dir
+      # は既に best.pt を持つ (しかも per-iter ckpt 等 manifest 外ファイル入り
+      # で dvc checkout が衝突する)。weights が既にあれば pull 不要。
+      tgt="${dvc_f%.dvc}"
+      if [ -f "${tgt}/best.pt" ]; then
+        echo "[onstart] BC pull SKIP ${dvc_f} (best.pt already on volume)"
+        BC_SKIPPED=$((BC_SKIPPED + 1))
+        continue
+      fi
       BC_DVCS+=("${dvc_f}")
     done < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
   done
-  if [ ${#BC_DVCS[@]} -eq 0 ]; then
-    echo "[onstart] reinforce BC pull: no .dvc files under either runs parent" >&2
+  if [ ${#BC_DVCS[@]} -eq 0 ] && [ "${BC_SKIPPED:-0}" -eq 0 ]; then
+    echo "[onstart] reinforce BC pull: no .dvc files under any runs parent" >&2
     mark "45_dvc_pull_reinforce_bc_missing"
     exit 1
   fi
-  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} .dvc files to fetch"
-  if ! ${DVC_BIN} pull -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
+  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} to fetch (${BC_SKIPPED:-0} skipped on-volume)"
+  if [ ${#BC_DVCS[@]} -eq 0 ]; then
+    echo "[onstart] reinforce BC pull: nothing to fetch"
+  elif ! ${DVC_BIN} pull --force -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
     echo "[onstart] dvc pull (reinforce BC) FAILED" >&2
     mark "45_dvc_pull_reinforce_bc_failed"
     exit 1
