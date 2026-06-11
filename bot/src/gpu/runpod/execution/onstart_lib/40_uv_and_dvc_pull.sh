@@ -309,12 +309,21 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
     exit 1
   fi
   echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} to fetch (${BC_SKIPPED:-0} skipped on-volume)"
-  if [ ${#BC_DVCS[@]} -eq 0 ]; then
-    echo "[onstart] reinforce BC pull: nothing to fetch"
-  elif ! ${DVC_BIN} pull --force -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
-    echo "[onstart] dvc pull (reinforce BC) FAILED" >&2
-    mark "45_dvc_pull_reinforce_bc_failed"
-    exit 1
+  # Per-stub TOLERANT pulls: a single conflicting stub (e.g. stale robot-pushed
+  # run dirs from old phases) must not kill the launch. The only hard
+  # requirement is the resume_from weights, which train_jax._maybe_resume
+  # checks explicitly (raises FileNotFoundError with the exact path) — so a
+  # missing pull surfaces as a clear python error instead of a blind 45 mark.
+  BC_PULL_FAILED=0
+  for dvc_f in "${BC_DVCS[@]}"; do
+    if ! ${DVC_BIN} pull --force "${dvc_f}" 2>&1 | tail -5; then
+      echo "[onstart] WARN: dvc pull failed for ${dvc_f} (continuing)" >&2
+      BC_PULL_FAILED=$((BC_PULL_FAILED + 1))
+    fi
+  done
+  if [ "${BC_PULL_FAILED}" -gt 0 ]; then
+    echo "[onstart] reinforce BC pull: ${BC_PULL_FAILED} stub(s) failed (tolerated)"
+    mark "45_dvc_pull_reinforce_bc_partial"
   fi
   echo "[onstart] reinforce BC pull complete; verifying best.pt..."
   find data/output/models/imitation -name "best.pt" -maxdepth 4 2>&1 | head -8
