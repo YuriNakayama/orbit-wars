@@ -785,6 +785,7 @@ def collect_rollout_jax(
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
     opp_model: ActorCriticJax | None = None,
+    handicap: float = 1.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -829,6 +830,22 @@ def collect_rollout_jax(
     # deterministic per seed, mirroring the old `seed + i` scheme.
     reset_keys = jax.random.split(jax.random.PRNGKey(seed), episodes_per_iter)
     batched_state = jax.vmap(lambda rk: reset_jax(rk, num_agents=2))(reset_keys)
+    # Handicap curriculum: scale the learner seat's initial planet ships by
+    # `handicap` (h>1 manufactures winnable games vs an otherwise-unbeatable
+    # fixed opponent, solving the all-loss zero-gradient problem; anneal h→1.0
+    # as the win rate rises). Applied OUTSIDE the jitted rollout as a tiny
+    # elementwise op on the batched reset state, so changing h never triggers
+    # a recompile. h=1.0 is the exact identity (round(x*1.0)==x for ints).
+    if handicap != 1.0:
+        ships = batched_state.planet_ships
+        boosted = jnp.round(ships.astype(jnp.float32) * jnp.float32(handicap))
+        batched_state = batched_state._replace(
+            planet_ships=jnp.where(
+                batched_state.planet_owner == seat,
+                boosted.astype(ships.dtype),
+                ships,
+            )
+        )
 
     # W7: jit the vmapped rollout. Without jit the vmap(lax.scan over `horizon`
     # steps) runs eager — every per-step op dispatches from Python and syncs back

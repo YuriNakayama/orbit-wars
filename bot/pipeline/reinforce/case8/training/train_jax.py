@@ -450,6 +450,7 @@ def _run_iter(
     algo: str = "ppo",
     vp: VMPOParams | None = None,
     vmpo_cfg: VMPOConfigJax | None = None,
+    handicap: float = 1.0,
 ) -> tuple[ActorCriticJax, Any, VMPOParams | None, dict[str, Any]]:
     rollout_key, update_key = jax.random.split(key)
 
@@ -472,6 +473,7 @@ def _run_iter(
         time_bonus_coef=time_bonus_coef,
         time_penalty_coef=time_penalty_coef,
         opp_model=opp_model,
+        handicap=handicap,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -854,6 +856,21 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # PFSP をバイパスして先頭の include_strict エントリを強制選択し、EMA を
     # 更新し続ける (学習者が勝ち始めれば f_var 側でも自然に選択率が回復する)。
     pool_force_strict_every = int(pool_cfg.get("force_strict_every", 0))
+    # Handicap curriculum (training.handicap): scale the learner's initial
+    # ships by ladder[idx] on strict-opponent iters only. Win above promote_win
+    # → next rung (toward 1.0); below demote_win → back up. h=1.0 everywhere
+    # else (pool/self/heldout are unhandicapped). Side benefit: the strict
+    # entry's win_ema is measured UNDER handicap (~0.2-0.8), so f_var keeps it
+    # naturally selectable instead of zeroing out on all-loss matches.
+    hcap_cfg = t_cfg.get("handicap", {}) or {}
+    hcap_enabled = bool(hcap_cfg.get("enabled", False))
+    hcap_ladder = [
+        float(x)
+        for x in hcap_cfg.get("ladder", [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0])
+    ]
+    hcap_promote = float(hcap_cfg.get("promote_win", 0.6))
+    hcap_demote = float(hcap_cfg.get("demote_win", 0.2))
+    hcap_idx = int(hcap_cfg.get("start_idx", 0))
     # distilled_weights: BC clones of real rulebases loaded as fixed NN pool
     # opponents (opp_model swap — ms forward, no host callback / strict-graph
     # cost). heldout_eval.opponent="distilled" reuses the first clone.
@@ -1018,6 +1035,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             else:
                 iter_opponent = "self_snapshot"
                 iter_opp_model = pool.sample(pool_rng)
+        iter_is_strict = iter_opponent in pool_include_strict
+        iter_handicap = (
+            hcap_ladder[hcap_idx] if (hcap_enabled and iter_is_strict) else 1.0
+        )
         key, k_iter = jax.random.split(key)
         model, opt_state, vp, row = _run_iter(
             model,
@@ -1046,10 +1067,19 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             algo=algo,
             vp=vp,
             vmpo_cfg=vmpo_cfg,
+            handicap=iter_handicap,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.
         if use_priority and sel_idx >= 0:
             selector.update(sel_idx, row["win_rate"])
+        if hcap_enabled and iter_is_strict:
+            w = float(row["win_rate"])
+            if w >= hcap_promote and hcap_idx < len(hcap_ladder) - 1:
+                hcap_idx += 1
+            elif w <= hcap_demote and hcap_idx > 0:
+                hcap_idx -= 1
+            row["handicap"] = iter_handicap
+            row["handicap_idx"] = hcap_idx
         # H2/H4: refresh the pool with the just-updated model every K iters so
         # the opponent distribution tracks the learner instead of staying frozen.
         if use_pool and (it + 1) % pool_snapshot_every == 0:

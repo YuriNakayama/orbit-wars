@@ -733,6 +733,19 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ハンディキャップ・カリキュラム (蒸留不要): 本物 strict_v1
+    # と強制対戦 (every:5)、seat0 初期 ships を ladder 3.0→1.0 で勝率連動降下。
+    # held-out は h=1.0 の strict_v1 + baseline_jax_full 両観測。
+    "reinforce_case8_vmpo_handicap": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_handicap",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_handicap.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 合流構成: 蒸留クローン (教師+常設NN相手) + strict_v1
     # (10iter毎の強制 pool 対戦 + held-out yardstick)。実証済み3部品の合流。
     "reinforce_case8_vmpo_combo": {

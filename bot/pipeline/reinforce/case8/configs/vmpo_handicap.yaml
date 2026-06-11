@@ -1,0 +1,85 @@
+# ============================================================================
+# 蒸留不要計画 Phase B: ハンディキャップ・カリキュラム × 本物 strict_v1。
+#
+# phase1_v8_gate.md の結論 (BC クローンは忠実度律速で 0%) を受け、クローンを
+# 一切使わず「本物 strict_v1 とだけ戦う」。全敗ゼロ勾配は初期 ships ハンディ
+# (ladder 3.0→1.0、勝率連動昇降) で解決する。
+#   - 強制 strict 対戦 every:5 (10回/50iter、各 ~170s) がカリキュラム駆動
+#   - held-out は h=1.0 の [strict_v1, baseline_jax_full] 両観測 (真のものさし)
+#   - pool = in-JAX lite/full + self snapshots (量的学習の主体、f_var 0.5 維持)
+# 検証ゲート: ある h で強制 strict 勝率が 0.2-0.8 帯に入り h が降下すること。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  iterations: 50
+  episodes_per_iter: 64
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/49 の6点 (warm ~3分/eval)
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: true            # strict iter のみ seat0 初期 ships を ladder[idx] 倍
+    ladder: [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0]
+    promote_win: 0.6         # 強制 strict 勝率がこれ以上 → 次段 (1.0 へ)
+    demote_win: 0.2          # これ以下 → 前段へ戻る
+    start_idx: 0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: true
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 5    # 強制 strict 対戦: iter 4/9/14/.../49 (10回) — カリキュラムの主駆動
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
