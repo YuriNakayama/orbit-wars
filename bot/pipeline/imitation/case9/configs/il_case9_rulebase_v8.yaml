@@ -17,7 +17,7 @@ data:
   rating_quantile: 0.0
   val_split: 0.10
   modes: ["1v1"]
-  max_episodes: 1200
+  max_episodes: 2000
   winners_only: false
   teacher_agents: [baseline_v8]  # v8 側スロットのみ教師 (v1 側は捨てる)
   top_team_rank: 0        # selfplay に team_rank はない
