@@ -805,7 +805,15 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # FIXED opponent (matchmaking-free absolute progress). 0 disables.
     heldout_cfg = t_cfg.get("heldout_eval", {}) or {}
     heldout_eval_every = int(heldout_cfg.get("every", 0))
-    heldout_eval_opponent = str(heldout_cfg.get("opponent", "baseline_jax_full"))
+    # `opponents:` (list) evaluates multiple fixed yardsticks per eval iter —
+    # e.g. [strict_v1, baseline_jax_full] tracks both the hard true-strength
+    # target and a softer opponent where movement is detectable early. Falls
+    # back to the single `opponent:` key. The FIRST entry anchors Elo and the
+    # back-compat `heldout_win` metric.
+    heldout_eval_opponents = [
+        str(o) for o in heldout_cfg.get("opponents", []) or []
+    ] or [str(heldout_cfg.get("opponent", "baseline_jax_full"))]
+    heldout_eval_opponent = heldout_eval_opponents[0]
     heldout_eval_episodes = int(heldout_cfg.get("episodes", 32))
     heldout_eval_seed = int(heldout_cfg.get("seed", 777_000))
 
@@ -907,13 +915,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             d_missing,
         )
         distilled_models.append(dm)
-    if heldout_eval_opponent == "distilled" and not distilled_models:
+    if "distilled" in heldout_eval_opponents and not distilled_models:
         raise ValueError(
-            "heldout_eval.opponent='distilled' requires opponent_pool.distilled_weights"
+            "heldout_eval opponent 'distilled' requires opponent_pool.distilled_weights"
         )
-    heldout_opp_model = (
-        distilled_models[0] if heldout_eval_opponent == "distilled" else None
-    )
 
     # Build optimizer + opt_state. For V-MPO the optimizer also covers the
     # learnable Lagrange scalars (vp = η/α), so opt_state is over (model, vp).
@@ -1081,20 +1086,26 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         if heldout_eval_every > 0 and (
             it % heldout_eval_every == 0 or it == iterations - 1
         ):
-            key, k_eval = jax.random.split(key)
-            heldout_win = _heldout_eval(
-                model,
-                k_eval,
-                episodes=heldout_eval_episodes,
-                horizon=horizon,
-                opponent=heldout_eval_opponent,
-                eval_seed=heldout_eval_seed,
-                opp_model=heldout_opp_model,
-            )
-            agent_elo = _elo_update(agent_elo, elo_ref, heldout_win, elo_k)
-            row["heldout_win"] = heldout_win
-            row["heldout_opponent"] = heldout_eval_opponent
-            row["agent_elo"] = agent_elo
+            for ho_name in heldout_eval_opponents:
+                key, k_eval = jax.random.split(key)
+                ho_win = _heldout_eval(
+                    model,
+                    k_eval,
+                    episodes=heldout_eval_episodes,
+                    horizon=horizon,
+                    opponent=ho_name,
+                    eval_seed=heldout_eval_seed,
+                    opp_model=(
+                        distilled_models[0] if ho_name == "distilled" else None
+                    ),
+                )
+                row[f"heldout_win_{ho_name}"] = ho_win
+                if ho_name == heldout_eval_opponent:
+                    # First opponent anchors Elo + the back-compat keys.
+                    agent_elo = _elo_update(agent_elo, elo_ref, ho_win, elo_k)
+                    row["heldout_win"] = ho_win
+                    row["heldout_opponent"] = ho_name
+                    row["agent_elo"] = agent_elo
         history.append(row)
         logger.info(
             (

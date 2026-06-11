@@ -97,6 +97,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # case9_rulebase_v8: baseline_v8 (v1 に勝率 ~70-75%) の蒸留。v8 vs v1 混合
+    # 対戦から teacher_agents=[baseline_v8] で v8 側のみ教師化 (Phase 1)。
+    "case9_rulebase_v8": {
+        "stage": "train_imitation_case9_rulebase_v8",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_rulebase_v8.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     "case9_candidate": {
         "stage": "train_imitation_case9_candidate",
         "train_module": "pipeline.imitation.case9.training.train",

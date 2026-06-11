@@ -30,7 +30,7 @@ training:
   algo: vmpo
   seed: 0
   iterations: 50
-  episodes_per_iter: 32
+  episodes_per_iter: 64
   horizon: 500
   lr: 3.0e-5
   lr_end: 3.0e-6
@@ -52,8 +52,8 @@ training:
   target_kl: 0.02
   heldout_eval:
     every: 10                # iter 0/10/20/30/40/49 の6点 (warm ~3分/eval)
-    opponent: strict_v1      # 真の強さ yardstick (本物 ~90% parity)
-    episodes: 32             # バッチ償却で eval 時間は 16ep とほぼ同じ
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
     seed: 777000
     ref_elo: 1500.0
     agent_elo_init: 1500.0
