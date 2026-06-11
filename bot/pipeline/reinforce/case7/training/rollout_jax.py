@@ -39,6 +39,15 @@ from pipeline.rulebase.case1.baseline_jax import (
 from pipeline.rulebase.case1.baseline_jax.core_jax.agent_full_jax import (
     compute_actions_jax as _baseline_core_jax_actions,
 )
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    _modes_from_features as _strict_v1_modes,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.agent_jax import (
+    compute_actions as _strict_v1_compute_actions,
+)
+from pipeline.rulebase.case1.baseline_jax.strict.world_features import (
+    build_world_features_from_state as _strict_v1_features,
+)
 from pipeline.rulebase.case1.baseline_jax_full import (
     compute_actions_jax as _baseline_jax_full_actions,
 )
@@ -67,6 +76,7 @@ OPPONENT_PYTHON_V4: int = 5
 OPPONENT_PYTHON_V8: int = 6
 OPPONENT_BASELINE_CORE_JAX: int = 7
 OPPONENT_BASELINE_CORE_JAX_WEAK: int = 8
+OPPONENT_STRICT_JAX_V1: int = 9
 
 OPPONENT_NAME_TO_MODE: dict[str, int] = {
     "noop": OPPONENT_NOOP,
@@ -90,6 +100,11 @@ OPPONENT_NAME_TO_MODE: dict[str, int] = {
     # handicapped core_jax (60% ship sends): a beatable version for the gradient
     # foothold before ramping to full core_jax (research 处方B handicapping).
     "baseline_core_jax_weak": OPPONENT_BASELINE_CORE_JAX_WEAK,
+    # case1 STRICT port (grid+allocator, 90% action parity with real v1, source
+    # 100%). Fully in-JAX (no host hop) and fast on GPU after the 2026-06-11
+    # speedups (allocator top-K truncation): ~0.3s/turn batch-amortized. The
+    # highest-parity vmappable v1 opponent — supersedes core_jax (known defects).
+    "strict_jax_v1": OPPONENT_STRICT_JAX_V1,
 }
 
 
@@ -416,6 +431,18 @@ def _baseline_core_jax_weak_actions(state: EnvState, seat: int) -> jax.Array:
     return jnp.stack([a[:, 0], a[:, 1], ships], axis=-1)
 
 
+def _strict_jax_v1_opponent_actions(state: EnvState, seat: int) -> jax.Array:
+    """case1 STRICT port as the opponent: 90% action-parity with real v1, fully
+    in-JAX (vmaps, no host hop). Imported at module top like the other in-JAX
+    opponents — importing during tracing runs module init inside the trace and
+    leaks tracers.
+    """
+    feats = _strict_v1_features(state, seat)
+    return _strict_v1_compute_actions(
+        feats, _strict_v1_modes(feats)
+    ).astype(jnp.float32)
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -537,9 +564,9 @@ def _rollout_one_env(
         # the in-JAX opponents (noop/lite/full/self_snapshot) fully on-device.
         # Dispatch: 0 → noop, 1 → lite, 2 → full, 3 → self_snapshot,
         # 4 → python_v1, 5 → python_v4, 6 → python_v8, 7 → core_jax,
-        # 8 → core_jax_weak (handicapped).
+        # 8 → core_jax_weak (handicapped), 9 → strict_jax_v1 (90% parity, fast).
         opp_actions = jax.lax.switch(
-            jnp.clip(opponent_mode, 0, 8),
+            jnp.clip(opponent_mode, 0, 9),
             [
                 lambda: jnp.full(
                     (MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
@@ -554,6 +581,7 @@ def _rollout_one_env(
                 lambda: _baseline_core_jax_weak_actions(state, 1 - seat).astype(
                     jnp.float32
                 ),
+                lambda: _strict_jax_v1_opponent_actions(state, 1 - seat),
             ],
         )
         # Splice into env_actions row for opponent seat only when not noop.
