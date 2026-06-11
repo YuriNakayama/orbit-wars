@@ -383,8 +383,11 @@ def _search_safe_intercept_jax(
     # launches: the engine lineage's dominant GPU chain). vmap over candidates
     # collapses the outer chain to wide kernels; the two-stage argmin below picks
     # min score_h, then min score_d, then FIRST index — exactly the scan's order.
-    score_h, score_d, angle_a, turn_a, ax_a, ay_a = jax.vmap(per_candidate)(
-        _CANDIDATE_TURNS
+    # lax.map(batch_size=...) = chunked vmap: same per-candidate values (hence
+    # identical argmin result) but caps the materialized intermediates — a full
+    # 219-wide vmap of the inner 110-turn hit test OOMs at game-batch scale.
+    score_h, score_d, angle_a, turn_a, ax_a, ay_a = jax.lax.map(
+        per_candidate, _CANDIDATE_TURNS, batch_size=32
     )
     min_h = jnp.min(score_h)
     d_masked = jnp.where(score_h == min_h, score_d, jnp.float32(jnp.inf))
