@@ -722,6 +722,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 合流構成: 蒸留クローン (教師+常設NN相手) + strict_v1
+    # (10iter毎の強制 pool 対戦 + held-out yardstick)。実証済み3部品の合流。
+    "reinforce_case8_vmpo_combo": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_combo",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_combo.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 strict-held-out 軽量版: vmpo_strict は pool+held-out 両方に
     # strict を入れ iter0 が >13分で打ち切り (strict 実行が重い)。対策として
     # pool は in-JAX baseline (full+lite+self) に戻し、strict_v1 を held-out

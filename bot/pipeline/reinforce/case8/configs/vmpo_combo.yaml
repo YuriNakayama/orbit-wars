@@ -1,0 +1,84 @@
+# ============================================================================
+# 合流構成 (combo): 蒸留クローン教師/相手 + strict_v1 強制 pool + strict held-out。
+#
+# strict_heldout_result.md の次の一手 #1。3 つの実証済み部品を合流させる:
+#   - bc_warmstart + distilled_weights: rulebase 蒸留クローン (case9_rulebase)
+#     を教師初期化と常設 NN 相手に (distilled_result.md の配線、ms forward)
+#   - include_strict + force_strict_every: 10: 本物級 strict_v1 と pool 開始後
+#     10 iter ごとに強制対戦 (f_var トラップ回避; iter 4/14/24/34/44 の5回、
+#     各 ~3.5分 = +17分固定)。勝ち始めれば f_var 側でも自然回復する
+#   - held-out = strict_v1 every:10 32ep: 真の強さ yardstick (warm ~3分/eval、
+#     episodes はバッチ償却で 16→32 にしても eval 時間ほぼ不変)
+#
+# 総所要見積り: 学習 ~24分 + held-out 6回 ~19分 + setup ≈ 50分 / ~$0.6。
+# 判定: held-out (vs strict_v1) が 0 から動くか + 強制 strict iter の win_rate。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_rulebase/runs/20260610-155129__feature-poc-v-mpo__680040f__seed0/best.pt
+
+training:
+  algo: vmpo
+  seed: 0
+  iterations: 50
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/49 の6点 (warm ~3分/eval)
+    opponent: strict_v1      # 真の強さ yardstick (本物 ~90% parity)
+    episodes: 32             # バッチ償却で eval 時間は 16ep とほぼ同じ
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: true
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 10   # 強制 strict 対戦: iter 4/14/24/34/44 (f_var トラップ回避)
+    distilled_weights:
+      - data/output/models/imitation/case9_rulebase/runs/20260610-155129__feature-poc-v-mpo__680040f__seed0/best.pt
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
