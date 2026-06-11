@@ -76,7 +76,9 @@ def _live_source_count(features) -> int:
 
 def _grid_eq(a, b) -> bool:
     """Byte-identity of two CaptureGrid NamedTuples (valid + score + key fields)."""
-    for fa, fb in zip(jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)):
+    for fa, fb in zip(
+        jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b), strict=True
+    ):
         if fa.shape != fb.shape:
             return False
         # NaN-safe exact compare (score uses -inf/0; ints exact).
@@ -150,7 +152,10 @@ def main() -> None:
         full_g = build_capture_grid(f, m)
         b_g = _build_b_grid(f, m, k_safe)
         ok = _grid_eq(full_g, b_g)
-        print(f"  state live={_live_source_count(f)} K={k_safe}: identity={'OK' if ok else 'MISMATCH'}")
+        print(
+            f"  state live={_live_source_count(f)} K={k_safe}:"
+            f" identity={'OK' if ok else 'MISMATCH'}"
+        )
 
 
 if __name__ == "__main__":

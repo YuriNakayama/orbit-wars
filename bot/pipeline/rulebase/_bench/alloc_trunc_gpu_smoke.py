@@ -65,7 +65,9 @@ def main() -> None:
         )
         done.block_until_ready()
         compile_s = time.perf_counter() - t0
-        print(f"K={k:5d} batch={batch:3d} compile+1st_turn={compile_s:7.1f}s", flush=True)
+        print(
+            f"K={k:5d} batch={batch:3d} compile+1st_turn={compile_s:7.1f}s", flush=True
+        )
 
         per_turn: list[float] = []
         for _ in range(turns):
@@ -87,7 +89,10 @@ def main() -> None:
     base = next((m for kk, bb, m in results if kk == 4608), None)
     for k, batch, med in results:
         ratio = f"{base / med:5.1f}x" if base and k != 4608 else "  1.0x"
-        print(f"K={k:5d} batch={batch:3d} per_turn={med:7.2f}s speedup={ratio}", flush=True)
+        print(
+            f"K={k:5d} batch={batch:3d} per_turn={med:7.2f}s speedup={ratio}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
