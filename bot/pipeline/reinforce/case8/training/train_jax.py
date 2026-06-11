@@ -734,6 +734,19 @@ class _PrioritizedOpponentSelector:
         lr = max(1.0 / e.count, 1.0 - self._ema)
         e.win_ema = (1.0 - lr) * e.win_ema + lr * win_rate
 
+    def find(self, name: str) -> tuple[int, _OpponentEntry] | None:
+        """First entry whose opponent name matches, for forced scheduling.
+
+        f_var has no re-exploration: one all-loss match vs a fixed strong
+        opponent sets win_ema=0 (count-based lr=1 on first play) and its
+        weight becomes exactly 0 forever. A forced periodic pick is the only
+        way such an opponent stays in the rotation until the learner can win.
+        """
+        for i, e in enumerate(self._entries):
+            if e.opponent == name:
+                return i, e
+        return None
+
     def __len__(self) -> int:
         return len(self._entries)
 
@@ -828,6 +841,11 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # include_strict: list of strict JAX rulebase ports (strict_v1/v2/v3) added as
     # fixed pool entries (in-JAX, on-device — safe under f_var).
     pool_include_strict = list(pool_cfg.get("include_strict", []) or [])
+    # force_strict_every: f_var は初回全敗で strict の重みが厳密に 0 になり
+    # 二度と選択されない (再探索機構なし)。N>0 なら pool 開始後 N iter ごとに
+    # PFSP をバイパスして先頭の include_strict エントリを強制選択し、EMA を
+    # 更新し続ける (学習者が勝ち始めれば f_var 側でも自然に選択率が回復する)。
+    pool_force_strict_every = int(pool_cfg.get("force_strict_every", 0))
     # distilled_weights: BC clones of real rulebases loaded as fixed NN pool
     # opponents (opp_model swap — ms forward, no host callback / strict-graph
     # cost). heldout_eval.opponent="distilled" reuses the first clone.
@@ -972,8 +990,19 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         sel_idx = -1
         if use_pool and it >= curriculum_switch_iter:
             if use_priority:
-                # H4: f_hard=(1-x)^p over full + pool snapshots.
-                sel_idx, entry = selector.sample(pool_rng)
+                forced_hit: tuple[int, _OpponentEntry] | None = None
+                if (
+                    pool_force_strict_every > 0
+                    and pool_include_strict
+                    and (it - curriculum_switch_iter) % pool_force_strict_every == 0
+                ):
+                    forced_hit = selector.find(pool_include_strict[0])
+                if forced_hit is not None:
+                    # Forced periodic strict pick (bypasses f_var; see find()).
+                    sel_idx, entry = forced_hit
+                else:
+                    # H4: f_hard=(1-x)^p over full + pool snapshots.
+                    sel_idx, entry = selector.sample(pool_rng)
                 iter_opponent = entry.opponent
                 iter_opp_model = (
                     entry.model if entry.model is not None else opp_snapshot
