@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter4: iterations 70 (サイクル当たり経験量1.4x)。
+    "reinforce_case8_vmpo_ladder4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder4",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder4.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter3: mix_strict 0.6 (フロンティア対戦密度up)。
     "reinforce_case8_vmpo_ladder3": {
         "family": "reinforce",
