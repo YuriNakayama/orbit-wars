@@ -618,6 +618,11 @@ class _OpponentEntry:
     # opponent graph but differ in this knob — AlphaStar's "PFSP over the
     # target's past checkpoints" with manufactured checkpoints.
     weaken_t0: float = 0.0
+    # Second weakening axis: per-turn action-dropout prob. (T0, eps) rungs
+    # bridge the FINAL gap: T0-only rungs never expose the opponent's opening
+    # (end-game-first blind spot), while (0, eps) rungs face the real opening
+    # with occasional lapses creating winnable games.
+    weaken_eps: float = 0.0
 
 
 def _pfsp_weight(x: float, p: float, mode: str) -> float:
@@ -664,7 +669,7 @@ class _PrioritizedOpponentSelector:
         include_v8: bool = False,
         include_strict: list[str] | None = None,
         distilled_models: list[ActorCriticJax] | None = None,
-        strict_ladder: list[float] | None = None,
+        strict_ladder: list[tuple[float, float]] | None = None,
     ) -> None:
         """Rebuild entries from the current pool (+ fixed rule opponents).
 
@@ -708,7 +713,7 @@ class _PrioritizedOpponentSelector:
                 or (e.opponent in (include_strict or []) and e.model is None)
             ]
             sname = (include_strict or ["strict_v1"])[0]
-            for j, t0 in enumerate(strict_ladder):
+            for j, (t0, eps) in enumerate(strict_ladder):
                 prev = prev_rungs[j] if j < len(prev_rungs) else None
                 new_entries.append(
                     _OpponentEntry(
@@ -716,7 +721,8 @@ class _PrioritizedOpponentSelector:
                         None,
                         prev.win_ema if prev else self._init_win,
                         prev.count if prev else 0,
-                        weaken_t0=float(t0),
+                        weaken_t0=t0,
+                        weaken_eps=eps,
                     )
                 )
         else:
@@ -909,7 +915,18 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     # SEPARATE pool entries. Mixing ratios (AlphaStar main-agent style):
     # mix_strict of iters sample among rungs (f_var within), mix_self among
     # self snapshots, remainder the oldest snapshot (forgetting guard).
-    pool_strict_ladder = [float(x) for x in pool_cfg.get("strict_ladder", []) or []]
+    raw_ladder = pool_cfg.get("strict_ladder", []) or []
+    pool_strict_ladder: list[tuple[float, float]] = [
+        (float(x[0]), float(x[1]))
+        if isinstance(x, (list, tuple))
+        else (float(x), 0.0)
+        for x in raw_ladder
+    ]
+    # force_rung_low_every: every N pool iters, force the LAST ladder entry
+    # (the deepest / closest-to-real rung). f_var avoids all-loss rungs by
+    # design, but the terminal rungs need live exposure both for gradient
+    # (once eps-lapses make wins possible) and as an in-training progress probe.
+    pool_force_low_every = int(pool_cfg.get("force_rung_low_every", 0))
     pool_mix_strict = float(pool_cfg.get("mix_strict", 0.5))
     pool_mix_self = float(pool_cfg.get("mix_self", 0.35))
     pool_include_full = bool(pool_cfg.get("include_full", True))
@@ -1082,6 +1099,11 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                     and (it - curriculum_switch_iter) % pool_force_strict_every == 0
                 ):
                     forced_hit = selector.find(pool_include_strict[0])
+                force_low = (
+                    pool_strict_ladder
+                    and pool_force_low_every > 0
+                    and it % pool_force_low_every == 0
+                )
                 if pool_strict_ladder:
                     # Ladder-pool mixing (AlphaStar main-agent ratios): sample a
                     # category first, then f_var within it. Rungs carry their own
@@ -1092,13 +1114,16 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                         i
                         for i, e in enumerate(ents)
                         if e.weaken_t0 > 0.0
+                        or e.weaken_eps > 0.0
                         or (e.opponent in pool_include_strict and e.model is None)
                     ]
                     snap_idxs = [
                         i for i, e in enumerate(ents) if e.opponent == "self_snapshot"
                     ]
                     u = pool_rng.random()
-                    if rung_idxs and u < pool_mix_strict:
+                    if force_low and rung_idxs:
+                        sel_idx, entry = rung_idxs[-1], ents[rung_idxs[-1]]
+                    elif rung_idxs and u < pool_mix_strict:
                         sel_idx, entry = selector.sample_among(pool_rng, rung_idxs)
                     elif snap_idxs and u < pool_mix_strict + pool_mix_self:
                         sel_idx, entry = selector.sample_among(pool_rng, snap_idxs)
@@ -1128,6 +1153,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         iter_start_turn = 0.0
         if pool_strict_ladder and sel_idx >= 0:
             iter_start_turn = float(selector.entries()[sel_idx].weaken_t0)
+            iter_weaken = float(selector.entries()[sel_idx].weaken_eps)
         elif hcap_enabled and iter_is_strict:
             if hcap_mode == "ships":
                 iter_handicap = hcap_ladder[hcap_idx]

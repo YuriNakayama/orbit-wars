@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter8: 2軸 (T0, ε) ハイブリッド + 素strict定期照射。
+    "reinforce_case8_vmpo_ladder8": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder8",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder8.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter7: フロンティア再構成 [300..100,0] 9段。
     "reinforce_case8_vmpo_ladder7": {
         "family": "reinforce",
