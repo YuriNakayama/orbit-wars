@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter6: switch_iter 0 (noopウォームアップ廃止)。
+    "reinforce_case8_vmpo_ladder6": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder6",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder6.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter5: episodes 96 (バッチ次元で経験量+50%)。
     "reinforce_case8_vmpo_ladder5": {
         "family": "reinforce",
