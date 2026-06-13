@@ -1196,6 +1196,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             selector.update(sel_idx, row["win_rate"])
         if pool_strict_ladder and iter_is_strict:
             row["opp_start_turn"] = iter_start_turn
+            row["opp_weaken"] = iter_weaken
         if hcap_enabled and iter_is_strict and not pool_strict_ladder:
             w = float(row["win_rate"])
             if w >= hcap_promote and hcap_idx < len(hcap_ladder) - 1:
