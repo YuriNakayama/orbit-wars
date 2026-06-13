@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter9: T0崖の密刻み細分化 (ε段全廃、汚染遮断)。
+    "reinforce_case8_vmpo_ladder9": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder9",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder9.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter8: 2軸 (T0, ε) ハイブリッド + 素strict定期照射。
     "reinforce_case8_vmpo_ladder8": {
         "family": "reinforce",
