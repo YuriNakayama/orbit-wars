@@ -62,6 +62,12 @@ from pipeline.reinforce.case8.training.rollout_jax import (
     JaxRolloutBatch,
     collect_rollout_jax,
 )
+from pipeline.reinforce.case8.training.sil_jax import (
+    concat_flat,
+    sil_buffer_add,
+    sil_buffer_init,
+    sil_buffer_sample,
+)
 from pipeline.reinforce.case8.training.vmpo_jax import (
     VMPOConfigJax,
     VMPOParams,
@@ -77,6 +83,17 @@ from utils.repo_root import absolute_under_repo
 # critical for keeping PPO updates on-device on RunPod GPUs.
 _ppo_update_jit = eqx.filter_jit(ppo_update_jax)
 _vmpo_update_jit = eqx.filter_jit(vmpo_update_jax)
+
+
+@dataclass(frozen=True)
+class SilConfig:
+    """Self-imitation replay config (Oh+ 2018). Disabled by default so non-SIL
+    runs stay bit-identical. `capacity`/`sample_size` are static (jit shapes)."""
+
+    enabled: bool = False
+    capacity: int = 2048
+    sample_size: int = 256
+    min_buffer: int = 256
 
 
 def _build_vmpo_cfg(cfg_dict: dict[str, Any]) -> VMPOConfigJax:
@@ -453,7 +470,19 @@ def _run_iter(
     handicap: float = 1.0,
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
-) -> tuple[ActorCriticJax, Any, VMPOParams | None, dict[str, Any]]:
+    sil_cfg: SilConfig | None = None,
+    sil_buffer: FlatRollout | None = None,
+    sil_cursor: jax.Array | None = None,
+    sil_count: jax.Array | None = None,
+) -> tuple[
+    ActorCriticJax,
+    Any,
+    VMPOParams | None,
+    dict[str, Any],
+    FlatRollout | None,
+    jax.Array | None,
+    jax.Array | None,
+]:
     rollout_key, update_key = jax.random.split(key)
 
     t0 = time.perf_counter()
@@ -484,6 +513,34 @@ def _run_iter(
 
     flat = _flatten_rollout(rollout, gamma, gae_lambda)
 
+    # Self-imitation (Oh+ 2018): persist this iter's WINNING steps into the
+    # replay buffer, then prepend a clipped-advantage-prioritised sample onto
+    # the update batch so scarce wins (esp. the rare strict ones) keep getting
+    # reinforced across iters. Gated on sil_cfg.enabled → otherwise untouched
+    # and the run is bit-identical to the no-SIL baseline.
+    update_flat = flat
+    sil_added = 0.0
+    if sil_cfg is not None and sil_cfg.enabled:
+        if sil_buffer is None or sil_cursor is None or sil_count is None:
+            sil_buffer = sil_buffer_init(flat, sil_cfg.capacity)
+            sil_cursor = jnp.int32(0)
+            sil_count = jnp.int32(0)
+        n_ep = rollout.episode_outcomes.shape[0]
+        steps_per_ep = flat.advantages.shape[0] // n_ep
+        win_ep = rollout.episode_outcomes > 0.0  # (B,)
+        # Per-step keep mask: a winning episode's VALID (pre-terminal) steps.
+        keep = jnp.repeat(win_ep, steps_per_ep) & flat.done_mask
+        sil_buffer, sil_cursor, sil_count = sil_buffer_add(
+            sil_buffer, sil_cursor, sil_count, flat, keep
+        )
+        sil_added = float(jnp.sum(keep.astype(jnp.float32)))
+        update_key, sil_key = jax.random.split(update_key)
+        if int(sil_count) >= sil_cfg.min_buffer:
+            sampled = sil_buffer_sample(
+                sil_buffer, sil_count, sil_key, sil_cfg.sample_size
+            )
+            update_flat = concat_flat(flat, sampled)
+
     t0 = time.perf_counter()
     if algo == "vmpo":
         # V-MPO update (Phase 2). Optimizes (model, vp=η/α) jointly; the A/B with
@@ -492,11 +549,11 @@ def _run_iter(
         if vp is None or vmpo_cfg is None:
             raise ValueError("algo='vmpo' requires vp and vmpo_cfg")
         model, vp, opt_state, stats = _vmpo_update_jit(
-            model, vp, optimizer, opt_state, flat, vmpo_cfg, update_key
+            model, vp, optimizer, opt_state, update_flat, vmpo_cfg, update_key
         )
     else:
         model, opt_state, stats = _ppo_update_jit(
-            model, bc_reference, optimizer, opt_state, flat, cfg, update_key
+            model, bc_reference, optimizer, opt_state, update_flat, cfg, update_key
         )
     # Block on a small leaf to ensure compute is materialized.
     _ = float(stats.policy_loss)
@@ -528,7 +585,10 @@ def _run_iter(
         row["vmpo_eta"] = float(vp.eta)
         row["vmpo_alpha"] = float(vp.alpha)
         row["vmpo_kl"] = float(stats.bc_kl)
-    return (model, opt_state, vp, row)
+    if sil_cfg is not None and sil_cfg.enabled:
+        row["sil_added"] = sil_added
+        row["sil_count"] = float(sil_count) if sil_count is not None else 0.0
+    return (model, opt_state, vp, row, sil_buffer, sil_cursor, sil_count)
 
 
 def _elo_update(agent_elo: float, ref_elo: float, score: float, k: float) -> float:
@@ -849,6 +909,13 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     algo = str(t_cfg.get("algo", "ppo"))
     if algo not in ("ppo", "vmpo"):
         raise ValueError(f"unknown algo={algo!r}; expected 'ppo' or 'vmpo'")
+    sil_dict = t_cfg.get("sil", {}) or {}
+    sil_cfg = SilConfig(
+        enabled=bool(sil_dict.get("enabled", False)),
+        capacity=int(sil_dict.get("capacity", 2048)),
+        sample_size=int(sil_dict.get("sample_size", 256)),
+        min_buffer=int(sil_dict.get("min_buffer", 256)),
+    )
     opponent = str(t_cfg.get("opponent", "noop"))
     shaping_mode = str(t_cfg.get("shaping_mode", "ships"))
     coef_ship = float(t_cfg.get("coef_ship", 0.0))
@@ -1086,6 +1153,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     agent_elo = float(heldout_cfg.get("agent_elo_init", 1500.0))
     elo_ref = float(heldout_cfg.get("ref_elo", 1500.0))
     elo_k = float(heldout_cfg.get("elo_k", 32.0))
+    # SIL replay state (lazy-init inside _run_iter on the first enabled iter).
+    sil_buffer: FlatRollout | None = None
+    sil_cursor: jax.Array | None = None
+    sil_count: jax.Array | None = None
     for it in range(iterations):
         iter_opponent = _opponent_for_iter(it)
         iter_opp_model = opp_snapshot
@@ -1160,7 +1231,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             else:
                 iter_weaken = hcap_ladder[hcap_idx]
         key, k_iter = jax.random.split(key)
-        model, opt_state, vp, row = _run_iter(
+        model, opt_state, vp, row, sil_buffer, sil_cursor, sil_count = _run_iter(
             model,
             bc_reference,
             optimizer,
@@ -1190,6 +1261,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             handicap=iter_handicap,
             opp_weaken=iter_weaken,
             opp_start_turn=iter_start_turn,
+            sil_cfg=sil_cfg,
+            sil_buffer=sil_buffer,
+            sil_cursor=sil_cursor,
+            sil_count=sil_count,
         )
         # H4: update the selected entry's win-rate EMA with this iter's outcome.
         if use_priority and sel_idx >= 0:

@@ -733,6 +733,15 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter12: self-imitation有効化 (勝利リプレイ増幅)。
+    "reinforce_case8_vmpo_ladder12": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder12",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder12.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter11: 経験量拡大 episodes 96→192 (ladder9構成)。
     "reinforce_case8_vmpo_ladder11": {
         "family": "reinforce",
