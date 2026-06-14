@@ -1,0 +1,92 @@
+# ============================================================================
+# Ladder-pool iteration 11 (loop tick の工夫: 経験量拡大 episodes 96→192)。
+#
+# ladder10 (低T0シフト, run 20260613-104846, iter31で停止) の観測: ladder8(ε段)
+# と同じ失敗 — 勝てない難段 (T0≤95) を pool に入れると全敗汚染 37% で held-out
+# full が低下 (0.781→0.703)、ladder9 最高 0.797 を更新できず。「終端への橋」は
+# T0/ε をどれだけ下げても架からない。一方 ladder9 (勝てる段中心) は成功した。
+#
+# 工夫 (1点): ladder は ladder9 と完全同一 (成功した勝てる段構成) のまま、
+# episodes_per_iter を 96→192 に倍増。phaseB 診断の主因「絶対経験量 2-3 桁
+# 不足」への対処。episodes は batch 次元で実行時間にほぼ不変 (過去 64→96 で
+# 検証済み) なので、総経験を 2 倍化しても wall-clock は据え置き。iterations は
+# ladder9 と同じ 70 に固定 (A/B は episodes 単軸のみ)。resume は ladder9
+# best.pt (全run最高 full 0.797)。他は ladder9 と完全同一。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder9/runs/20260613-073911__feature-poc-v-mpo__2830e71__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192   # 96→192 倍増 (経験量拡大、batch次元で時間ほぼ不変)
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/50/60/69 (warm ~3分/eval)
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false           # ladder-pool では不使用 (段選択 = f_var が担う)
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false      # exploiter 構成: pool は strict ラダー + self のみ
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0    # 不要: 中間段が常に選択可能 (EMA 鮮度問題が消滅)
+    force_rung_low_every: 0  # ladder8 の全敗汚染を断つため素strict強制照射は廃止のまま
+    # ladder9 と完全同一の成功構成 (勝てる段中心、崖を密刻み)。
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6          # 60% strict ラダー (iter3 の工夫: フロンティア密度up)
+    mix_self: 0.35           # 35% self snapshots / 残り 15% 最古 snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
