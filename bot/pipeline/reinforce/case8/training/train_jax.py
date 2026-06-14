@@ -463,6 +463,7 @@ def _run_iter(
     dense_coef_planet: float = 0.0,
     time_bonus_coef: float = 0.0,
     time_penalty_coef: float = 0.0,
+    terminal_scale: float = 1.0,
     opp_model: ActorCriticJax | None = None,
     algo: str = "ppo",
     vp: VMPOParams | None = None,
@@ -503,6 +504,7 @@ def _run_iter(
         dense_coef_planet=dense_coef_planet,
         time_bonus_coef=time_bonus_coef,
         time_penalty_coef=time_penalty_coef,
+        terminal_scale=terminal_scale,
         opp_model=opp_model,
         handicap=handicap,
         opp_weaken=opp_weaken,
@@ -925,6 +927,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     dense_coef_planet = float(t_cfg.get("dense_coef_planet", 0.0))
     time_bonus_coef = float(t_cfg.get("time_bonus_coef", 0.0))
     time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
+    terminal_scale = float(t_cfg.get("terminal_scale", 1.0))
     # Held-out eval: every `heldout_eval_every` iters, measure win-rate vs a
     # FIXED opponent (matchmaking-free absolute progress). 0 disables.
     heldout_cfg = t_cfg.get("heldout_eval", {}) or {}
@@ -1254,6 +1257,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             dense_coef_planet=dense_coef_planet,
             time_bonus_coef=time_bonus_coef,
             time_penalty_coef=time_penalty_coef,
+            terminal_scale=terminal_scale,
             opp_model=iter_opp_model,
             algo=algo,
             vp=vp,
@@ -1310,6 +1314,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         row["dense_coef_planet"] = dense_coef_planet
         row["time_bonus_coef"] = time_bonus_coef
         row["time_penalty_coef"] = time_penalty_coef
+        row["terminal_scale"] = terminal_scale
         row["priority"] = pool_priority if use_priority else "none"
         # Held-out eval: matchmaking-free absolute progress vs a fixed opponent.
         # Runs every `heldout_eval_every` iters (and always on the last iter) with

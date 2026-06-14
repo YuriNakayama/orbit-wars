@@ -466,6 +466,7 @@ def _rollout_one_env(
     opp_model: ActorCriticJax,
     opp_weaken: jax.Array,
     opp_start_turn: jax.Array,
+    terminal_scale: float,
 ) -> JaxRolloutBatch:
     """Single-env rollout via `lax.scan`.
 
@@ -687,7 +688,13 @@ def _rollout_one_env(
             * win_mask
             * (1.0 - t.astype(jnp.float32) / jnp.float32(horizon))
         )
-        terminal_reward = jnp.where(term, terminal_sign + time_bonus, jnp.float32(0.0))
+        # R1 (reward-shaping fix): scale the ±1 terminal win/loss by
+        # `terminal_scale` so the WIN signal dominates the per-turn material
+        # shaping (which at the bare-strict rung swamps it ~2.4:1, making the
+        # agent optimise material instead of winning). scale=1.0 ⇒ legacy.
+        terminal_reward = jnp.where(
+            term, terminal_scale * terminal_sign + time_bonus, jnp.float32(0.0)
+        )
         step_reward = jnp.where(
             done_already, jnp.float32(0.0), shaping + terminal_reward
         )
@@ -817,6 +824,7 @@ def collect_rollout_jax(
     handicap: float = 1.0,
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
+    terminal_scale: float = 1.0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -903,6 +911,7 @@ def collect_rollout_jax(
         effective_opp_model,
         jnp.float32(opp_weaken),
         jnp.float32(opp_start_turn),
+        jnp.float32(terminal_scale),
     )
 
 
@@ -938,6 +947,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
         opp_model: ActorCriticJax,
         opp_weaken: jax.Array,
         opp_start_turn: jax.Array,
+        terminal_scale: float,
     ) -> JaxRolloutBatch:
         return _rollout_one_env(
             model,
@@ -958,6 +968,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             opp_model,
             opp_weaken,
             opp_start_turn,
+            terminal_scale,
         )
 
     vmapped = jax.vmap(
@@ -979,6 +990,7 @@ def _vmapped_rollout_jit(horizon: int, seat: int) -> Callable[..., JaxRolloutBat
             None,  # opp_model
             None,  # opp_weaken (traced scalar, shared)
             None,  # opp_start_turn (traced scalar, shared)
+            None,  # terminal_scale (traced scalar, shared)
         ),
     )
     return eqx.filter_jit(vmapped)
