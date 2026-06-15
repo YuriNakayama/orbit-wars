@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter19: reward勝利信号優位 (shaping 1.0→0.5,
+    # terminal_scale 1.0→2.5) + 難段強制サンプル (force_rung_low_every=2 で T0=0段)。
+    # aim修正後に残った真因 (素strict reward支配 + f_var難段回避) を複合で対処。
+    "reinforce_case8_vmpo_ladder19": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder19",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder19.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter18: rollout aim を先読み intercept 化。replay
     # 診断で判明した train/eval aim 不一致 (訓練は naive atan2 直射で動くplanetを外す、
     # eval/strict は intercept先読み) を修正。pool/reward は ladder11 同一の aim単独 A/B。
