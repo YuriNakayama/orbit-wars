@@ -1,0 +1,97 @@
+# ============================================================================
+# Ladder-pool iteration 17 (loop tick の工夫: strict 対戦量を大幅増)。
+#
+# 逆カリ 3run (ladder14-16) の総括: strict-self warmup でstart-stateを序盤に作る
+# 機構は動いたが、strict をオンデバイスで「相手500手 + warmup自己対戦最大320手」
+# 実行するコストが ~870-944s/strict段と重く、warmup→0 到達前に予算切れ (実行コスト
+# 律速で単一compile化でも解けず)。一方 ladder15 の用量反応で「敗北は序盤に集中」
+# (warmup=0で勝率≈0、warmup>0で0.31-0.37) が確定 = strict の決定的序盤を学習でき
+# ていないのが核心。
+#
+# 工夫 (1点 = strict 対戦量↑): 重い warmup advance を捨て、軽量な T0時間窓ラダー
+# (~195s/strict段) に戻したうえで、(a) mix_strict 0.6→0.85 に増やし、(b) ladder を
+# 低T0偏重 [0,0,50,110,140,170] にして「素strict序盤 (T0=0)」の照射を厚くする。
+# これで素strict序盤の絶対対戦量を現状の3-4倍に増やし、「序盤を学習しない」根本
+# 問題を量で押す (絶対経験量2-3桁不足という phaseB 診断への直接対処)。resume は
+# ladder11 best.pt (全run最高 full 0.812)。他は ladder11 と同一 (mix と ladder の
+# 2項を変えるが、いずれも「strict序盤の対戦量を増やす」単一の狙いの表裏)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder11/runs/20260614-055545__feature-poc-v-mpo__022f67f__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  reverse_curriculum:
+    enabled: false           # 逆カリは無効 (重い warmup advance を捨て軽量ladderへ)
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    # 低T0偏重 + 素strict(T0=0)を2枠: 「序盤を含む難段」の対戦量を厚くする。
+    strict_ladder: [0, 0, 50, 110, 140, 170, 200, 225]
+    mix_strict: 0.85         # 0.6→0.85: strict ラダーの対戦量を大幅増
+    mix_self: 0.12           # self を圧縮し strict に振る (残り 3% 最古 snapshot)
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
