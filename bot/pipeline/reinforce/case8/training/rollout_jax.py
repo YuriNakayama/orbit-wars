@@ -90,6 +90,12 @@ from ..policy.sampling_jax import (
 
 NUM_AGENTS_MAX = 4  # jax_env's NUM_AGENTS_MAX
 
+# Reverse curriculum: static scan length for the strict-vs-strict warmup advance.
+# `warmup_turns` enters as a traced scalar ≤ this bound, so any warmup value
+# (the forced-retreat schedule sweeps 300→0) reuses one compiled graph. Sized to
+# the strict_ladder's largest T0 (225) plus headroom for the warmup_start (300).
+RC_MAX_WARMUP = 320
+
 # opponent_mode constants — kept int to stay scan/vmap friendly.
 OPPONENT_NOOP: int = 0
 OPPONENT_BASELINE_JAX_LITE: int = 1
@@ -447,7 +453,9 @@ def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
-def _advance_strict_self_one(state: EnvState, warmup_turns: int, seat: int) -> EnvState:
+def _advance_strict_self_one(
+    state: EnvState, warmup_turns: jax.Array, max_warmup: int, seat: int
+) -> EnvState:
     """Advance one env `warmup_turns` ticks of strict-vs-strict self-play.
 
     Reverse curriculum (Florensa+ 2017, backward expansion): instead of always
@@ -462,13 +470,21 @@ def _advance_strict_self_one(state: EnvState, warmup_turns: int, seat: int) -> E
     advanced state is a neutral, on-distribution strict opening — NOT an
     artificially favorable handicap. Termination during warmup freezes the
     state (the subsequent agent rollout sees `term` immediately and scores it).
-    `warmup_turns` is a Python int (static) so this is one trace per value.
+
+    `warmup_turns` is a TRACED scalar and the scan runs a STATIC `max_warmup`
+    steps, freezing every step at index >= warmup_turns. This keeps ONE compiled
+    graph for all warmup values — the forced-retreat schedule (ladder16) changes
+    warmup every strict rung, and a static-length scan would recompile (~870s)
+    each new value (ladder15 root cause: 1h reached only iter 9). Mirrors the
+    `opp_start_turn` traced-scalar pattern in `_rollout_one_env`.
     """
 
-    def step_fn(carry: tuple[EnvState, jax.Array], _t: jax.Array) -> tuple[
+    def step_fn(carry: tuple[EnvState, jax.Array], t: jax.Array) -> tuple[
         tuple[EnvState, jax.Array], None
     ]:
         state, done = carry
+        # Freeze once terminated OR once we've advanced `warmup_turns` ticks.
+        frozen = done | (t >= warmup_turns)
         a0 = _strict_v1_actions(state, seat)  # (L, 3)
         a1 = _strict_v1_actions(state, 1 - seat)
         actions = jnp.full(
@@ -477,23 +493,29 @@ def _advance_strict_self_one(state: EnvState, warmup_turns: int, seat: int) -> E
         actions = actions.at[seat].set(a0).at[1 - seat].set(a1)
         new_state, _r, term = jax_env_step(state, actions)
         next_state = jax.tree.map(
-            lambda new, old: jnp.where(done, old, new), new_state, state
+            lambda new, old: jnp.where(frozen, old, new), new_state, state
         )
-        return (next_state, done | term), None
+        return (next_state, frozen | term), None
 
     (advanced, _done), _ = jax.lax.scan(
-        step_fn, (state, jnp.bool_(False)), jnp.arange(warmup_turns, dtype=jnp.int32)
+        step_fn, (state, jnp.bool_(False)), jnp.arange(max_warmup, dtype=jnp.int32)
     )
     return advanced
 
 
 @functools.lru_cache(maxsize=None)
 def _advance_strict_self_jit(
-    warmup_turns: int, seat: int
-) -> Callable[[EnvState], EnvState]:
-    """vmap+jit of `_advance_strict_self_one` over a batch of envs."""
+    max_warmup: int, seat: int
+) -> Callable[[EnvState, jax.Array], EnvState]:
+    """vmap+jit of `_advance_strict_self_one`, keyed only by static `max_warmup`.
+
+    `warmup_turns` enters as a traced scalar (in_axes=None, shared across the
+    batch) so every warmup value reuses this single compiled executable — no
+    per-value recompile.
+    """
     vmapped = jax.vmap(
-        lambda s: _advance_strict_self_one(s, warmup_turns, seat), in_axes=0
+        lambda s, w: _advance_strict_self_one(s, w, max_warmup, seat),
+        in_axes=(0, None),
     )
     return eqx.filter_jit(vmapped)
 
@@ -941,11 +963,16 @@ def collect_rollout_jax(
     # Reverse curriculum (Florensa+ 2017): advance every env `rc_warmup_turns`
     # ticks of strict-vs-strict self-play, so the learner's rollout starts from
     # a genuine mid-game strict opening instead of turn 0. Applied OUTSIDE the
-    # jitted rollout (like handicap) on the batched reset state; the advance is
-    # its own jit'd (vmap'd) executable keyed by warmup_turns. rc=0 is the exact
-    # identity (no advance) so every existing run stays bit-identical.
+    # jitted rollout (like handicap) on the batched reset state. The advance is a
+    # single jit'd executable keyed only by static `RC_MAX_WARMUP`; `warmup_turns`
+    # is a TRACED scalar so the forced-retreat schedule (warmup changing every
+    # strict rung) reuses ONE compiled graph (ladder16 fix — ladder15 recompiled
+    # ~870s per new warmup value). rc=0 is the exact identity (the scan runs but
+    # every step is frozen by t >= 0), so every existing run stays bit-identical.
     if rc_warmup_turns > 0:
-        batched_state = _advance_strict_self_jit(rc_warmup_turns, seat)(batched_state)
+        batched_state = _advance_strict_self_jit(RC_MAX_WARMUP, seat)(
+            batched_state, jnp.int32(rc_warmup_turns)
+        )
 
     # W7: jit the vmapped rollout. Without jit the vmap(lax.scan over `horizon`
     # steps) runs eager — every per-step op dispatches from Python and syncs back

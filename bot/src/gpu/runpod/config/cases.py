@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter16: 逆カリキュラム 強制後退 (warmup advance
+    # 単一compile化)。ladder15 は warmup 変更毎に ~870s 再compile → 1h で iter9 のみ。
+    # warmup を traced scalar 化し再compileゼロにした re-run。
+    "reinforce_case8_vmpo_ladder16": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder16",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder16.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter15: 逆カリキュラム 強制schedule後退 —
     # strict段ごとに無条件で warmup→0 後退 (ladder14 の勝率gate未発火を修正)。
     "reinforce_case8_vmpo_ladder15": {
