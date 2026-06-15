@@ -17,6 +17,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+from .aim_jax import intercept_angle_jax
 from .featurizer_jax import MAX_PLANETS
 from .model_jax import PolicyOutputJax
 
@@ -116,14 +117,22 @@ def sampled_action_to_env_actions(
     is_mine: jax.Array,  # (MAX_PLANETS,) bool
     seat: int,
     num_agents_max: int,
+    planet_initial_xy: jax.Array,  # (P_total, 2) float32 (state.planet_initial_xy)
+    planet_is_rotating: jax.Array,  # (P_total,) bool (state.planet_is_rotating)
+    planet_radius: jax.Array,  # (P_total,) float32 (state.planet_radius)
+    planet_is_comet: jax.Array,  # (P_total,) bool (state.planet_is_comet)
+    angular_velocity: jax.Array,  # () float32 (state.angular_velocity)
 ) -> jax.Array:
     """Build a JAX env action tensor (NUM_AGENTS, MAX_LAUNCHES, 3) for one env.
 
     For each own (is_mine) planet slot `s` with `target_slot[s] != NO_OP`:
       - from_planet_id = planet_id[s]
-      - angle = atan2(target_y - src_y, target_x - src_x) using full
-                state.planet_xy positions (so the target_slot index is
-                interpreted as a planet slot index in the env state).
+      - angle = orbital-intercept lead for a rotating target (see aim_jax;
+                fixed-point predicts where the orbiting planet WILL BE at
+                arrival), falling back to the naive
+                atan2(target_now - source_now) bearing for static / comet /
+                sun-unsafe targets. This matches the eval/submission decoder
+                and fixes the train/eval aim mismatch.
       - ships = clamp(round(expm1(log1p_ships[s])), 1, src.ships)
 
     Note that target_slot indexes into [0, MAX_PLANETS], not into the full
@@ -137,17 +146,37 @@ def sampled_action_to_env_actions(
     src_xy = planet_xy[:P]  # (P, 2)
     src_ships_i = planet_ships[:P]  # (P,)
     src_pid = planet_id[:P]  # (P,)
+    src_radius = planet_radius[:P]  # (P,)
 
     is_fire = (target_slot != NO_OP_INDEX) & is_mine  # (P,)
     safe_tgt = jnp.clip(target_slot, 0, P - 1)
     tgt_xy = planet_xy[safe_tgt]  # (P, 2)
-    dx = tgt_xy[:, 0] - src_xy[:, 0]
-    dy = tgt_xy[:, 1] - src_xy[:, 1]
-    angle = jnp.arctan2(dy, dx)
+    tgt_init_xy = planet_initial_xy[safe_tgt]  # (P, 2)
+    tgt_is_rotating = planet_is_rotating[safe_tgt]  # (P,)
+    tgt_is_comet = planet_is_comet[safe_tgt]  # (P,)
+    tgt_radius = planet_radius[safe_tgt]  # (P,)
 
     raw_ships = jnp.maximum(0.0, jnp.expm1(log1p_ships))
     int_ships = jnp.round(raw_ships).astype(jnp.int32)
     int_ships = jnp.clip(int_ships, 1, src_ships_i)
+
+    # Comets are out of scope for the JAX intercept port (no path lookup);
+    # treat them as non-rotating so they collapse to the naive bearing. The
+    # fleet's launched ship count (int_ships) sets the speed, mirroring the
+    # eval decoder which passes the resolved fleet size into aim_with_prediction.
+    rotating_for_aim = tgt_is_rotating & ~tgt_is_comet
+    ang_vel_vec = jnp.broadcast_to(angular_velocity, (P,))
+    angle = jax.vmap(intercept_angle_jax, in_axes=(0, 0, 0, 0, 0, 0, 0, 0))(
+        src_xy,
+        tgt_xy,
+        tgt_init_xy,
+        rotating_for_aim,
+        int_ships,
+        ang_vel_vec,
+        src_radius,
+        tgt_radius,
+    )
+
     # When not firing, set from_pid=-1 (no-op sentinel for the env step).
     from_pid = jnp.where(is_fire, src_pid, jnp.int32(-1))
     final_angle = jnp.where(is_fire, angle, jnp.float32(0.0))

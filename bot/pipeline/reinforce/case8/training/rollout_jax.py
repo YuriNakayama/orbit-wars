@@ -345,6 +345,11 @@ def _self_snapshot_opponent_actions(
         my_planet_mask,
         player,
         NUM_AGENTS_MAX,
+        state.planet_initial_xy,
+        state.planet_is_rotating,
+        state.planet_radius,
+        state.planet_is_comet,
+        state.angular_velocity,
     )[player]
 
 
@@ -479,9 +484,9 @@ def _advance_strict_self_one(
     `opp_start_turn` traced-scalar pattern in `_rollout_one_env`.
     """
 
-    def step_fn(carry: tuple[EnvState, jax.Array], t: jax.Array) -> tuple[
-        tuple[EnvState, jax.Array], None
-    ]:
+    def step_fn(
+        carry: tuple[EnvState, jax.Array], t: jax.Array
+    ) -> tuple[tuple[EnvState, jax.Array], None]:
         state, done = carry
         # Freeze once terminated OR once we've advanced `warmup_turns` ticks.
         frozen = done | (t >= warmup_turns)
@@ -628,6 +633,11 @@ def _rollout_one_env(
             my_planet_mask_2d,
             seat,
             NUM_AGENTS_MAX,
+            state.planet_initial_xy,
+            state.planet_is_rotating,
+            state.planet_radius,
+            state.planet_is_comet,
+            state.angular_velocity,
         )
 
         # Opponent row (seat 1-seat). For noop we leave the -1 sentinels
@@ -636,6 +646,7 @@ def _rollout_one_env(
         # For self_snapshot we featurize the opponent seat, run the frozen
         # opp_model forward, and take the deterministic (argmax) action.
         opp_seat = jnp.int32(1) - jnp.int32(seat)
+
         # Compute ONLY the selected opponent's actions. Each python_v* branch is
         # a `pure_callback` host hop (vmap_method='sequential'): computing it
         # eagerly (outside the switch) fires the host round-trip every step even
@@ -668,6 +679,7 @@ def _rollout_one_env(
                 ],
             )
             return out
+
         # Weakening curriculum — two knobs, both forcing a noop turn:
         #  - eps (opp_weaken): per-turn Bernoulli dropout (phaseB v2; kept for
         #    compat — uniform dropout hit a wall at eps=0.85 because the

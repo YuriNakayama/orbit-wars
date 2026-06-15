@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter18: rollout aim を先読み intercept 化。replay
+    # 診断で判明した train/eval aim 不一致 (訓練は naive atan2 直射で動くplanetを外す、
+    # eval/strict は intercept先読み) を修正。pool/reward は ladder11 同一の aim単独 A/B。
+    "reinforce_case8_vmpo_ladder18": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder18",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder18.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter17: strict 対戦量を大幅増。逆カリ(重い warmup
     # advance)を捨て軽量T0ラダーに戻し、mix_strict 0.6→0.85 + 低T0偏重ladder
     # [0,0,50,...] で素strict序盤の対戦量を3-4倍に。「序盤を学習しない」を量で押す。
