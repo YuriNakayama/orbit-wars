@@ -1035,7 +1035,17 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     rc_step = int(rc_cfg.get("retreat_step", 25))
     rc_promote = float(rc_cfg.get("promote_win", 0.55))
     rc_demote = float(rc_cfg.get("demote_win", 0.30))
+    # retreat_every_strict > 0: FORCE a warmup retreat every K strict rungs,
+    # independent of win-rate. ladder14 showed the strict-rung win plateaus at
+    # ~0.31-0.38 (< promote 0.55), so the win-gated retreat never fired and
+    # warmup stayed at 300 forever → the agent only ever trained the endgame from
+    # an advanced board, never the opening, so bare strict_v1 held-out stayed at
+    # noise (0.0156). The forced schedule drives warmup→0 regardless of plateau,
+    # so the "learn the opening → transfer to turn-0 strict" hypothesis actually
+    # gets tested. 0 = pure win-gated (ladder14 behaviour).
+    rc_force_every = int(rc_cfg.get("retreat_every_strict", 0))
     rc_warmup = rc_start if rc_enabled else 0
+    rc_strict_seen = 0
     # distilled_weights: BC clones of real rulebases loaded as fixed NN pool
     # opponents (opp_model swap — ms forward, no host callback / strict-graph
     # cost). heldout_eval.opponent="distilled" reuses the first clone.
@@ -1145,12 +1155,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     if rc_enabled:
         logger.info(
             "reverse_curriculum: warmup_start=%d retreat_step=%d "
-            "promote_win=%.2f demote_win=%.2f (strict rungs seeded from "
-            "strict-vs-strict opening, retreats to 0)",
+            "promote_win=%.2f demote_win=%.2f retreat_every_strict=%d "
+            "(strict rungs seeded from strict-vs-strict opening, retreats to 0; "
+            "force>0 ⇒ retreat every K strict rungs regardless of win)",
             rc_start,
             rc_step,
             rc_promote,
             rc_demote,
+            rc_force_every,
         )
     # H1 (PFSP foundation): freeze the start-of-training model as the initial
     # self-snapshot opponent. H2: also seed a FIFO snapshot pool with it so the
@@ -1309,8 +1321,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         # falling below rc_demote backs it off. Only strict iters move the knob so
         # the schedule tracks the true target, not the easy self/full rungs.
         if rc_enabled and iter_is_strict:
+            rc_strict_seen += 1
             w = float(row["win_rate"])
-            if w >= rc_promote and rc_warmup > 0:
+            if rc_force_every > 0:
+                # Forced schedule: retreat every K strict rungs regardless of win
+                # (ladder15 fix — the win-gated path never fired in ladder14).
+                if rc_strict_seen % rc_force_every == 0 and rc_warmup > 0:
+                    rc_warmup = max(0, rc_warmup - rc_step)
+            elif w >= rc_promote and rc_warmup > 0:
                 rc_warmup = max(0, rc_warmup - rc_step)
             elif w <= rc_demote and rc_warmup < rc_start:
                 rc_warmup = min(rc_start, rc_warmup + rc_step)

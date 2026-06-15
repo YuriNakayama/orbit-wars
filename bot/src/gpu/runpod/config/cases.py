@@ -733,6 +733,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter15: 逆カリキュラム 強制schedule後退 —
+    # strict段ごとに無条件で warmup→0 後退 (ladder14 の勝率gate未発火を修正)。
+    "reinforce_case8_vmpo_ladder15": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder15",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder15.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter14: 逆カリキュラム (Florensa+2017) —
     # strict段を strict自己対戦warmup盤面からseed、勝率上昇でwarmup→0へ後退。
     "reinforce_case8_vmpo_ladder14": {
