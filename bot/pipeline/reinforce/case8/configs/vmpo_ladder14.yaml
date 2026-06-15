@@ -1,0 +1,103 @@
+# ============================================================================
+# Ladder-pool iteration 14 (loop tick の工夫: 逆カリキュラム — Florensa+ 2017
+# "Reverse Curriculum Generation")。
+#
+# 根本問題 (ladder7-13 で確定): T0 時間窓ラダーは strict と「終盤だけ」対面させる
+# ため、agent は strict の決定的な「序盤」を主体的に学習せず、T0=0 (素 strict) に
+# 橋渡しできない (held-out full は 0.81 まで到達するが strict_v1 は ~0%)。SIL
+# (ladder12) と R1 reward (ladder13) はいずれも棄却。
+#
+# 工夫 (1点 = reverse_curriculum): strict 段の rollout を「両 seat strict_v1 で
+# warmup_start 手だけ自己対戦させた盤面」から開始する。agent はまず（容易な）終盤を
+# その盤面から習得し、strict 段勝率が promote_win を超えるたび warmup を retreat_step
+# ずつ 0 へ後退 → 最終的に序盤 (turn 0) から全ゲームを strict と戦う。warmup を
+# 中立な strict 自己対戦盤面から作るため (handicap でない)、序盤を主体的に学習しない
+# 根本問題を端点で直接解く。reward は ladder11 (全run最高 full 0.812) の設定に戻し
+# (terminal_scale=1.0, shaping_coef=1.0)、逆カリキュラム単独の効果を A/B。resume は
+# ladder11 best.pt。strict 段に T0=0 (素strict) を含め、RC でそこを seed する。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder11/runs/20260614-055545__feature-poc-v-mpo__022f67f__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0          # ladder11 設定に復帰 (R1 棄却)
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 1.0        # ladder11 設定に復帰 (R1 棄却)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  sil:
+    enabled: false
+  reverse_curriculum:        # 逆カリキュラム (Florensa+ 2017) — 今回の唯一の工夫
+    enabled: true
+    warmup_start: 300        # strict段の rollout を strict自己対戦300手後の盤面から開始
+    retreat_step: 25         # strict段勝率が promote を超えるたび warmup を25手後退
+    promote_win: 0.55        # この勝率以上で warmup -= 25 (序盤へ前進)
+    demote_win: 0.30         # この勝率以下で warmup += 25 (終盤へ後退)
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

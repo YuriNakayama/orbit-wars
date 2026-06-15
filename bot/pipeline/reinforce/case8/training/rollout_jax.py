@@ -447,6 +447,57 @@ def _python_v8_opponent_actions(state: EnvState, player: int) -> jax.Array:
     )
 
 
+def _advance_strict_self_one(state: EnvState, warmup_turns: int, seat: int) -> EnvState:
+    """Advance one env `warmup_turns` ticks of strict-vs-strict self-play.
+
+    Reverse curriculum (Florensa+ 2017, backward expansion): instead of always
+    resetting to turn 0, seed the learner's rollout from a genuine mid-game
+    board produced by strict playing BOTH seats at full strength. The agent
+    then plays the remaining `horizon - warmup_turns` turns from there, so it
+    first masters the (easier) later game and — as `warmup_turns` retreats
+    toward 0 — progressively takes over the (harder) opening it otherwise never
+    learns under the T0 time-window curriculum.
+
+    Both seats run `strict_v1` (the held-out target's in-JAX port), so the
+    advanced state is a neutral, on-distribution strict opening — NOT an
+    artificially favorable handicap. Termination during warmup freezes the
+    state (the subsequent agent rollout sees `term` immediately and scores it).
+    `warmup_turns` is a Python int (static) so this is one trace per value.
+    """
+
+    def step_fn(carry: tuple[EnvState, jax.Array], _t: jax.Array) -> tuple[
+        tuple[EnvState, jax.Array], None
+    ]:
+        state, done = carry
+        a0 = _strict_v1_actions(state, seat)  # (L, 3)
+        a1 = _strict_v1_actions(state, 1 - seat)
+        actions = jnp.full(
+            (NUM_AGENTS_MAX, MAX_LAUNCHES_PER_AGENT, 3), -1.0, dtype=jnp.float32
+        )
+        actions = actions.at[seat].set(a0).at[1 - seat].set(a1)
+        new_state, _r, term = jax_env_step(state, actions)
+        next_state = jax.tree.map(
+            lambda new, old: jnp.where(done, old, new), new_state, state
+        )
+        return (next_state, done | term), None
+
+    (advanced, _done), _ = jax.lax.scan(
+        step_fn, (state, jnp.bool_(False)), jnp.arange(warmup_turns, dtype=jnp.int32)
+    )
+    return advanced
+
+
+@functools.lru_cache(maxsize=None)
+def _advance_strict_self_jit(
+    warmup_turns: int, seat: int
+) -> Callable[[EnvState], EnvState]:
+    """vmap+jit of `_advance_strict_self_one` over a batch of envs."""
+    vmapped = jax.vmap(
+        lambda s: _advance_strict_self_one(s, warmup_turns, seat), in_axes=0
+    )
+    return eqx.filter_jit(vmapped)
+
+
 def _rollout_one_env(
     model: ActorCriticJax,
     key: jax.Array,
@@ -825,6 +876,7 @@ def collect_rollout_jax(
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
     terminal_scale: float = 1.0,
+    rc_warmup_turns: int = 0,
 ) -> JaxRolloutBatch:
     """Run N parallel single-seat rollouts.
 
@@ -885,6 +937,15 @@ def collect_rollout_jax(
                 ships,
             )
         )
+
+    # Reverse curriculum (Florensa+ 2017): advance every env `rc_warmup_turns`
+    # ticks of strict-vs-strict self-play, so the learner's rollout starts from
+    # a genuine mid-game strict opening instead of turn 0. Applied OUTSIDE the
+    # jitted rollout (like handicap) on the batched reset state; the advance is
+    # its own jit'd (vmap'd) executable keyed by warmup_turns. rc=0 is the exact
+    # identity (no advance) so every existing run stays bit-identical.
+    if rc_warmup_turns > 0:
+        batched_state = _advance_strict_self_jit(rc_warmup_turns, seat)(batched_state)
 
     # W7: jit the vmapped rollout. Without jit the vmap(lax.scan over `horizon`
     # steps) runs eager — every per-step op dispatches from Python and syncs back

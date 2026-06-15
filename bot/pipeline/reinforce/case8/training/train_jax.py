@@ -471,6 +471,7 @@ def _run_iter(
     handicap: float = 1.0,
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
+    rc_warmup_turns: int = 0,
     sil_cfg: SilConfig | None = None,
     sil_buffer: FlatRollout | None = None,
     sil_cursor: jax.Array | None = None,
@@ -509,6 +510,7 @@ def _run_iter(
         handicap=handicap,
         opp_weaken=opp_weaken,
         opp_start_turn=opp_start_turn,
+        rc_warmup_turns=rc_warmup_turns,
     )
     rollout.planet_feats.block_until_ready()
     rollout_secs = time.perf_counter() - t0
@@ -1020,6 +1022,20 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     hcap_promote = float(hcap_cfg.get("promote_win", 0.6))
     hcap_demote = float(hcap_cfg.get("demote_win", 0.2))
     hcap_idx = int(hcap_cfg.get("start_idx", 0))
+    # Reverse curriculum (Florensa+ 2017): on strict rungs, seed the learner's
+    # rollout from a strict-vs-strict opening advanced `rc_warmup` turns, so it
+    # first masters the endgame and retreats toward the (hardest) opening. When
+    # the strict rung win-rate clears `rc_promote`, retreat warmup by `rc_step`
+    # (down to 0 = the full game from turn 0); drop below `rc_demote` and it
+    # backs off by `rc_step` again (up to `rc_start`). enabled=false ⇒ rc=0 ⇒
+    # bit-identical to the no-RC baseline.
+    rc_cfg = t_cfg.get("reverse_curriculum", {}) or {}
+    rc_enabled = bool(rc_cfg.get("enabled", False))
+    rc_start = int(rc_cfg.get("warmup_start", 300))
+    rc_step = int(rc_cfg.get("retreat_step", 25))
+    rc_promote = float(rc_cfg.get("promote_win", 0.55))
+    rc_demote = float(rc_cfg.get("demote_win", 0.30))
+    rc_warmup = rc_start if rc_enabled else 0
     # distilled_weights: BC clones of real rulebases loaded as fixed NN pool
     # opponents (opp_model swap — ms forward, no host callback / strict-graph
     # cost). heldout_eval.opponent="distilled" reuses the first clone.
@@ -1125,6 +1141,16 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             episodes_per_iter,
             horizon,
             opponent,
+        )
+    if rc_enabled:
+        logger.info(
+            "reverse_curriculum: warmup_start=%d retreat_step=%d "
+            "promote_win=%.2f demote_win=%.2f (strict rungs seeded from "
+            "strict-vs-strict opening, retreats to 0)",
+            rc_start,
+            rc_step,
+            rc_promote,
+            rc_demote,
         )
     # H1 (PFSP foundation): freeze the start-of-training model as the initial
     # self-snapshot opponent. H2: also seed a FIFO snapshot pool with it so the
@@ -1265,6 +1291,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             handicap=iter_handicap,
             opp_weaken=iter_weaken,
             opp_start_turn=iter_start_turn,
+            rc_warmup_turns=(rc_warmup if (rc_enabled and iter_is_strict) else 0),
             sil_cfg=sil_cfg,
             sil_buffer=sil_buffer,
             sil_cursor=sil_cursor,
@@ -1276,6 +1303,18 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
         if pool_strict_ladder and iter_is_strict:
             row["opp_start_turn"] = iter_start_turn
             row["opp_weaken"] = iter_weaken
+        # Reverse-curriculum retreat: on a strict rung, win-rate is measured from
+        # the rc_warmup-advanced start, so clearing rc_promote means the learner
+        # handles the game from that depth → retreat warmup toward 0 (the opening);
+        # falling below rc_demote backs it off. Only strict iters move the knob so
+        # the schedule tracks the true target, not the easy self/full rungs.
+        if rc_enabled and iter_is_strict:
+            w = float(row["win_rate"])
+            if w >= rc_promote and rc_warmup > 0:
+                rc_warmup = max(0, rc_warmup - rc_step)
+            elif w <= rc_demote and rc_warmup < rc_start:
+                rc_warmup = min(rc_start, rc_warmup + rc_step)
+            row["rc_warmup"] = rc_warmup
         if hcap_enabled and iter_is_strict and not pool_strict_ladder:
             w = float(row["win_rate"])
             if w >= hcap_promote and hcap_idx < len(hcap_ladder) - 1:

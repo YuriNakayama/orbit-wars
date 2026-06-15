@@ -733,6 +733,16 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter14: 逆カリキュラム (Florensa+2017) —
+    # strict段を strict自己対戦warmup盤面からseed、勝率上昇でwarmup→0へ後退。
+    "reinforce_case8_vmpo_ladder14": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder14",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder14.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter13: R1 reward工夫 (終端勝利増幅+shaping減衰)。
     "reinforce_case8_vmpo_ladder13": {
         "family": "reinforce",
