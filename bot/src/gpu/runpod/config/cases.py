@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter20: handicap で勝ちを人工生成。純粋RL探索で
+    # 素strictを動かせない (zero-variance) ため、初期ship boost (mode=ships, h=3→1
+    # anneal) で時々勝てる局面を作り勝利勾配を bootstrap。aim修正済 + ladder18 強base。
+    "reinforce_case8_vmpo_ladder20": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder20",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder20.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter19: reward勝利信号優位 (shaping 1.0→0.5,
     # terminal_scale 1.0→2.5) + 難段強制サンプル (force_rung_low_every=2 で T0=0段)。
     # aim修正後に残った真因 (素strict reward支配 + f_var難段回避) を複合で対処。
