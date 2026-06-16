@@ -733,6 +733,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter21: RL健全性修正 — degenerate-batch 自壊の阻止。
+    # A: skip_update_if_no_win (勝ち0iterの退化更新skip), B: vmpo.adv_std_floor=0.1
+    # (零分散バッチのノイズ増幅停止), C: no_op_bias 8→2 (over-fire抑制)。過去の
+    # curriculum/handicap が効く前提条件の修正。resume ladder18 best.pt。
+    "reinforce_case8_vmpo_ladder21": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder21",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder21.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter20: handicap で勝ちを人工生成。純粋RL探索で
     # 素strictを動かせない (zero-variance) ため、初期ship boost (mode=ships, h=3→1
     # anneal) で時々勝てる局面を作り勝利勾配を bootstrap。aim修正済 + ladder18 強base。

@@ -52,6 +52,14 @@ class VMPOConfigJax(NamedTuple):
     minibatch_size: int = 128
     max_grad_norm: float = 0.5
     normalize_advantage: bool = True
+    # Fix B (degenerate-batch guard): floor on the advantage std used by
+    # normalize_advantage. On a ~100%-loss batch (e.g. bare strict) returns are
+    # near-uniform so std→0; dividing by (std + _EPS) AMPLIFIES numerical noise
+    # into large normalized advantages, which V-MPO's top-half + softmax then
+    # reinforces (noise-selected "least-bad losing" actions → entropy collapse).
+    # Clamping the divisor to >= adv_std_floor keeps degenerate batches near-zero
+    # signal instead of exploding them. 0.0 = legacy (divide by std + _EPS).
+    adv_std_floor: float = 0.0
     lr: float = 3.0e-5
     weight_decay: float = 1.0e-5
     lr_end: float = 0.0
@@ -255,7 +263,10 @@ def vmpo_update_jax(
 
     advantages = rollout.advantages
     if cfg.normalize_advantage and n > 1:
-        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + _EPS)
+        # Fix B: clamp the divisor to >= adv_std_floor so a zero-variance
+        # (all-loss) batch stays near-zero signal instead of exploding noise.
+        denom = jnp.maximum(jnp.std(advantages), jnp.float32(cfg.adv_std_floor)) + _EPS
+        advantages = (advantages - jnp.mean(advantages)) / denom
     rollout = rollout._replace(advantages=advantages)
 
     old_model = jax.lax.stop_gradient(model)  # rollout-time policy snapshot

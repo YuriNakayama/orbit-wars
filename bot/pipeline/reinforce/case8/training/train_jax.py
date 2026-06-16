@@ -55,6 +55,7 @@ from pipeline.reinforce.case8.policy.model_jax import (
 from pipeline.reinforce.case8.training.ppo_jax import (
     FlatRollout,
     PPOConfigJax,
+    PPOStatsJax,
     make_optimizer,
     ppo_update_jax,
 )
@@ -113,6 +114,8 @@ def _build_vmpo_cfg(cfg_dict: dict[str, Any]) -> VMPOConfigJax:
         minibatch_size=int(t.get("minibatch_size", 128)),
         max_grad_norm=float(t.get("max_grad_norm", 0.5)),
         normalize_advantage=True,
+        # Fix B: advantage-std floor (from `vmpo.adv_std_floor`). 0.0 = legacy.
+        adv_std_floor=float(v.get("adv_std_floor", 0.0)),
         lr=float(t.get("lr", 3.0e-5)),
         weight_decay=float(t.get("weight_decay", 1.0e-5)),
         lr_end=float(t.get("lr_end", 0.0)),
@@ -121,6 +124,11 @@ def _build_vmpo_cfg(cfg_dict: dict[str, Any]) -> VMPOConfigJax:
 
 
 logger = logging.getLogger(__name__)
+
+# Fix A: stats returned when a degenerate (zero-win) iter skips its update — all
+# zeros so the metrics row records the skip without a spurious loss/entropy value.
+_ZERO = jnp.float32(0.0)
+_ZERO_PPO_STATS = PPOStatsJax(_ZERO, _ZERO, _ZERO, _ZERO, _ZERO, _ZERO, _ZERO)
 
 
 @dataclass(frozen=True)
@@ -472,6 +480,7 @@ def _run_iter(
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
     rc_warmup_turns: int = 0,
+    skip_update_if_no_win: bool = False,
     sil_cfg: SilConfig | None = None,
     sil_buffer: FlatRollout | None = None,
     sil_cursor: jax.Array | None = None,
@@ -545,8 +554,21 @@ def _run_iter(
             )
             update_flat = concat_flat(flat, sampled)
 
+    # Fix A (degenerate-batch guard): on a batch with ZERO winning episodes the
+    # advantage signal is pure noise (all returns ~equal & losing), and V-MPO's
+    # top-half + softmax reinforces noise-selected actions → entropy collapse that
+    # POISONS the shared policy (observed: bare-strict iters dropped entropy
+    # 44→12). When `skip_update_if_no_win` is set, skip the policy/value UPDATE on
+    # such iters — the rollout still feeds the pool EMA + held-out, but the
+    # degenerate gradient never hits the weights. Complements fix B (adv-std
+    # floor). Disabled ⇒ legacy (always update).
+    n_wins = int(np.sum(np.asarray(rollout.episode_outcomes) > 0))
+    skip_degenerate = skip_update_if_no_win and n_wins == 0
+
     t0 = time.perf_counter()
-    if algo == "vmpo":
+    if skip_degenerate:
+        stats = _ZERO_PPO_STATS
+    elif algo == "vmpo":
         # V-MPO update (Phase 2). Optimizes (model, vp=η/α) jointly; the A/B with
         # PPO shares the exact same rollout/flat/PFSP/held-out harness, differing
         # ONLY here in the loss. opt_state covers (model, vp) for this branch.
@@ -930,6 +952,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     time_bonus_coef = float(t_cfg.get("time_bonus_coef", 0.0))
     time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
     terminal_scale = float(t_cfg.get("terminal_scale", 1.0))
+    # Fix A (degenerate-batch guard): skip the policy/value update on any iter
+    # whose rollout has zero winning episodes (the gradient is pure noise that
+    # V-MPO's top-half reinforces → entropy collapse poisoning the shared policy).
+    skip_update_if_no_win = bool(t_cfg.get("skip_update_if_no_win", False))
     # Held-out eval: every `heldout_eval_every` iters, measure win-rate vs a
     # FIXED opponent (matchmaking-free absolute progress). 0 disables.
     heldout_cfg = t_cfg.get("heldout_eval", {}) or {}
@@ -1304,6 +1330,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             opp_weaken=iter_weaken,
             opp_start_turn=iter_start_turn,
             rc_warmup_turns=(rc_warmup if (rc_enabled and iter_is_strict) else 0),
+            skip_update_if_no_win=skip_update_if_no_win,
             sil_cfg=sil_cfg,
             sil_buffer=sil_buffer,
             sil_cursor=sil_cursor,
