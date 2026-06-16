@@ -733,6 +733,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter23: 案B — T0=0素strict段に dense差分報酬を
+    # 上乗せ (cliff_dense_boost=0.05) し非退化勾配で「序盤を学習」。skip A2はOFF
+    # (dense信号が勾配供給)。ladder22切り分け「skipでは学習不能、非退化信号が必要」
+    # への対処。resume ladder22 best.pt (full 0.86)。
+    "reinforce_case8_vmpo_ladder23": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder23",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder23.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter22: 案A — 地力↑継続 + 素strict段を degenerate
     # 無しで強制訓練。C2: no_op_bias 2→1 (over-fire是正をさらに), A2:
     # skip_update_win_thresh=0.05 (win<5%段の退化更新skip、ladder21のn_wins==0漏れ修正),

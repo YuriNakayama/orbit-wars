@@ -1,0 +1,100 @@
+# ============================================================================
+# Ladder-pool iteration 23 (loop tick の工夫: 案B — T0=0素strict段に dense 信号で
+# 非退化勾配を与え「序盤を学習」させる)。
+#
+# ladder22 切り分け (ladder22_result.md): degenerate poison は A2 skip で完全解決
+# (T0=0段の entropy崩壊阻止) も、skip(保護)だけでは T0=0 を「学習」せず断崖不変。
+# 残る唯一の障壁は「T0=0段に学習可能な非退化信号が無い」こと (win~0 で sparse勝利
+# 信号が degenerate)。
+#
+# 工夫 (1点 = T0=0段に dense 信号): cliff_dense_boost=0.05 で T0=0(素strict)段だけ
+# dense差分報酬 (out-position報酬 c·(mine-enemy)/(mine+enemy)/turn, 有界・非hoarding)
+# を上乗せ。勝てなくても「序盤の良い動き(territory確保)」に非退化の勾配が出る (Lux
+# S1の shaped→sparse を断崖段のみに適用)。同時に skip_update_win_thresh=0 で A2 を
+# OFF (dense信号が勾配を供給するので skip保護は不要、むしろ skip すると学習できない)。
+# B(adv_std_floor=0.1)/no_op_bias=1.0(地力実証済)は維持。resume ladder22 best.pt
+# (full 0.86)。material最適化偏重 (ladder13落とし穴) を避け dense差分主体。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 1.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder22/runs/20260616-113645__feature-poc-v-mpo__af449ce__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  cliff_dense_boost: 0.05      # 案B: T0=0段のみ dense差分を +0.05 (非退化勾配)
+  terminal_scale: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  skip_update_win_thresh: 0.0  # A2 OFF: dense信号が勾配を供給、skipすると学習不能
+  vmpo:
+    adv_std_floor: 0.1         # B: 維持 (零分散ノイズ増幅防止)
+  reverse_curriculum:
+    enabled: false
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 2      # T0=0段を2iter毎照射 (dense信号で学習量確保)
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

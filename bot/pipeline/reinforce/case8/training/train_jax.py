@@ -953,6 +953,10 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     shaping_clip = float(t_cfg.get("shaping_clip", 0.0))
     dense_coef_ship = float(t_cfg.get("dense_coef_ship", 0.0))
     dense_coef_planet = float(t_cfg.get("dense_coef_planet", 0.0))
+    # 案B: extra dense differential reward added ONLY on the T0=0 bare-strict rung
+    # (where wins ~0 makes the sparse signal degenerate), to give it a learnable
+    # non-degenerate gradient. 0.0 ⇒ disabled.
+    cliff_dense_boost = float(t_cfg.get("cliff_dense_boost", 0.0))
     time_bonus_coef = float(t_cfg.get("time_bonus_coef", 0.0))
     time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
     terminal_scale = float(t_cfg.get("terminal_scale", 1.0))
@@ -1306,6 +1310,18 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
                 iter_handicap = hcap_ladder[hcap_idx]
             else:
                 iter_weaken = hcap_ladder[hcap_idx]
+        # 案B (ladder22 切り分け): the bare-strict (T0=0) rung has ~0 wins so its
+        # sparse signal is degenerate (skipped by fix A / noise-amplified otherwise)
+        # → it never learns the opening. Give THAT rung extra DENSE differential
+        # reward (out-positioning: c·(mine-enemy)/(mine+enemy) per turn, bounded,
+        # non-hoarding) so it has a non-degenerate gradient even while losing —
+        # Lux S1's "shaped signal where sparse win is absent", on the cliff rung
+        # only. Other rungs keep the base dense coef. boost=0 ⇒ legacy.
+        iter_dense_ship = dense_coef_ship
+        iter_dense_planet = dense_coef_planet
+        if cliff_dense_boost > 0.0 and iter_is_strict and iter_start_turn == 0.0:
+            iter_dense_ship = dense_coef_ship + cliff_dense_boost
+            iter_dense_planet = dense_coef_planet + cliff_dense_boost
         key, k_iter = jax.random.split(key)
         model, opt_state, vp, row, sil_buffer, sil_cursor, sil_count = _run_iter(
             model,
@@ -1326,8 +1342,8 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             coef_ship=coef_ship,
             coef_planet=coef_planet,
             shaping_clip=shaping_clip,
-            dense_coef_ship=dense_coef_ship,
-            dense_coef_planet=dense_coef_planet,
+            dense_coef_ship=iter_dense_ship,
+            dense_coef_planet=iter_dense_planet,
             time_bonus_coef=time_bonus_coef,
             time_penalty_coef=time_penalty_coef,
             terminal_scale=terminal_scale,
