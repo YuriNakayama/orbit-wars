@@ -480,7 +480,7 @@ def _run_iter(
     opp_weaken: float = 0.0,
     opp_start_turn: float = 0.0,
     rc_warmup_turns: int = 0,
-    skip_update_if_no_win: bool = False,
+    skip_update_win_thresh: float = 0.0,
     sil_cfg: SilConfig | None = None,
     sil_buffer: FlatRollout | None = None,
     sil_cursor: jax.Array | None = None,
@@ -554,16 +554,20 @@ def _run_iter(
             )
             update_flat = concat_flat(flat, sampled)
 
-    # Fix A (degenerate-batch guard): on a batch with ZERO winning episodes the
-    # advantage signal is pure noise (all returns ~equal & losing), and V-MPO's
-    # top-half + softmax reinforces noise-selected actions → entropy collapse that
-    # POISONS the shared policy (observed: bare-strict iters dropped entropy
-    # 44→12). When `skip_update_if_no_win` is set, skip the policy/value UPDATE on
-    # such iters — the rollout still feeds the pool EMA + held-out, but the
-    # degenerate gradient never hits the weights. Complements fix B (adv-std
-    # floor). Disabled ⇒ legacy (always update).
-    n_wins = int(np.sum(np.asarray(rollout.episode_outcomes) > 0))
-    skip_degenerate = skip_update_if_no_win and n_wins == 0
+    # Fix A (degenerate-batch guard): on a near-all-loss batch the advantage signal
+    # is pure noise (returns ~equal & losing), and V-MPO's top-half + softmax
+    # reinforces noise-selected actions → entropy collapse that POISONS the shared
+    # policy (observed: bare-strict iters dropped entropy 44→12). Skip the
+    # policy/value UPDATE on any iter whose win-rate < `skip_update_win_thresh` —
+    # the rollout still feeds the pool EMA + held-out, but the degenerate gradient
+    # never hits the weights. ladder21 used a strict n_wins==0 test that missed the
+    # T0=0 rung (win=0.005, 1 win) so it still collapsed; a small positive
+    # threshold (e.g. 0.05) catches those near-zero-win degenerate batches.
+    # Complements fix B (adv-std floor). thresh<=0 ⇒ legacy (always update).
+    iter_win_frac = float(np.mean(np.asarray(rollout.episode_outcomes) > 0))
+    skip_degenerate = (
+        skip_update_win_thresh > 0.0 and iter_win_frac < skip_update_win_thresh
+    )
 
     t0 = time.perf_counter()
     if skip_degenerate:
@@ -953,9 +957,14 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
     time_penalty_coef = float(t_cfg.get("time_penalty_coef", 0.0))
     terminal_scale = float(t_cfg.get("terminal_scale", 1.0))
     # Fix A (degenerate-batch guard): skip the policy/value update on any iter
-    # whose rollout has zero winning episodes (the gradient is pure noise that
+    # whose rollout win-rate < this threshold (near-all-loss → noise gradient that
     # V-MPO's top-half reinforces → entropy collapse poisoning the shared policy).
-    skip_update_if_no_win = bool(t_cfg.get("skip_update_if_no_win", False))
+    # ladder21's n_wins==0 test missed the T0=0 rung (win=0.005); a small positive
+    # threshold (e.g. 0.05) catches it. 0.0 ⇒ disabled (always update). Accepts the
+    # legacy bool `skip_update_if_no_win` (true → 1/episodes_per_iter, i.e. n_wins==0).
+    skip_update_win_thresh = float(t_cfg.get("skip_update_win_thresh", 0.0))
+    if t_cfg.get("skip_update_if_no_win", False) and skip_update_win_thresh <= 0.0:
+        skip_update_win_thresh = 0.5 / max(1, episodes_per_iter)  # ~n_wins==0
     # Held-out eval: every `heldout_eval_every` iters, measure win-rate vs a
     # FIXED opponent (matchmaking-free absolute progress). 0 disables.
     heldout_cfg = t_cfg.get("heldout_eval", {}) or {}
@@ -1330,7 +1339,7 @@ def main(config: Path = _DEFAULT_CONFIG) -> None:
             opp_weaken=iter_weaken,
             opp_start_turn=iter_start_turn,
             rc_warmup_turns=(rc_warmup if (rc_enabled and iter_is_strict) else 0),
-            skip_update_if_no_win=skip_update_if_no_win,
+            skip_update_win_thresh=skip_update_win_thresh,
             sil_cfg=sil_cfg,
             sil_buffer=sil_buffer,
             sil_cursor=sil_cursor,

@@ -733,6 +733,18 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter22: 案A — 地力↑継続 + 素strict段を degenerate
+    # 無しで強制訓練。C2: no_op_bias 2→1 (over-fire是正をさらに), A2:
+    # skip_update_win_thresh=0.05 (win<5%段の退化更新skip、ladder21のn_wins==0漏れ修正),
+    # force_rung_low_every=2 で T0=0素strict段を強制照射し訓練量確保。resume ladder21。
+    "reinforce_case8_vmpo_ladder22": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder22",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder22.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter21: RL健全性修正 — degenerate-batch 自壊の阻止。
     # A: skip_update_if_no_win (勝ち0iterの退化更新skip), B: vmpo.adv_std_floor=0.1
     # (零分散バッチのノイズ増幅停止), C: no_op_bias 8→2 (over-fire抑制)。過去の
