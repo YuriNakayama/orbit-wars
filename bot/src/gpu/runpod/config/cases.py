@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter24: 案B (boost縮小) — cliff_dense_boost
+    # 0.05→0.01。ladder23の0.05はT0=0段でreward-27/entropy崩壊(dense支配=ladder13
+    # 落とし穴)。1/5に縮小し dense が ±1終端を埋もれさせない大きさに。resume ladder22。
+    "reinforce_case8_vmpo_ladder24": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder24",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder24.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter23: 案B — T0=0素strict段に dense差分報酬を
     # 上乗せ (cliff_dense_boost=0.05) し非退化勾配で「序盤を学習」。skip A2はOFF
     # (dense信号が勾配供給)。ladder22切り分け「skipでは学習不能、非退化信号が必要」
