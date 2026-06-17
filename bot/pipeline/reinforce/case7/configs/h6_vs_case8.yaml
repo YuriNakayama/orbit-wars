@@ -1,0 +1,62 @@
+# case7 H6: train vs the PARITY-FAITHFUL case8 opponent — the decisive test of
+# whether the train/eval gap (not scale/mechanism) was the real blocker.
+#
+# Investigation result: H4's opponent baseline_jax_full was a crude ~10% approx
+# of real v1, so H4 learned to beat a phantom and lost 0/30 to the real rulebase.
+# case8 baseline_jax is ~90% action-identical to real baseline_v8 (measured:
+# source 100%, shared 52/56). So a policy that learns to beat baseline_jax_case8
+# SHOULD transfer to the real v8 at eval.
+#
+# Clean design: noop warmup (0-3) → baseline_jax_case8 (3-150). NO self_snapshot
+# pool, so the result is unambiguous (in-training win vs case8 should track the
+# real-v8 win, unlike H4). 150 iter (scale helped vs the JAX opponent).
+#
+# Eval: final ckpt vs REAL baseline_v8 (30 paired games). If win rate is now
+# nonzero/climbing, parity was the blocker and the JAX proxy is trustworthy.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 150
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 3
+    early: noop
+    late: baseline_jax_case8   # the parity-faithful rulebase opponent
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

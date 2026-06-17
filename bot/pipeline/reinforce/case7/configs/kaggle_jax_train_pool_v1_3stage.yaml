@@ -1,0 +1,68 @@
+# RunPod/Kaggle JAX training config — H6b: 3-stage curriculum
+# (noop → baseline_jax_lite → python_v1).
+#
+# 背景 (2026-06-02):
+# pool_v1 (H5) と pool_v1_h50 (H6d) で「opponent を本物 v1 に切り替えた瞬間に
+# 0/8 全敗」が再現、PPO approx_kl ~ 0 で勾配信号消失。
+# 仮説: noop と python_v1 の間に勝てる相手 (baseline_jax_lite = case1 の近似 v1)
+# を挟むことで、PPO が「勝った episode」を observe でき勾配が立つ。
+#
+# Curriculum:
+#   iter 0-4   : noop (5 iter)
+#   iter 5-14  : baseline_jax_lite (10 iter、勝てる相手で policy 安定化)
+#   iter 15-29 : python_v1 (15 iter、本物 v1 で最終調整)
+#
+# 完走想定 (Kaggle T4x2, h=500):
+#   noop iter ~9min × 5 = 45min
+#   baseline_jax_lite iter ~9min × 10 = 90min (host call なし、in-JAX で軽い)
+#   python_v1 iter ~50min × 15 = 12.5h (host callback で重い)
+#   合計 ~14h → Kaggle 9h-12h 上限ぎりぎり、ep を絞る必要あり
+#
+# 短期 smoke 版は ep=4, h=100 で 1h 想定。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 30
+  episodes_per_iter: 8
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 15000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    mid_switch_iter: 15
+    early: noop
+    mid: baseline_jax_lite
+    late: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

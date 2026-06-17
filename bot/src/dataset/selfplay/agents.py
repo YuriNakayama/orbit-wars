@@ -23,6 +23,31 @@ AGENT_REGISTRY: dict[str, str] = {
     "baseline_v7": "pipeline.rulebase.case7.baseline.agent:agent",
     "baseline_v8": "pipeline.rulebase.case8.baseline.agent:agent",
     "baseline_v9": "pipeline.rulebase.case9.baseline.agent:agent",
+    # jax_v1 = case1 strict port (case8 grid+allocator architecture with case1's
+    # GEOMETRIC aim solver, NOT case8's engine-replay). 30-state action parity vs
+    # baseline_v1: 90% full-exact, 100% source-match, 0 ship miscount; the residual
+    # is mirror-planet score ties (equal-value targets, angle/ship-allocation tie).
+    "jax_v1": "pipeline.rulebase.case1.baseline_jax.strict.agent_jax:agent",
+    # jax_v2 = case2 strict port (case8 strategy/allocator + case1 GEOMETRIC aim,
+    # case2 is case1-lineage on aim, case8-lineage on strategy). Half-step intercept
+    # + harass enabled per case2 config. 30-state parity vs baseline_v2: 90% exact,
+    # 100% source, 0 miscount; residual = mirror-planet score ties.
+    "jax_v2": "pipeline.rulebase.case2.baseline_jax.strict.agent_jax:agent",
+    # jax_v3 = case3 strict port (case2 base: case8 strategy + case1 geometric aim).
+    # case3 adds ROLLOUT (true2p shallow mission re-ordering); this base does NOT
+    # apply rollout_reorder, so it diverges from baseline_v3 whenever rollout
+    # changes commit order. 30-state parity vs baseline_v3: 87% exact, 100% source,
+    # 0 miscount (rollout affects ~1/30; rest are mirror-planet ties).
+    "jax_v3": "pipeline.rulebase.case3.baseline_jax.strict.agent_jax:agent",
+    "jax_v4": "pipeline.rulebase.case4.baseline_jax.agent_jax:agent",
+    # jax_v6 = case8 strict base + STAY burst-hold (stay_jax). Single-turn parity
+    # 12/12; consecutive_holds cap (STAY_BURST_MAX_HOLD_TURNS) is host-side, so
+    # multi-turn play may hold one turn longer than Python at the 3-turn cap edge.
+    "jax_v6": "pipeline.rulebase.case6.baseline_jax.agent_jax:agent",
+    "jax_v8": "pipeline.rulebase.case8.baseline_jax.agent_jax:agent",
+    # jax_v9 = case8 strict base; ANTI_PING_PONG cross-turn cooldown not yet
+    # wired (stateless single-turn parity 12/12, diverges in multi-turn play).
+    "jax_v9": "pipeline.rulebase.case9.baseline_jax.agent_jax:agent",
     "case0": "pipeline.rulebase.case0.main:agent",
     "il_v0": "pipeline.imitation.case0.policy.agent:agent",
     "il_v1": "pipeline.imitation.case1.policy.agent:agent",
@@ -49,6 +74,7 @@ AGENT_REGISTRY: dict[str, str] = {
     "rl_v4": "pipeline.reinforce.case4.policy.agent:agent",
     "rl_v5": "pipeline.reinforce.case5.policy.agent:agent",
     "rl_v6": "pipeline.reinforce.case6.policy.agent:agent",
+    "rl_v7": "pipeline.reinforce.case7.policy.agent:agent",
     "random": "random",
 }
 

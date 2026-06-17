@@ -1,0 +1,56 @@
+# RunPod/Kaggle JAX training config — pool curriculum: noop → python_v8.
+#
+# 背景 (2026-06-02):
+# - pool_v1 (noop→python_v1) が成功すれば次は最強 baseline python_v8 で学習。
+# - v8 = case8 (predict cache + LB1224 strategy, production champion)。v1 を制圧
+#   できれば v8 への汎化性 (PFSP の本来の目的) を試す段階。
+# - host callback で v8 oracle 呼ぶ前に reset_predict_cache() を必ず実行
+#   (project_case_jax_phase0 memory)。
+#
+# config: pool_v1 と同型。opponent=curriculum, late=python_v8。
+# 想定 throughput: v1 と v8 は同程度の Python 計算量 (v8 は cache 効くので僅か速い)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 8
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 10000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 0.50
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: python_v8
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

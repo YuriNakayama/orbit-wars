@@ -1,0 +1,41 @@
+# Smoke config for reinforce/case3 (PPO + BC warm-start, per_planet head).
+#
+# 4 iter x 4 ep CPU smoke. The model is hidden=192 (matches case9 per_planet BC
+# checkpoint) so weights can load 1:1; smoke wall-clock is ~5-10 min on CPU.
+
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: true
+  weights_path: data/output/models/imitation/case9_per_planet/runs/20260512-080505__feature-imitation-data-volume-sweep__593a7c4__seed0/best.pt
+
+training:
+  seed: 0
+  iterations: 4
+  episodes_per_iter: 4
+  lr: 1.0e-4
+  weight_decay: 0.0
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.003
+  kl_beta: 0.1
+  ppo_epochs: 4
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  opponent: random_noop
+
+output:
+  run_dir: data/output/models/reinforce/case7/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

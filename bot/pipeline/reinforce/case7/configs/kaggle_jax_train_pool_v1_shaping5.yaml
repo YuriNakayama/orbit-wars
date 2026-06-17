@@ -1,0 +1,53 @@
+# RunPod/Kaggle JAX training config — H6c: shaping_coef 0.5 → 5.0。
+#
+# pool_v1 (H5, h=500) が live v1 戦で 0/30 棄却された後の次仮説 (H6d 失敗時の保険)。
+# horizon は 500 のままで shaping_coef を 10x にして dense reward 効果を強化。
+# planets diff (mine - enemy) が 1 planet 動くごとに reward +5/-5 が入り、
+# terminal ±1 と比べて 1.6x 強い signal。これで approx_kl ~ 0 問題を緩和したい。
+#
+# 完走想定: pool_v1 と同じ ~11h22 (Kaggle T4x2)。今すぐ起動するかは H6d 結果次第。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 8
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 10000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_coef: 5.0
+  shaping_mode: planets
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 5
+    early: noop
+    late: python_v1
+
+output:
+  run_dir: data/output/models/reinforce/case7_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

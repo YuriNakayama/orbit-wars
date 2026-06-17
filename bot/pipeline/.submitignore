@@ -9,5 +9,10 @@ evaluation/
 training/
 scripts/
 
+# JAX 化エージェント / GPU ベンチ (学習・データ生成用、Kaggle submit 対象外)
+baseline_jax/
+baseline_jax_full/
+_bench/
+
 # ローカル参照用の config (baseline は定数として core/config.py に持つ)
 configs/
