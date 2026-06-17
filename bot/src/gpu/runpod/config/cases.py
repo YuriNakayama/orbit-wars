@@ -733,6 +733,17 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "preprocess_cmd": "",
         "canonical_weights": "",
     },
+    # reinforce/case8 ladder-pool iter25: no_op_bias 1.0→0.0 で地力(full)最大化。
+    # strict勝率は地力と単調相関(差分分析)、地力↑主因はno_op_bias↓。over-fire是正を
+    # 限界まで進め full 0.86超を狙い、その裾でstrict勝率↑か検証。他はladder22同一。
+    "reinforce_case8_vmpo_ladder25": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder25",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder25.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     # reinforce/case8 ladder-pool iter24: 案B (boost縮小) — cliff_dense_boost
     # 0.05→0.01。ladder23の0.05はT0=0段でreward-27/entropy崩壊(dense支配=ladder13
     # 落とし穴)。1/5に縮小し dense が ±1終端を埋もれさせない大きさに。resume ladder22。
