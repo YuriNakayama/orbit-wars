@@ -1,0 +1,108 @@
+# ============================================================================
+# Ladder-pool iteration 16 (loop tick の工夫: 逆カリキュラム — 強制後退 (warmup advance 単一compile化))。
+#
+# ladder14 診断: 逆カリキュラム (strict自己対戦warmup盤面seed) はGPUで動作したが、
+# strict段の学習勝率が 0.31-0.38 で頭打ちし promote_win=0.55 に届かず → warmup が
+# 300 のまま一度も後退せず。結果、agent は「終盤を strict有利盤面から」だけ訓練し
+# 序盤を主体的に学習せず、bare strict_v1 held-out は 0.0156 (campaign共通の noise)
+# に留まった。逆カリキュラムの核心 (warmup→0 へ後退して序盤を学習し転移) が一度も
+# 発火しなかった。
+#
+# 工夫 (1点 = retreat_every_strict): 勝率gateを bypass し、strict段に当たるたび
+# 無条件で warmup を retreat_step ずつ後退させる。これで warmup は強制的に 300→0
+# へ降り (~12 strict段で 0 到達)、agent は終盤→中盤→序盤と段階的に全局面を学習、
+# 最終的に turn 0 から素 strict と戦う。「序盤を学習させれば turn-0 strict に転移
+# するか」を本来検証する。他は ladder14 と同一 (reward は ladder11 設定、resume は
+# ladder11 best.pt) — 後退trigger (win-gate→強制schedule) のみの A/B。
+#
+# ladder16 = ladder15 と同設定。ladder15 で強制後退が機能した (warmup 300→225 と降下) が、
+# warmup が毎 strict 段で新値になり warmup advance graph が毎回 ~870s 再compile (1h で
+# iter9 のみ、warmup=225 止まり)。ladder16 は rollout_jax の warmup advance を traced
+# scalar + static-max scan で単一compile化 (再compileゼロ) する修正のみを入れた re-run。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder11/runs/20260614-055545__feature-poc-v-mpo__022f67f__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  sil:
+    enabled: false
+  reverse_curriculum:        # 逆カリキュラム — 強制後退 (warmup advance 単一compile化) (今回の唯一の変更)
+    enabled: true
+    warmup_start: 300
+    retreat_step: 25
+    retreat_every_strict: 1  # strict段ごとに無条件後退 (~12段でwarmup→0、勝率gate無視)
+    promote_win: 0.55        # 強制schedule時は未使用 (記録のため残置)
+    demote_win: 0.30
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

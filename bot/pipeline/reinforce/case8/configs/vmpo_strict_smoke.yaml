@@ -1,0 +1,56 @@
+# V-MPO smoke with STRICT JAX rulebase opponents (held-out + pool). 2 iter.
+# held-out = strict_v1 (case1 strict port, in-JAX). pool = strict_v1/v2/v3 + self.
+# NOTE: 3 strict branches inflate iter0 compile (~tens of sec each); runtime fast.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+training:
+  algo: vmpo
+  seed: 0
+  iterations: 2
+  episodes_per_iter: 4
+  horizon: 500
+  lr: 3.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  value_coef: 0.5
+  ppo_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  heldout_eval:
+    every: 1
+    opponent: strict_v1
+    episodes: 4
+    seed: 777000
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 1
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 1
+    cap: 4
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_v8: false
+    include_strict: [strict_v1, strict_v2, strict_v3]
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

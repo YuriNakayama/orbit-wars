@@ -1,0 +1,98 @@
+# ============================================================================
+# Ladder-pool iteration 25 (loop tick の工夫: no_op_bias 1.0→0.0 で地力を最大化)。
+#
+# strict勝利ケース差分 (strict_win_cases_diff.md): strict勝率は汎用地力(full)と単調
+# 相関 (full 0.81=strict峰 vs full 0.63=strict0)。strict 1-3/64 勝利は「特殊技」でなく
+# 「地力の高いモデルが確率的に拾った勝ち」。地力↑の主因は no_op_bias↓ (8→2→1で
+# over-fire是正→fleet運用改善、ladder21深掘り)。
+#
+# 工夫 (1点 = no_op_bias 1.0→0.0): over-fire是正を限界まで進め地力(full)を最大化。
+# no_op_bias=0 で NO-OP罰が消え「撃つべき時だけ撃つ」を完全に許容。これで full が
+# 0.86超に伸び、その裾で held-out strict_v1 が増えるかを検証 (地力↑が strict勝率↑の
+# 最短という差分分析の直接検証)。他は ladder22 と完全同一 (A2 skip / B adv_std_floor /
+# force_rung_low / pool / reward)。resume ladder22 best.pt (full 0.86)。
+# 注: no_op_bias=0 で過小発射になり地力が下がる逆効果のリスクもあり、それも情報。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 0.0            # 1.0→0.0: over-fire是正を限界まで (地力max狙い)
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder22/runs/20260616-113645__feature-poc-v-mpo__af449ce__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  skip_update_win_thresh: 0.05   # A2: win<5%の degenerate iter更新をskip (T0=0崩壊阻止)
+  vmpo:
+    adv_std_floor: 0.1           # B: 維持
+  reverse_curriculum:
+    enabled: false
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 2        # force: 2iter毎に最終entry(T0=0素strict)を強制照射
+    # 末尾=0 (素strict)。force_rung_low が常にこの素strict段を選ぶ → 訓練量確保。
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

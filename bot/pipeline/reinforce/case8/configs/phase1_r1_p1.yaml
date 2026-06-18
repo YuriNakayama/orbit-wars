@@ -1,0 +1,70 @@
+# Phase 1 R1: f_var priority_p=1.0 (A/B 軸はこの1値のみ, 他は ppo_base と同一)
+# 全 run で固定: プール = full + lite + self_snapshot, held-out = baseline_jax_full
+# (in-JAX, every=1 で毎iter記録), 20 iter, algo=ppo。
+# R1 はこの base から priority_p のみを {1.0,2.0,4.0} で振る (phase1_r1_p*.yaml)。
+# 本物 rulebase case8 は host-callback のため学習ループに入れない (held-out も in-JAX proxy)。
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  algo: ppo
+  seed: 0
+  iterations: 20
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 1                  # 毎iter記録で②(0→滑らか増加)を密に観察
+    opponent: baseline_jax_full   # in-JAX 固定相手 (進捗 yardstick)
+    episodes: 32
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 1.0           # ★R1 A/B 値
+    priority_ema: 0.7
+    include_lite: true        # プール = full(常時) + lite + self
+    include_v8: false         # python_v8 host-callback => GPU stall; held-out も in-JAX
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

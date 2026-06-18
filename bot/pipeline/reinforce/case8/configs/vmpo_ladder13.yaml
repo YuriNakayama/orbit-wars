@@ -1,0 +1,96 @@
+# ============================================================================
+# Ladder-pool iteration 13 (loop tick の工夫: R1 reward 工夫 — 終端勝利増幅
+# + shaping 減衰)。
+#
+# reward 分析 (ladder12 metrics): 素strict段 (T0=0) の mean_reward=-3.44 のうち
+# 終端は±1、残り -2.44 は material 比 shaping (ratio, coef=1.0) が支配。中段
+# (T0=110-140) は reward_max +3.9 = 勝ち盤面に到達できるのに win 0.14-0.32 で
+# 終端勝利に変換できず。web分析 (PBRS落とし穴 / Effective Reward Spec /
+# Action Guidance): shaping が終端勝利を埋没させると agent は material 蓄積を
+# 最適化し「勝つ」方向に勾配が向かない。
+#
+# 工夫 (1点 = R1 reward バランス): 終端勝利/敗北の ±1 を terminal_scale=8.0 で
+# 増幅し、同時に shaping_coef 1.0→0.3 に減衰。「勝つ」信号を shaping より優位に
+# して material 最適化でなく勝利最適化へ向ける。SIL は無効に戻し R1 単独の効果を
+# A/B (terminal_scale と shaping_coef は「終端 vs shaping バランス」の表裏で
+# 単一の狙い)。resume は ladder11 best.pt (全run最高 full 0.812)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder11/runs/20260614-055545__feature-poc-v-mpo__022f67f__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 0.3          # R1: 1.0→0.3 減衰 (material shaping を勝利信号の従に)
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 8.0        # R1: 終端勝敗 ±1 → ±8 増幅 (勝利信号を shaping 優位に)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  sil:
+    enabled: false           # R1 単独の効果を見るため SIL は無効に戻す
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

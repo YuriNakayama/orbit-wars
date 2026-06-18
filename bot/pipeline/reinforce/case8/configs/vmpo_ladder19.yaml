@@ -1,0 +1,98 @@
+# ============================================================================
+# Ladder-pool iteration 19 (loop tick の工夫: reward勝利信号優位 + 難段強制サンプル)。
+#
+# campaign 総括 (ladder1-18): aim修正 (ladder18) で full 0.828 新記録・中終盤の捕獲
+# 効率は上がったが held-out strict_v1 は ~0 のまま。機械的要因 (aim/curriculum/量) は
+# 出し尽くし、残る真因は2つ: (1) 素strict段 reward -3.42 は shaping(-2.4)が±1勝利を
+# 埋没させ「勝つ」勾配が立たない、(2) f_var が勝てない T0=0段をほぼ選ばず難段に勾配が
+# 届かない (ladder13 terminal_scale=8 も 70iter中 T0=0段1回のみで未検証だった)。
+#
+# 工夫 (1点 = 「素strict段に勝利優位の勾配を確実に届ける」の表裏2項):
+#  (a) reward 勝利信号優位: shaping_coef 1.0→0.5, terminal_scale 1.0→2.5 (ladder13の8は
+#      過剰だったので gentle に)。material 蓄積でなく勝利へ勾配を向ける。
+#  (b) 難段強制サンプル: strict_ladder の最終entry を T0=0 にし force_rung_low_every=2 で
+#      2 pool-iter ごとに素strict段を強制照射 → f_var の難段回避を断ち、(a)の勝利勾配を
+#      T0=0 に確実に当てる。
+# 注: reward は global (per-rung不可) なので全段に適用される A/B だが、(a)(b) は単一の
+# 狙い (素strictで勝利学習) の表裏。resume は ladder18 best.pt (aim修正込, full 0.828)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder18/runs/20260615-114258__feature-poc-v-mpo__0ee7e14__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 0.5          # (a) 1.0→0.5: material shaping を勝利信号の従に
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 2.5        # (a) 1.0→2.5: 終端勝敗を gentle に増幅 (ladder13の8は過剰)
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  reverse_curriculum:
+    enabled: false
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 2   # (b) 2 pool-iterごとに最終entry(T0=0)を強制照射
+    # 最終entry = T0=0 (素strict)。force_rung_low が常にこの素strict段を選ぶ。
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

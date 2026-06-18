@@ -1,0 +1,39 @@
+# Local 1-iter smoke (no BC).
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 1
+  episodes_per_iter: 4
+  horizon: 50
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  shaping_coef: 0.001
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  kl_beta: 0.0
+  ppo_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+  target_kl: null
+  opponent: noop
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

@@ -85,6 +85,29 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
             "bot/pipeline/imitation/case9/policy/weights_three_head.pt"
         ),
     },
+    # case9_rulebase: 実 rulebase baseline_v1 の蒸留 (selfplay ミラー棋譜から BC)。
+    # mart は local preprocess + dvc push 済みを pull する (preprocess_cmd なし)。
+    # 蒸留クローンは reinforce/case8 の distilled opponent / bc_warmstart 教師に使う。
+    "case9_rulebase": {
+        "stage": "train_imitation_case9_rulebase",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_rulebase.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # case9_rulebase_v8: baseline_v8 (v1 に勝率 ~70-75%) の蒸留。v8 vs v1 混合
+    # 対戦から teacher_agents=[baseline_v8] で v8 側のみ教師化 (Phase 1)。
+    "case9_rulebase_v8": {
+        "stage": "train_imitation_case9_rulebase_v8",
+        "train_module": "pipeline.imitation.case9.training.train",
+        "config_arg": (
+            "--config pipeline/imitation/case9/configs/il_case9_rulebase_v8.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
     "case9_candidate": {
         "stage": "train_imitation_case9_candidate",
         "train_module": "pipeline.imitation.case9.training.train",
@@ -546,6 +569,466 @@ CASE_DEFAULTS: dict[str, dict[str, str]] = {
         "train_module": "pipeline.reinforce.case6.training.train_jax",
         "config_arg": (
             "--config pipeline/reinforce/case6/configs/kaggle_jax_smoke.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8: PFSP f_var + held-out=python_v8 (real rulebase case8) +
+    # Elo の case7 コピー。`algo: ppo|vmpo` フラグで PPO (既存流用) と V-MPO (H1
+    # 新規) を同一 harness で A/B する。pool=case1(lite/full)+case8(python_v8)+self。
+    # h0_ppo_short: H0 wiring 検証 (PPO 短 run, held-out vs python_v8 + Elo 記録)。
+    "reinforce_case8_kaggle_jax_train": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_kaggle_jax_train",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/h0_ppo_short.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce_case8_kaggle_jax_smoke: short wiring smoke (2 iter, algo=ppo).
+    # Verifies the case7→case8 copy + algo flag + f_var 3-opp pool launch on RunPod.
+    "reinforce_case8_kaggle_jax_smoke": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_kaggle_jax_smoke",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/h0_smoke.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 1 R1: PPO 実験条件探索。f_var priority_p を {1.0,2.0,4.0}
+    # で A/B (他は ppo_base と同一: pool=full+lite+self, 20 iter,
+    # held-out=baseline_jax_full every=1)。目標 = pool 勝率~0.5 / held-out 0→
+    # 滑らか増加 / 20 iter ≤30分。
+    "reinforce_case8_phase1_r1_p1": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p1",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p1.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase1_r1_p2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p2",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p2.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase1_r1_p4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r1_p4",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/phase1_r1_p4.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 1 R5: iterations 20->50 (base=p4, priority_p=4.0)。
+    # R1 で priority_p 単独では held-out が伸びなかったため学習量を拡大し、
+    # 固定相手勝率が 0 から滑らかに増加するかを検証。A/B 軸は iterations のみ。
+    "reinforce_case8_phase1_r5_iter50": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_r5_iter50",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase1_r5_iter50.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 1 観測性検証: 10 iter (~8min)。本番 (iter50) 前に
+    # REQ1-5 (incremental local logs/metrics, S3 per-iter durability, resource
+    # telemetry, oneshot SSH) が GPU 上で成立するか確認する事前検証 run。
+    "reinforce_case8_phase1_validate": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_validate",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase1_validate.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 1 jit速度検証: iterations=30。rollout を eqx.filter_jit
+    # 化した後の GPU util 上昇 / rollout_secs 短縮を実証する。学習結果は jit 前と
+    # 不変 (同計算を GPU で一気通貫実行するだけ)。
+    "reinforce_case8_phase1_jit_iter30": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase1_jit_iter30",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase1_jit_iter30.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 1 FROZEN: PPO baseline の確定実験条件 (algo=ppo,
+    # 50 iter, f_var p=4.0, pool=full+lite+self, held-out=baseline_jax_full)。
+    # Phase 2/3 (V-MPO) はこの config を algo (+V-MPO HP) 以外不変で流用する。
+    "reinforce_case8_ppo_frozen": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_ppo_frozen",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/ppo_frozen.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 2: V-MPO arm。vmpo_frozen.yaml は ppo_frozen.yaml と
+    # algo (ppo→vmpo) 以外完全同一。PPO arm と同一 PFSP/held-out/rollout harness で
+    # 無調整 (論文デフォルト HP) A/B。安定性・収束性を比較する。
+    "reinforce_case8_vmpo_frozen": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_frozen",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_frozen.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 Phase 3: V-MPO eps_alpha sweep。vmpo_frozen (eps_alpha=0.01)
+    # と eps_alpha のみ差分。Phase 2 で trust-region KL 0.0003 ≪ ε_α=0.01 (α 過拘束)
+    # だったので ε_α を緩めて学習加速するか検証。条件は凍結、V-MPO HP のみ変更の A/B。
+    "reinforce_case8_phase3_eps_alpha_005": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase3_eps_alpha_005",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase3_eps_alpha_005.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_phase3_eps_alpha_01": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_phase3_eps_alpha_01",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/phase3_eps_alpha_01.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 strict-opponent V-MPO: held-out + pool に strict JAX rulebase
+    # (jax_v1/v2/v3 = case1/2/3 baseline_jax.strict、本物 parity port を in-JAX 化した
+    # vmappable agent) を使う。rollout_jax の lax.switch に mode 7/8/9 を追加し、
+    # python_v* host-callback を使わず GPU rollout 内で strict 相手と対戦する。
+    # held-out=strict_v1 固定、pool=strict_v1/v2/v3 + self、f_var p=4.0、30 iter。
+    "reinforce_case8_vmpo_strict": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_strict",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_strict.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 蒸留クローン版: 実 baseline_v1 の BC 蒸留 (case9_rulebase)
+    # を bc_warmstart 教師 + 固定 NN 相手 (distilled) + held-out yardstick に使う。
+    # PoC (Kaggle棋譜BC, flat 0% vs rulebase) の対策。
+    "reinforce_case8_vmpo_distilled": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_distilled",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_distilled.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter25: no_op_bias 1.0→0.0 で地力(full)最大化。
+    # strict勝率は地力と単調相関(差分分析)、地力↑主因はno_op_bias↓。over-fire是正を
+    # 限界まで進め full 0.86超を狙い、その裾でstrict勝率↑か検証。他はladder22同一。
+    "reinforce_case8_vmpo_ladder25": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder25",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder25.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter24: 案B (boost縮小) — cliff_dense_boost
+    # 0.05→0.01。ladder23の0.05はT0=0段でreward-27/entropy崩壊(dense支配=ladder13
+    # 落とし穴)。1/5に縮小し dense が ±1終端を埋もれさせない大きさに。resume ladder22。
+    "reinforce_case8_vmpo_ladder24": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder24",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder24.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter23: 案B — T0=0素strict段に dense差分報酬を
+    # 上乗せ (cliff_dense_boost=0.05) し非退化勾配で「序盤を学習」。skip A2はOFF
+    # (dense信号が勾配供給)。ladder22切り分け「skipでは学習不能、非退化信号が必要」
+    # への対処。resume ladder22 best.pt (full 0.86)。
+    "reinforce_case8_vmpo_ladder23": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder23",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder23.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter22: 案A — 地力↑継続 + 素strict段を degenerate
+    # 無しで強制訓練。C2: no_op_bias 2→1 (over-fire是正をさらに), A2:
+    # skip_update_win_thresh=0.05 (win<5%段の退化更新skip、ladder21のn_wins==0漏れ修正),
+    # force_rung_low_every=2 で T0=0素strict段を強制照射し訓練量確保。resume ladder21。
+    "reinforce_case8_vmpo_ladder22": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder22",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder22.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter21: RL健全性修正 — degenerate-batch 自壊の阻止。
+    # A: skip_update_if_no_win (勝ち0iterの退化更新skip), B: vmpo.adv_std_floor=0.1
+    # (零分散バッチのノイズ増幅停止), C: no_op_bias 8→2 (over-fire抑制)。過去の
+    # curriculum/handicap が効く前提条件の修正。resume ladder18 best.pt。
+    "reinforce_case8_vmpo_ladder21": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder21",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder21.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter20: handicap で勝ちを人工生成。純粋RL探索で
+    # 素strictを動かせない (zero-variance) ため、初期ship boost (mode=ships, h=3→1
+    # anneal) で時々勝てる局面を作り勝利勾配を bootstrap。aim修正済 + ladder18 強base。
+    "reinforce_case8_vmpo_ladder20": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder20",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder20.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter19: reward勝利信号優位 (shaping 1.0→0.5,
+    # terminal_scale 1.0→2.5) + 難段強制サンプル (force_rung_low_every=2 で T0=0段)。
+    # aim修正後に残った真因 (素strict reward支配 + f_var難段回避) を複合で対処。
+    "reinforce_case8_vmpo_ladder19": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder19",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder19.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter18: rollout aim を先読み intercept 化。replay
+    # 診断で判明した train/eval aim 不一致 (訓練は naive atan2 直射で動くplanetを外す、
+    # eval/strict は intercept先読み) を修正。pool/reward は ladder11 同一の aim単独 A/B。
+    "reinforce_case8_vmpo_ladder18": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder18",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder18.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter17: strict 対戦量を大幅増。逆カリ(重い warmup
+    # advance)を捨て軽量T0ラダーに戻し、mix_strict 0.6→0.85 + 低T0偏重ladder
+    # [0,0,50,...] で素strict序盤の対戦量を3-4倍に。「序盤を学習しない」を量で押す。
+    "reinforce_case8_vmpo_ladder17": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder17",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder17.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter16: 逆カリキュラム 強制後退 (warmup advance
+    # 単一compile化)。ladder15 は warmup 変更毎に ~870s 再compile → 1h で iter9 のみ。
+    # warmup を traced scalar 化し再compileゼロにした re-run。
+    "reinforce_case8_vmpo_ladder16": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder16",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder16.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter15: 逆カリキュラム 強制schedule後退 —
+    # strict段ごとに無条件で warmup→0 後退 (ladder14 の勝率gate未発火を修正)。
+    "reinforce_case8_vmpo_ladder15": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder15",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder15.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter14: 逆カリキュラム (Florensa+2017) —
+    # strict段を strict自己対戦warmup盤面からseed、勝率上昇でwarmup→0へ後退。
+    "reinforce_case8_vmpo_ladder14": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder14",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder14.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter13: R1 reward工夫 (終端勝利増幅+shaping減衰)。
+    "reinforce_case8_vmpo_ladder13": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder13",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder13.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter12: self-imitation有効化 (勝利リプレイ増幅)。
+    "reinforce_case8_vmpo_ladder12": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder12",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder12.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter11: 経験量拡大 episodes 96→192 (ladder9構成)。
+    "reinforce_case8_vmpo_ladder11": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder11",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder11.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter10: フロンティア低 T0 シフト (終端断絶を埋める)。
+    "reinforce_case8_vmpo_ladder10": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder10",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder10.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter9: T0崖の密刻み細分化 (ε段全廃、汚染遮断)。
+    "reinforce_case8_vmpo_ladder9": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder9",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder9.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter8: 2軸 (T0, ε) ハイブリッド + 素strict定期照射。
+    "reinforce_case8_vmpo_ladder8": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder8",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder8.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter7: フロンティア再構成 [300..100,0] 9段。
+    "reinforce_case8_vmpo_ladder7": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder7",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder7.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter6: switch_iter 0 (noopウォームアップ廃止)。
+    "reinforce_case8_vmpo_ladder6": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder6",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder6.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter5: episodes 96 (バッチ次元で経験量+50%)。
+    "reinforce_case8_vmpo_ladder5": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder5",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder5.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter4: iterations 70 (サイクル当たり経験量1.4x)。
+    "reinforce_case8_vmpo_ladder4": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder4",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder4.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter3: mix_strict 0.6 (フロンティア対戦密度up)。
+    "reinforce_case8_vmpo_ladder3": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder3",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder3.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool iter2: フロンティア (300-200) 周辺を細分化した
+    # 9段 ladder + iter1 best.pt からの resume。
+    "reinforce_case8_vmpo_ladder2": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder2",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder2.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ladder-pool: 時間窓弱体化 strict の7段を独立 pool エントリ化
+    # (AlphaStar checkpoint-PFSP 流)。50/35/15 混合 + f_var 段選択 + v2 継続学習。
+    "reinforce_case8_vmpo_ladder": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_ladder",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_ladder.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 ハンディキャップ・カリキュラム (蒸留不要): 本物 strict_v1
+    # と強制対戦 (every:5)、seat0 初期 ships を ladder 3.0→1.0 で勝率連動降下。
+    # held-out は h=1.0 の strict_v1 + baseline_jax_full 両観測。
+    "reinforce_case8_vmpo_handicap": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_handicap",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_handicap.yaml"
+        ),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 合流構成: 蒸留クローン (教師+常設NN相手) + strict_v1
+    # (10iter毎の強制 pool 対戦 + held-out yardstick)。実証済み3部品の合流。
+    "reinforce_case8_vmpo_combo": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_combo",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_combo.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    # reinforce/case8 strict-held-out 軽量版: vmpo_strict は pool+held-out 両方に
+    # strict を入れ iter0 が >13分で打ち切り (strict 実行が重い)。対策として
+    # pool は in-JAX baseline (full+lite+self) に戻し、strict_v1 を held-out
+    # 進捗 yardstick のみ (every:5, episodes:16) で実行する。
+    # reinforce/case8 PoC: BC warm-start × V-MPO。vmpo_frozen から bc_warmstart
+    # のみ有効化 (case9_per_planet BC 重みで初期化)。rulebase への勝率軌跡が
+    # 学習で向上するかを held-out 曲線 + 学習後の実 baseline_v1 offline 対戦で検証。
+    "reinforce_case8_vmpo_poc_bc": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_poc_bc",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": ("--config pipeline/reinforce/case8/configs/vmpo_poc_bc.yaml"),
+        "preprocess_cmd": "",
+        "canonical_weights": "",
+    },
+    "reinforce_case8_vmpo_strict_heldout": {
+        "family": "reinforce",
+        "stage": "train_reinforce_case8_vmpo_strict_heldout",
+        "train_module": "pipeline.reinforce.case8.training.train_jax",
+        "config_arg": (
+            "--config pipeline/reinforce/case8/configs/vmpo_strict_heldout.yaml"
         ),
         "preprocess_cmd": "",
         "canonical_weights": "",

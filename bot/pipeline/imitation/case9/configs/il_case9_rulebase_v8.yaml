@@ -1,0 +1,69 @@
+# imitation/case9 rulebase-distillation variant — teacher = baseline_v8.
+# 教師 = 実 Python rulebase baseline_v8 (v1 に勝率 ~70-75%)。v8 vs v1 の混合
+# 対戦から teacher_agents フィルタで v8 側スロットのみを教師フレームに使う。
+# 状態分布が「v1 と戦っている時の盤面」そのもの = 対 v1 の教師分布。
+# モデル/ヘッドは per_planet と完全同一 → reinforce/case8 互換を保証。
+#
+# 用途: 蒸留クローンを (a) reinforce/case8 V-MPO の固定 NN 相手 (distilled
+# opponent, ms forward) と (b) bc_warmstart 教師の両方に使い、PoC で欠けていた
+# 「rulebase への traction」を学習ループに持ち込む。
+seed: 0
+
+data:
+  kaggle_index_root: data/lake/selfplay/matches/index.parquet
+  replay_dir: data/lake/selfplay/matches/replays
+  out_train: data/mart/imitation/case9_rulebase_v8/train.parquet
+  out_val: data/mart/imitation/case9_rulebase_v8/val.parquet
+  rating_quantile: 0.0
+  val_split: 0.10
+  modes: ["1v1"]
+  max_episodes: 2000
+  winners_only: false
+  teacher_agents: [baseline_v8]  # v8 側スロットのみ教師 (v1 側は捨てる)
+  top_team_rank: 0        # selfplay に team_rank はない
+
+model:
+  planet_in_dim: 41
+  global_in_dim: 20
+  cand_in_dim: 14
+  cand_k: 8
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_mode: per_planet
+
+train:
+  case: case9
+  batch_size: 512
+  epochs: 45
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 0
+  pin_memory: true
+  loss_weights:
+    target: 1.0
+    ship: 0.5
+    use_class_weights: false
+    label_smoothing: 0.0
+  scheduler:
+    type: cosine_warmup
+    t_max: 45
+    eta_min: 1.0e-5
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
+  best_metric: val_target_fire_acc
+  best_metric_mode: max
+  early_stop:
+    metric: val_target_fire_acc
+    patience: 10
+    mode: max
+  grad_clip_max_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+  head_dropout: 0.1
+  weights_out: pipeline/imitation/case9/policy/weights_rulebase_v8.pt
+
+inference:
+  temperature: 1.0

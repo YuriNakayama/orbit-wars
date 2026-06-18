@@ -1,0 +1,100 @@
+# ============================================================================
+# Ladder-pool iteration 21 (loop tick の工夫: RL健全性修正 — degenerate-batch 自壊の阻止)。
+#
+# 根本調査 (rl_failure_rootcause.md): strict 0% は「strict が強い」以上に、~100%負ける
+# バッチで RL が policy を能動的に破壊しているため。(1) adv正規化が零分散バッチで
+# /(std+EPS) しノイズを巨大advに増幅、(2) V-MPO top-half+softmax がノイズ選択行動を
+# 最尤強化 → entropy崩壊 (実測: 素strict段 iter4 で entropy 44→12)、(3) degenerate
+# update の guard 無し → 素strict段が共有policyを poison。Lux S1優勝も「sparse単独は
+# 学習不能、20M step shaped で土台」= 本診断と整合。
+#
+# 工夫 (1点 = degenerate-batch 自壊の阻止、表裏3実装):
+#  A. skip_update_if_no_win=true — 勝ち0のiterは policy更新をskip (退化勾配を遮断)
+#  B. vmpo.adv_std_floor=0.1 — adv正規化の分散下限、零分散バッチのノイズ増幅を停止
+#  C. no_op_bias 8.0→2.0 — over-fire (aim診断: strictの3-4倍乱発・87%戦力不足) を抑制
+# これらは「strictを倒す新手法」でなく「RLが自壊しないようにする」修正で、過去の全
+# curriculum/handicap が効く前提条件。他は ladder18 と同一 (reward/pool)。resume は
+# ladder18 best.pt (aim修正込, full 0.828)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 2.0            # C: 8.0→2.0 (over-fire抑制、撃つべき時だけ撃つ余地)
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder18/runs/20260615-114258__feature-poc-v-mpo__0ee7e14__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  skip_update_if_no_win: true   # A: 勝ち0バッチの退化更新をskip
+  vmpo:
+    adv_std_floor: 0.1          # B: adv正規化の分散下限 (ノイズ増幅停止)
+  reverse_curriculum:
+    enabled: false
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

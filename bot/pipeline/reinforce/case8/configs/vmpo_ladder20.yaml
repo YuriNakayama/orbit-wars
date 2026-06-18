@@ -1,0 +1,102 @@
+# ============================================================================
+# Ladder-pool iteration 20 (loop tick の工夫: handicap で勝ちを人工生成)。
+#
+# campaign 最深の結論 (ladder1-19): 純粋RL探索のレバー (curriculum形状 / 対戦量 /
+# aim修正 / reward整形+難段強制) は全て素strict 0% を動かせなかった。真因は
+# zero-variance — agent は素strict にほぼ1回も勝てず (win ~0.005-0.02)、増幅すべき
+# 勝利エピソードが存在しないため方策勾配が学習できない。
+#
+# 工夫 (1点 = handicap で勝ちを人工生成): 素strict 相手に learner の初期 ship を
+# h 倍 boost (mode=ships) して「*時々勝てる*局面」を人工生成 → 勝利勾配を bootstrap
+# → win が promote_win を超えるたび h を 1.0 へ anneal (demote_win 未満で戻す)。
+# 「勝ちが無いと学習できない」壁を、勝てる難度から入って実難度へ詰める curriculum で
+# 破る。過去の handicap 棄却 (phaseB) は「壊れた aim + from-scratch policy」が交絡
+# (h=3.0 でも passive policy が material を活かせず 0/64) — 今は (a) aim修正済で
+# fleet が捕獲に変換され、(b) ladder18 強base (full 0.828) から resume なので、boost
+# された戦力を勝利に変換できる見込み。strict_ladder は使わず handicap 経路を使う
+# (train_jax は pool_strict_ladder があると handicap を無視するため空に)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder18/runs/20260615-114258__feature-poc-v-mpo__0ee7e14__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  terminal_scale: 1.0
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  reverse_curriculum:
+    enabled: false
+  handicap:
+    enabled: true            # 勝ちを人工生成 (mode=ships で初期ship boost)
+    mode: ships
+    ladder: [3.0, 2.5, 2.0, 1.6, 1.3, 1.15, 1.0]  # boost 倍率 (高→1.0へ anneal)
+    promote_win: 0.6         # win≥0.6 で次段 (boost↓ = 実難度へ前進)
+    demote_win: 0.2          # win≤0.2 で前段 (boost↑ = 勝てる難度へ後退)
+    start_idx: 0             # h=3.0 から開始
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 2    # strict段(handicap適用)を2 iter毎に確実に回す
+    force_rung_low_every: 0
+    strict_ladder: []        # 空: handicap 経路を使う (ladder があると handicap無視)
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

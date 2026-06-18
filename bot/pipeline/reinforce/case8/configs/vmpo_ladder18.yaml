@@ -1,0 +1,98 @@
+# ============================================================================
+# Ladder-pool iteration 18 (loop tick の工夫: rollout aim を先読み intercept 化)。
+#
+# replay診断で判明した真因 (ladder14-17 が崩せなかった核心): 訓練 rollout の
+# 角度計算 (policy/sampling_jax.py) が naive `atan2(target_now - source_now)` =
+# 動く planet の「現在位置へ直射」で、軌道先読み (intercept) が無かった。env は
+# fleet を固定方位で等速直進発射するため、orbit する planet には到着時にズレて
+# 系統的に外す (aim診断: 55%が>45°大外し, 87%が必要shipの半分未満で捕獲不成立)。
+# 一方 strict_v1 も提出/eval経路 (decoder.py + geometry.aim_with_prediction) も
+# 先読み intercept を使う = 訓練と評価で aim が別物の train/eval 不一致だった。
+#
+# 工夫 (1点 = aim修正): rollout decoder の角度を先読み intercept 化
+# (policy/aim_jax.py を新設、sampling_jax.py の naive atan2 を置換)。これで訓練
+# aim が eval と一致し、agent は「動く planet に当たる」前提で target/ship を学べる。
+# parity test で eval 解法と 1e-2 rad 一致を確認済。pool/reward は ladder11 と
+# 完全同一 (aim修正単独の A/B)。resume は ladder11 best.pt (全run最高 full 0.812)。
+# モデルは target slot + ship 数を出力し角度は下流計算なので、resume は健全
+# (学習済の target 選択を活かしつつ角度解像度のみ改善)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder11/runs/20260614-055545__feature-poc-v-mpo__022f67f__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 192
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  reverse_curriculum:
+    enabled: false
+  heldout_eval:
+    every: 10
+    opponents: [strict_v1, baseline_jax_full]
+    episodes: 64
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0
+    force_rung_low_every: 0
+    # ladder11/9 と完全同一の成功構成 (勝てる段中心、崖を密刻み)。
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6
+    mix_self: 0.35
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

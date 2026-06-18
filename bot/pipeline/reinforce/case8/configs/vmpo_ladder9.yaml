@@ -1,0 +1,94 @@
+# ============================================================================
+# Ladder-pool iteration 9 (loop tick の工夫: T0 崖の密刻み細分化)。
+#
+# ladder8 (2軸 T0/ε, run 20260613-045644, iter31 で停止) の観測: ε段 (T0=0,
+# ε=0.9..0.5) は drop ロジック自体は正常 (drop_rate を単体検証で確認) だが、
+# exploiter 学習者が ε-noop 化 strict にすら勝てず (ε=0.9 で win 0.01,
+# reward -3.4 = 素strict同等)、全敗データを 42% (8/19 strict iter) 注入。
+# held-out full は起点 0.781 → 0.703 へ純減、strict は 0 のまま。phaseB の
+# 「ε=0.85 の壁」と同根 — ε段を f_var pool に混ぜると win_ema=0 トラップ +
+# 全敗汚染で逆効果。
+#
+# 工夫 (1点): ε段を全廃し ladder7 の T0 時間窓型に戻したうえで、ladder7 で
+# 停滞した崖 (T0=175 が帯域、150→0.21, 125→0.07 で急落) を T0=175,160,145,
+# 130,115,100 と密に刻んで埋める。force_rung_low_every も廃止 (素strict全敗
+# データ注入を止める)。resume は ladder8 汚染前の ladder7 best.pt。
+# 他は ladder7 と完全同一。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder7/runs/20260612-045212__feature-poc-v-mpo__b212896__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 96
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/50/60/69 (warm ~3分/eval)
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false           # ladder-pool では不使用 (段選択 = f_var が担う)
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false      # exploiter 構成: pool は strict ラダー + self のみ
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0    # 不要: 中間段が常に選択可能 (EMA 鮮度問題が消滅)
+    force_rung_low_every: 0  # ladder8 の全敗汚染を断つため素strict強制照射を廃止
+    # T0 時間窓型のみ (ε段全廃)。崖 (175→125) を密刻みで埋める9段。
+    strict_ladder: [225, 200, 185, 170, 155, 140, 125, 110, 0]
+    mix_strict: 0.6          # 60% strict ラダー (iter3 の工夫: フロンティア密度up)
+    mix_self: 0.35           # 35% self snapshots / 残り 15% 最古 snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

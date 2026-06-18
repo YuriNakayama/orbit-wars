@@ -1,0 +1,83 @@
+# ============================================================================
+# Ladder-pool iteration 6 (loop tick の工夫: curriculum switch_iter 4→0)。
+#
+# iter5 (run 20260611-225924, ep96) の観測: held-out full 0.70-0.72 (ほぼ克服)、
+# T0=300 克服 (0.80)、200 が 0.5 突破 (0.41→0.52)、150 動意 (0.11)。
+# 工夫 (1点): switch_iter 4→0 — resume 方策に noop ウォームアップは不要のため
+# 毎 run 4 iter を pool 実戦に転用。resume は iter5 best.pt。他は iter5 と同一。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+
+training:
+  algo: vmpo
+  seed: 0
+  resume_from: data/output/models/reinforce/case8_vmpo_ladder5/runs/20260611-225924__feature-poc-v-mpo__29bd325__seed0/best.pt
+  iterations: 70
+  episodes_per_iter: 96
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 10                # iter 0/10/20/30/40/49 の6点 (warm ~3分/eval)
+    opponents: [strict_v1, baseline_jax_full]  # 真の強さ + 変化検出用の両観測
+    episodes: 64             # バッチ償却で eval 時間は episodes にほぼ不変
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  handicap:
+    enabled: false           # ladder-pool では不使用 (段選択 = f_var が担う)
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 0
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: false      # exploiter 構成: pool は strict ラダー + self のみ
+    include_full: false
+    include_v8: false
+    include_strict: [strict_v1]
+    force_strict_every: 0    # 不要: 中間段が常に選択可能 (EMA 鮮度問題が消滅)
+    strict_ladder: [400, 350, 300, 250, 200, 150, 100, 50, 0]  # フロンティア細分化9段
+    mix_strict: 0.6          # 60% strict ラダー (iter3 の工夫: フロンティア密度up)
+    mix_self: 0.35           # 35% self snapshots / 残り 15% 最古 snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

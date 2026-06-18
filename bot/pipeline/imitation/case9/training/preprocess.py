@@ -163,12 +163,16 @@ def _select_winner_slots(
     *,
     winners_only: bool,
     top_team_rank: int,
+    teacher_agents: list[str] | None = None,
 ) -> list[int]:
     """Pick which player slots to emit frames for, after winner / rank filters.
 
     - winners_only=True: keep only the winning slot (per `winner` field).
     - top_team_rank > 0: drop the slot if its `agent_{slot}_team_rank` is
       either 0 (unknown) or above the threshold. Top-80 → top_team_rank=80.
+    - teacher_agents: keep only slots whose `agent_{slot}_name` is in the list
+      (rulebase distillation from mixed matches, e.g. teacher v8 vs sparring v1
+      — only the v8 side's frames are supervision).
     """
     if rec.get("draw"):
         return []
@@ -179,6 +183,10 @@ def _select_winner_slots(
         slots = [winner]
     else:
         slots = list(range(num_slots))
+    if teacher_agents:
+        slots = [
+            s for s in slots if str(rec.get(f"agent_{s}_name", "")) in teacher_agents
+        ]
     if top_team_rank > 0:
         kept: list[int] = []
         for slot in slots:
@@ -381,6 +389,7 @@ def _process_episode(
     *,
     winners_only: bool = False,
     top_team_rank: int = 0,
+    teacher_agents: list[str] | None = None,
 ) -> _EpisodeResult:
     """Worker: process one episode record into frames.
 
@@ -395,6 +404,7 @@ def _process_episode(
         num_player_slots,
         winners_only=winners_only,
         top_team_rank=top_team_rank,
+        teacher_agents=teacher_agents,
     )
     if not slots:
         return _EpisodeResult(
@@ -513,6 +523,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
     val_split = float(data_cfg.get("val_split", 0.10))
     max_episodes = data_cfg.get("max_episodes")
     winners_only = bool(data_cfg.get("winners_only", False))
+    teacher_agents = [str(a) for a in data_cfg.get("teacher_agents", []) or []]
     top_team_rank = int(data_cfg.get("top_team_rank", 0) or 0)
     out_train = _abspath(data_cfg["out_train"])
     out_val = _abspath(data_cfg["out_val"])
@@ -651,6 +662,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         _num_player_slots(rec, modes),
                         winners_only=winners_only,
                         top_team_rank=top_team_rank,
+                        teacher_agents=teacher_agents,
                     )
                     _consume_result(result)
                 finally:
@@ -674,6 +686,7 @@ def preprocess(cfg: dict[str, Any]) -> PreprocessReport:
                         _num_player_slots(rec, modes),
                         winners_only=winners_only,
                         top_team_rank=top_team_rank,
+                        teacher_agents=teacher_agents,
                     )
                     inflight[fut] = idx
                     return True

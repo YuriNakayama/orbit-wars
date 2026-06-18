@@ -275,25 +275,58 @@ elif [ "<CASE_FAMILY>" = "reinforce" ]; then
   # YAML 内に hardcode されているので、配布されている .dvc を一括 pull する
   # 方式 (recursive) で `data/output/models/imitation/case9_per_planet/` 配下
   # の全 runs を取得する。
-  BC_RUNS_PARENT="data/output/models/imitation/case9_per_planet/runs"
-  echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
-  ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
-  # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
-  # train.yaml は単一 run の best.pt を参照するので、find で全 .dvc を渡す。
-  mapfile -t BC_DVCS < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
-  if [ ${#BC_DVCS[@]} -eq 0 ]; then
-    echo "[onstart] reinforce BC pull: no .dvc files under ${BC_RUNS_PARENT}" >&2
+  # 蒸留クローン (case9_rulebase) も distilled_weights / bc_warmstart から
+  # 参照されるため、per_planet と並べて両親ディレクトリを pull する。
+  # 片方に .dvc が無いのは許容 (両方ゼロなら fail)。
+  BC_DVCS=()
+  BC_SKIPPED=0
+  # case8_vmpo_handicap/runs: resume_from (継続学習) 用の前回 run best.pt。
+  # reinforce/*/runs は resume_from (継続学習) 用 — glob で全 case を網羅
+  # (ladder/ladder2/... と iteration 毎に増えるため列挙しない)。
+  for BC_RUNS_PARENT in \
+    "data/output/models/imitation/case9_per_planet/runs" \
+    "data/output/models/imitation/case9_rulebase/runs" \
+    data/output/models/reinforce/*/runs; do
+    echo "[onstart] dvc pull SCOPED to ${BC_RUNS_PARENT}/ (reinforce BC warm-start)"
+    ls -la "${BC_RUNS_PARENT}/" 2>&1 | head -8
+    # *.dvc は per-run-dir 単位で push 済み。`dvc pull <dvc>` で個別取得。
+    while IFS= read -r dvc_f; do
+      # /persist は pod 間で再利用されるため、その volume 上で学習した run dir
+      # は既に best.pt を持つ (しかも per-iter ckpt 等 manifest 外ファイル入り
+      # で dvc checkout が衝突する)。weights が既にあれば pull 不要。
+      tgt="${dvc_f%.dvc}"
+      if [ -f "${tgt}/best.pt" ]; then
+        echo "[onstart] BC pull SKIP ${dvc_f} (best.pt already on volume)"
+        BC_SKIPPED=$((BC_SKIPPED + 1))
+        continue
+      fi
+      BC_DVCS+=("${dvc_f}")
+    done < <(find "${BC_RUNS_PARENT}" -maxdepth 1 -name "*.dvc" 2>/dev/null)
+  done
+  if [ ${#BC_DVCS[@]} -eq 0 ] && [ "${BC_SKIPPED:-0}" -eq 0 ]; then
+    echo "[onstart] reinforce BC pull: no .dvc files under any runs parent" >&2
     mark "45_dvc_pull_reinforce_bc_missing"
     exit 1
   fi
-  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} .dvc files to fetch"
-  if ! ${DVC_BIN} pull -j 4 "${BC_DVCS[@]}" 2>&1 | tail -30; then
-    echo "[onstart] dvc pull (reinforce BC) FAILED" >&2
-    mark "45_dvc_pull_reinforce_bc_failed"
-    exit 1
+  echo "[onstart] reinforce BC pull: ${#BC_DVCS[@]} to fetch (${BC_SKIPPED:-0} skipped on-volume)"
+  # Per-stub TOLERANT pulls: a single conflicting stub (e.g. stale robot-pushed
+  # run dirs from old phases) must not kill the launch. The only hard
+  # requirement is the resume_from weights, which train_jax._maybe_resume
+  # checks explicitly (raises FileNotFoundError with the exact path) — so a
+  # missing pull surfaces as a clear python error instead of a blind 45 mark.
+  BC_PULL_FAILED=0
+  for dvc_f in "${BC_DVCS[@]}"; do
+    if ! ${DVC_BIN} pull --force "${dvc_f}" 2>&1 | tail -5; then
+      echo "[onstart] WARN: dvc pull failed for ${dvc_f} (continuing)" >&2
+      BC_PULL_FAILED=$((BC_PULL_FAILED + 1))
+    fi
+  done
+  if [ "${BC_PULL_FAILED}" -gt 0 ]; then
+    echo "[onstart] reinforce BC pull: ${BC_PULL_FAILED} stub(s) failed (tolerated)"
+    mark "45_dvc_pull_reinforce_bc_partial"
   fi
   echo "[onstart] reinforce BC pull complete; verifying best.pt..."
-  find "${BC_RUNS_PARENT}" -name "best.pt" -maxdepth 3 2>&1 | head -5
+  find data/output/models/imitation -name "best.pt" -maxdepth 4 2>&1 | head -8
 else
   # mart-only path: preprocess を pod 側で走らせない設計の case (mart は
   # 事前 push 済) では kaggle_episodes (60GB+, 62k hive parquet files) の

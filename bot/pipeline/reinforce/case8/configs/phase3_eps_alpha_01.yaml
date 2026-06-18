@@ -1,0 +1,85 @@
+# ============================================================================
+# Phase 3 H3: V-MPO eps_alpha=0.1 sweep (vmpo_frozen と eps_alpha のみ差分)
+#
+# これは V-MPO vs PPO の A/B テストの「固定実験条件」。Phase 2 (V-MPO 無調整) /
+# Phase 3 (V-MPO HP sweep) は **algo (と Phase 3 の V-MPO 内部 HP) 以外 一切
+# このファイルを変更せず流用する**。実験条件を変えたら PPO と比較不能になる。
+#
+# Phase 1 探索の結論 (R1 priority_p sweep + R5 scale + W7/W8 高速化):
+#   ① pool 勝率 ~0.5: f_var priority_p=4.0 が {1,2,4} 中で最も 0.5 近傍
+#      (self_snapshot 区間で mean ~0.4-0.46)。
+#   ② 固定相手 held-out: baseline_jax_full (in-JAX) で 0 付近から弱く上昇
+#      (p=4.0, iter50 で ~0.25→0.34)。本物 case8 比較は学習後 offline paired。
+#   ③ 速度: rollout jit (W7) + reset on-device vmap(reset_jax) (W8) で
+#      ~7s/iter。50 iter ≈ 6分 (pod 性能に依存せず ≤30分を安定達成)。
+#
+# プール = full + lite + self_snapshot (in-JAX のみ)。本物 rulebase case8
+# (python_v8) は host-callback で GPU stall するため学習ループに入れない。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  algo: vmpo                 # ★A/B: ppo_frozen から algo のみ変更 (他は完全同一)
+  vmpo:
+    eps_alpha: 0.1          # ★Phase 3 A/B: eps_alpha のみ変更 (他は vmpo_frozen と同一)
+  seed: 0
+  iterations: 50             # 確定 (≈6分 @ ~7s/iter)
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2              # PPO 専用 (V-MPO では未使用)
+  value_coef: 0.5
+  entropy_coef: 0.02         # PPO 専用 (V-MPO は entropy reg なしが売り)
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02            # PPO 専用
+  heldout_eval:
+    every: 1                 # 毎iter記録で②(0→滑らか増加)を密に観察
+    opponent: baseline_jax_full   # in-JAX 固定相手 (進捗 yardstick)
+    episodes: 32
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0          # Phase 1 で確定 (0.5 近傍に最も寄る)
+    priority_ema: 0.7
+    include_lite: true       # プール = full(常時) + lite + self_snapshot
+    include_v8: false        # python_v8 host-callback => GPU stall; held-out も in-JAX
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

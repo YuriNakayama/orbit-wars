@@ -1422,6 +1422,74 @@ def logs_cmd(
         console.print(line, highlight=False)
 
 
+@app.command("metrics")
+def metrics_cmd(
+    run_id: str = typer.Argument(..., help="run_id from runpod train"),
+    case: str = typer.Option(DEFAULT_CASE, "--case"),
+    tail: int | None = typer.Option(
+        None, "--tail", help="末尾 N iter のみ表示 (デフォルト全 iter)"
+    ),
+    aws_profile: str = typer.Option(
+        DEFAULT_AWS_PROFILE, "--aws-profile", help="S3 アクセス用 AWS profile"
+    ),
+) -> None:
+    """学習中でもローカルから per-iter metrics 進捗を表示する (REQ1)。
+
+    train_jax が iter ごとに S3 (`runpod_artifacts/<run_id>/metrics.json`) へ
+    upload する per-iter trace を読み、iter / opponent / win_rate / heldout_win /
+    reward / entropy / value_loss / Elo / rollout・update 秒 を表で出す。SSH 不要・
+    pod 稼働中でも参照可。run 終了後も S3 に残るので事後確認にも使える。
+    """
+    from gpu.runpod.execution import progress as progress_mod
+
+    m = progress_mod.fetch_metrics(run_id, profile=aws_profile)
+    if m is None:
+        console.print(
+            f"[yellow]metrics.json not in S3 for run_id={run_id!r}.[/] "
+            "iter0 がまだ完了していない (train_jax は iter 完了後に upload) か、"
+            "run が学習段階に到達していません。`dev/runpod logs <run_id>` で進捗確認を。"
+        )
+        raise typer.Exit(code=1)
+
+    rows = m.get("history", []) if isinstance(m, dict) else []
+    if not rows:
+        console.print(
+            f"[yellow]metrics.json に history がありません (run_id={run_id!r}).[/]"
+        )
+        raise typer.Exit(code=1)
+    if tail is not None and tail > 0:
+        rows = rows[-tail:]
+
+    ir = m.get("iterations_run", "?")
+    rt = m.get("runtime_seconds")
+    rt_str = f"{rt / 60:.1f}min" if isinstance(rt, (int, float)) else "進行中"
+    console.print(
+        f"[bold]metrics[/] run_id={run_id} iterations_run={ir} runtime={rt_str} "
+        f"(history {len(m.get('history', []))} iter)"
+    )
+
+    def _fmt(v: object, nd: int = 3) -> str:
+        return f"{v:.{nd}f}" if isinstance(v, (int, float)) else "-"
+
+    header = f"{'it':>3} {'opp':<18} {'win':>5} {'held':>5} {'rew':>7} {'ent':>6} {'vloss':>6} {'elo':>6} {'roll':>5} {'upd':>5}"
+    console.print(header)
+    console.print("-" * len(header))
+    for r in rows:
+        console.print(
+            f"{r.get('iter', '?'):>3} "
+            f"{str(r.get('opponent', '-'))[:18]:<18} "
+            f"{_fmt(r.get('win_rate'), 2):>5} "
+            f"{_fmt(r.get('heldout_win'), 2):>5} "
+            f"{_fmt(r.get('mean_reward'), 2):>7} "
+            f"{_fmt(r.get('entropy'), 1):>6} "
+            f"{_fmt(r.get('value_loss')):>6} "
+            f"{_fmt(r.get('agent_elo'), 0):>6} "
+            f"{_fmt(r.get('rollout_secs'), 1):>5} "
+            f"{_fmt(r.get('update_secs'), 1):>5}",
+            highlight=False,
+        )
+
+
 @app.command("watch")
 def watch_cmd(
     run_id: str = typer.Argument(..., help="run_id from runpod train"),

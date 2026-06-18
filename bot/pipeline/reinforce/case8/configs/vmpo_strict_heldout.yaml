@@ -1,0 +1,81 @@
+# ============================================================================
+# V-MPO + strict_v1 を低頻度 held-out 進捗 yardstick に使う軽量実験 (retry-2)。
+#
+# 経緯: 旧 strict (per-turn 18.5-29s) では held-out 16戦すら未完で2回打ち切り。
+# feature/reinforcement-learning-pooling-simple の merge (allocator top-K=64
+# 截断 15-18x + aim vectorize + chunked vmap, identity 検証済) で geometric
+# lineage が **0.83s/turn** になったため再挑戦する:
+#   - 1 eval の見積り: 500 turns × 0.83s ≈ 7分 (batch 不変)。
+#   - every: 15 → 30 iter で eval 3回 (iter 0/15/29) ≈ 21分 + 学習 ~4分。
+#   - pool = in-JAX full + lite + self (strict は held-out のみ、変更なし)。
+#
+# 成功条件: iter0 の strict eval が ~10分以内に完了し、3点の heldout 曲線
+# (vs 本物 ~90% parity の strict_v1) が取得できること。これが通れば「真の
+# 強さの yardstick を学習中に持つ」道が開ける (蒸留クローン不要の進捗計測)。
+# ============================================================================
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  algo: vmpo
+  seed: 0
+  iterations: 30
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 15                # 30 iter で 3 eval (iter 0/15/29)
+    opponent: strict_v1   # 進捗 yardstick = strict JAX rulebase case1
+    episodes: 16             # strict 実行コスト抑制: 32 → 16
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var
+    priority_p: 4.0
+    priority_ema: 0.7
+    include_lite: true       # pool = in-JAX full + lite + self (strict 除外)
+    include_v8: false
+    include_strict: []       # ★strict を pool から除外 (held-out のみで使用)
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json

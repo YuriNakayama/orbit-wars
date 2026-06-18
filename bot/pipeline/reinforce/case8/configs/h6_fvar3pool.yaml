@@ -1,0 +1,75 @@
+# case8 H6: fixed f_var + 3-opponent pool (lite + full + self_snapshot) + scale.
+#
+# H5 found f_var's match win-rate stuck ~0.29 (not ~0.5): win_ema didn't
+# converge and the pool lacked a ~even anchor. Fixes (committed):
+#   - count-based win_ema (fast warmup so f_var actually learns who is ~even)
+#   - include_lite: baseline_jax_lite as a weaker fixed selector entry
+# Combined with H4's lesson (scale matters), run 150 iter so f_var has time to
+# settle and the agent climbs vs the rulebase while the match stays ~0.5.
+#
+# Progress is matchmaking-free: held-out vs fixed baseline_jax_full every 5 iter
+# + agent Elo. Health: entropy. Match win-rate should now sit ~0.5 (f_var works).
+# ~150 iter × ~24s ≈ 60min on RTX 4090. Per-iter ckpt+metrics to S3.
+model:
+  hidden: 192
+  attn_heads: 8
+  inducing_points: 24
+  encoder_layers: 4
+  head_dropout: 0.0
+  ship_log_std_init: 0.5
+  no_op_bias: 8.0
+
+bc_warmstart:
+  enabled: false
+  weights_path: ""
+
+training:
+  seed: 0
+  iterations: 150
+  episodes_per_iter: 32
+  horizon: 500
+  lr: 3.0e-5
+  lr_end: 3.0e-6
+  lr_schedule_steps: 20000
+  weight_decay: 1.0e-5
+  gamma: 0.995
+  gae_lambda: 0.95
+  shaping_mode: ratio
+  shaping_coef: 1.0
+  dense_coef_ship: 0.003
+  dense_coef_planet: 0.003
+  clip_eps: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.02
+  kl_beta: 0.0
+  ppo_epochs: 2
+  minibatch_size: 128
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  heldout_eval:
+    every: 5
+    opponent: baseline_jax_full
+    episodes: 32
+    seed: 777000
+    ref_elo: 1500.0
+    agent_elo_init: 1500.0
+    elo_k: 32.0
+  opponent: curriculum
+  opponent_curriculum:
+    switch_iter: 4
+    early: noop
+    late: pool
+  opponent_pool:
+    snapshot_every: 8
+    cap: 6
+    late_full_prob: 0.4
+    priority: f_var            # ~even opponents (now converges via count-based ema)
+    priority_p: 2.0
+    priority_ema: 0.7
+    include_lite: true         # 3-opp pool: lite + full + self_snapshot
+
+output:
+  run_dir: data/output/models/reinforce/case8_train_jax/runs
+  weights_filename: best.pt
+  metrics_filename: metrics.json
+  run_meta_filename: run.json
